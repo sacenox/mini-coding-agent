@@ -7,23 +7,38 @@ pub fn nowMs() i64 {
     return std.Io.Timestamp.now(platform.io, .real).toMilliseconds();
 }
 
+/// The UTC calendar fields of one epoch millisecond value.
+const Date = struct {
+    year: u16,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: u8,
+    milli: u64,
+
+    fn fromMs(ms: i64) Date {
+        const epoch = std.time.epoch.EpochSeconds{ .secs = @intCast(@divFloor(ms, 1000)) };
+        const ymd = epoch.getEpochDay().calculateYearDay();
+        const md = ymd.calculateMonthDay();
+        const ds = epoch.getDaySeconds();
+        return .{
+            .year = ymd.year,
+            .month = md.month.numeric(),
+            .day = md.day_index + 1,
+            .hour = ds.getHoursIntoDay(),
+            .minute = ds.getMinutesIntoHour(),
+            .second = ds.getSecondsIntoMinute(),
+            .milli = @intCast(@mod(ms, 1000)),
+        };
+    }
+};
+
 /// ISO-8601 UTC with milliseconds, matching `new Date().toISOString()`.
-pub fn isoFromMs(buf: []u8, ms: i64) []const u8 {
-    const secs: u64 = @intCast(@divFloor(ms, 1000));
-    const millis: u64 = @intCast(@mod(ms, 1000));
-    const epoch = std.time.epoch.EpochSeconds{ .secs = secs };
-    const day = epoch.getEpochDay();
-    const ymd = day.calculateYearDay();
-    const md = ymd.calculateMonthDay();
-    const ds = epoch.getDaySeconds();
+fn isoFromMs(buf: []u8, ms: i64) []const u8 {
+    const d = Date.fromMs(ms);
     return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}Z", .{
-        ymd.year,
-        md.month.numeric(),
-        md.day_index + 1,
-        ds.getHoursIntoDay(),
-        ds.getMinutesIntoHour(),
-        ds.getSecondsIntoMinute(),
-        millis,
+        d.year, d.month, d.day, d.hour, d.minute, d.second, d.milli,
     }) catch unreachable;
 }
 
@@ -34,19 +49,9 @@ pub fn isoAlloc(a: std.mem.Allocator) []const u8 {
 
 /// `YYYYMMDD-HHMMSS`, the session directory prefix.
 pub fn stamp(buf: []u8, ms: i64) []const u8 {
-    const secs: u64 = @intCast(@divFloor(ms, 1000));
-    const epoch = std.time.epoch.EpochSeconds{ .secs = secs };
-    const day = epoch.getEpochDay();
-    const ymd = day.calculateYearDay();
-    const md = ymd.calculateMonthDay();
-    const ds = epoch.getDaySeconds();
+    const d = Date.fromMs(ms);
     return std.fmt.bufPrint(buf, "{d:0>4}{d:0>2}{d:0>2}-{d:0>2}{d:0>2}{d:0>2}", .{
-        ymd.year,
-        md.month.numeric(),
-        md.day_index + 1,
-        ds.getHoursIntoDay(),
-        ds.getMinutesIntoHour(),
-        ds.getSecondsIntoMinute(),
+        d.year, d.month, d.day, d.hour, d.minute, d.second,
     }) catch unreachable;
 }
 

@@ -16,7 +16,6 @@ pub const Usage = struct {
     cost_input: f64 = 0,
     cost_output: f64 = 0,
     cost_cache_read: f64 = 0,
-    cost_cache_write: f64 = 0,
     cost_total: f64 = 0,
 };
 
@@ -27,7 +26,6 @@ pub const StopReason = enum {
     tool_use,
     err,
     aborted,
-    deferred,
 
     pub fn wire(self: StopReason) []const u8 {
         return switch (self) {
@@ -37,7 +35,6 @@ pub const StopReason = enum {
             .tool_use => "toolUse",
             .err => "error",
             .aborted => "aborted",
-            .deferred => "deferred",
         };
     }
 };
@@ -64,7 +61,6 @@ pub const ContentBlock = union(enum) {
         signature: ?[]const u8 = null,
     },
     tool_call: ToolCall,
-    image: ImageContent,
 };
 
 pub const AssistantMessage = struct {

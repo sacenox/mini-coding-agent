@@ -46,8 +46,7 @@ const STATE_PAD = std.fmt.comptimePrint("{{s: <{d}}}", .{STATE_WIDTH});
 /// between them. A bad argument can sit at either end, so the tail is kept.
 fn clipCall(a: std.mem.Allocator, text: []const u8, available: usize) []const u8 {
     if (available == 0) return "";
-    // One wrapped element means the text fits. Testing through the wrapper
-    // keeps SGR sequences out of the width, which `displayWidth` would count.
+    // One wrapped element means the text fits.
     if (render.wrapLine(a, text, available).len == 1) return text;
     const head_budget = available / 2;
     const head = render.wrapLine(a, text, head_budget)[0];
@@ -154,7 +153,10 @@ fn diffLine(line: []const u8) stream.BodyLine {
     return .{ .text = line };
 }
 
-/// Styled lines for a tool call's changed files, shown in full.
+/// Styled lines for a tool call's changed files, shown in full. The patch's own
+/// `Index:`/`---`/`+++` header is dropped: the path above it carries the name.
+/// Only the opening run is dropped, so a removed line that happens to start
+/// with `---` is still shown.
 fn diffRows(a: std.mem.Allocator, diffs: []const common.FileDiff) []const stream.BodyLine {
     var out: std.ArrayList(stream.BodyLine) = .empty;
     for (diffs) |d| {
@@ -162,20 +164,10 @@ fn diffRows(a: std.mem.Allocator, diffs: []const common.FileDiff) []const stream
         if (d.patch) |patch| {
             const trimmed = std.mem.trimEnd(u8, patch, " \t\r\n");
             var it = std.mem.splitScalar(u8, trimmed, '\n');
-            var first_line = true;
+            var header = true;
             while (it.next()) |l| {
-                if (first_line) {
-                    first_line = false;
-                    if (isEditHeader(l)) {
-                        while (it.next()) |l2| {
-                            if (!isEditHeader(l2)) {
-                                out.append(a, diffLine(l2)) catch {};
-                                break;
-                            }
-                        }
-                        continue;
-                    }
-                }
+                if (header and isEditHeader(l)) continue;
+                header = false;
                 out.append(a, diffLine(l)) catch {};
             }
         } else if (d.note) |note| {
@@ -214,41 +206,39 @@ fn resultLines(a: std.mem.Allocator, name: []const u8, text: []const u8, is_erro
 
 // ---- token estimate (display only) --------------------------------------
 
+/// Roughly four characters per token, the usual rule of thumb.
 fn estimateTextTokens(text: []const u8) u64 {
     return (text.len + 3) / 4;
 }
 
 fn estimateMessageTokens(m: types.Message) u64 {
-    switch (m) {
-        .user => |u| return estimateTextTokens(u.content),
-        .tool_result => |t| return estimateTextTokens(t.text),
-        .assistant => |am| {
+    return switch (m) {
+        .user => |u| estimateTextTokens(u.content),
+        .tool_result => |t| estimateTextTokens(t.text),
+        .assistant => |am| blk: {
             var chars: usize = 0;
             for (am.content.items) |b| switch (b) {
                 .text => |t| chars += t.len,
                 .thinking => |t| chars += t.text.len,
                 .tool_call => |tc| chars += tc.name.len + tc.arguments.len,
-                .image => {},
             };
-            return (chars + 3) / 4;
+            break :blk (chars + 3) / 4;
         },
-    }
+    };
 }
 
+/// The last assistant turn's reported usage plus an estimate of everything
+/// after it; the whole transcript plus the prompt when there is no usage yet.
 fn estimateContextTokens(messages: []const types.Message, system_prompt: []const u8, tools_json: []const u8) u64 {
     var last_idx: ?usize = null;
     var usage: u64 = 0;
     for (messages, 0..) |m, i| {
-        if (m == .assistant) {
-            const am = m.assistant;
-            if (am.stop_reason != .aborted and am.stop_reason != .err) {
-                const total = if (am.usage.total_tokens > 0) am.usage.total_tokens else am.usage.input + am.usage.output + am.usage.cache_read + am.usage.cache_write;
-                if (total > 0) {
-                    usage = total;
-                    last_idx = i;
-                }
-            }
-        }
+        if (m != .assistant) continue;
+        const am = m.assistant;
+        if (am.stop_reason == .aborted or am.stop_reason == .err) continue;
+        if (am.usage.total_tokens == 0) continue;
+        usage = am.usage.total_tokens;
+        last_idx = i;
     }
     if (last_idx) |idx| {
         var trailing: u64 = 0;
@@ -260,20 +250,18 @@ fn estimateContextTokens(messages: []const types.Message, system_prompt: []const
     return total + estimateTextTokens(system_prompt) + estimateTextTokens(tools_json);
 }
 
+/// `12k`, `1.2M`, or the plain count below a thousand. The trailing zeros the
+/// one- or two-decimal rounding leaves are trimmed back off.
 fn formatTokens(a: std.mem.Allocator, n: u64) []const u8 {
     if (n < 1000) return std.fmt.allocPrint(a, "{d}", .{n}) catch "";
-    const unit: []const u8 = if (n < 1_000_000) "k" else "M";
-    const x = if (n < 1_000_000)
-        @as(f64, @floatFromInt(n)) / 1000.0
-    else
-        @as(f64, @floatFromInt(n)) / 1_000_000.0;
-    const digits: usize = if (n < 1_000_000) 1 else 2;
+    const millions = n >= 1_000_000;
+    const div: f64 = if (millions) 1_000_000.0 else 1000.0;
+    const unit: []const u8 = if (millions) "M" else "k";
     var buf: [64]u8 = undefined;
-    const num = std.fmt.bufPrint(&buf, "{d:.[1]}", .{ x, digits }) catch return unit;
-    var end = num.len;
-    while (end > 0 and num[end - 1] == '0') end -= 1;
-    if (end > 0 and num[end - 1] == '.') end -= 1;
-    return std.fmt.allocPrint(a, "{s}{s}", .{ num[0..end], unit }) catch unit;
+    var num = std.fmt.bufPrint(&buf, "{d:.[1]}", .{ @as(f64, @floatFromInt(n)) / div, if (millions) @as(usize, 2) else 1 }) catch return unit;
+    while (num.len > 0 and num[num.len - 1] == '0') num = num[0 .. num.len - 1];
+    if (num.len > 0 and num[num.len - 1] == '.') num = num[0 .. num.len - 1];
+    return std.fmt.allocPrint(a, "{s}{s}", .{ num, unit }) catch unit;
 }
 
 fn contextUsageLine(a: std.mem.Allocator, used: u64, model: *const types.Model) []const u8 {
@@ -337,8 +325,6 @@ fn onExitSignal(_: std.posix.SIG) callconv(.c) void {
     exit_flag.store(true, .seq_cst);
 }
 
-const PromptKind = enum { none, select, secret, text };
-
 const Tui = struct {
     opts: *agent.Options,
     cfg: *const config.Config,
@@ -359,7 +345,7 @@ const Tui = struct {
 
     input_bytes: std.ArrayList(u8) = .empty,
     input_batch: std.ArrayList(u8) = .empty,
-    key_batch: std.ArrayList(term.Key) = .empty,
+    keys: std.ArrayList(term.Key) = .empty,
     parser: term.Parser = .{},
     stdin_closed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     eof_sent: bool = false,
@@ -400,8 +386,8 @@ const Tui = struct {
     last_input_ms: i64 = 0,
     command_active: bool = false,
 
-    // interactive prompt state
-    prompt_kind: PromptKind = .none,
+    // interactive prompt state: an open list prompt, and its answer slot
+    prompt_open: bool = false,
     prompt_options: []const []const u8 = &.{},
     prompt_ids: []const []const u8 = &.{},
     prompt_answer: []const u8 = "",
@@ -470,6 +456,19 @@ const Tui = struct {
     fn commitLines(self: *Tui, lines: []const stream.BodyLine) void {
         const width = @max(self.term.width(), 1);
         for (renderRows(self.s, lines, width)) |row| self.push(row);
+    }
+
+    /// One standalone line between blank separators, away from the live
+    /// region: banners, errors, command output.
+    fn note(self: *Tui, line: []const u8) void {
+        self.separator = true;
+        self.push(line);
+        self.separator = true;
+    }
+
+    /// A standalone error line, in red.
+    fn fail(self: *Tui, comptime fmt: []const u8, args: anytype) void {
+        self.note(styles.red(self.s, std.fmt.allocPrint(self.s, fmt, args) catch "! error"));
     }
 
     fn commitUser(self: *Tui, text: []const u8) void {
@@ -650,8 +649,7 @@ const Tui = struct {
         self.activity.reset();
         self.commitLines(self.reply.flush());
         self.flushCalls();
-        self.separator = true;
-        self.push(line);
+        self.note(line);
     }
 
     fn commitMessage(self: *Tui, am: *types.AssistantMessage) void {
@@ -713,7 +711,7 @@ const Tui = struct {
                 self.dirty = true;
             } else if (self.command_active) {
                 self.command_active = false;
-                self.prompt_kind = .none;
+                self.prompt_open = false;
                 self.dirty = true;
             } else if (self.editor.contents().len != 0) {
                 self.editor.clear();
@@ -753,7 +751,7 @@ const Tui = struct {
             }
             return;
         }
-        if (self.prompt_kind != .none) {
+        if (self.prompt_open) {
             self.editor.clear();
             self.prompt_answer = self.a.dupe(u8, text) catch text;
             self.prompt_ready.store(true, .seq_cst);
@@ -771,15 +769,11 @@ const Tui = struct {
         self.editor.clear();
         const message = types.Message{ .user = .{ .content = self.a.dupe(u8, text) catch text, .timestamp = util.nowMs() } };
         self.messages.append(platform.gpa, message) catch {
-            self.separator = true;
-            self.push(styles.red(self.s, "! out of memory"));
-            self.separator = true;
+            self.fail("! out of memory", .{});
             return;
         };
         self.opts.session.appendMessage(platform.gpa, message) catch |e| {
-            self.separator = true;
-            self.push(styles.red(self.s, std.fmt.allocPrint(self.s, "! {s}", .{@errorName(e)}) catch "! session error"));
-            self.separator = true;
+            self.fail("! {s}", .{@errorName(e)});
             return;
         };
         self.commitUser(text);
@@ -800,67 +794,46 @@ const Tui = struct {
     }
 
     // ---- commands --------------------------------------------------------
-    fn runCommand(self: *Tui, found: Command) void {
-        if (std.mem.eql(u8, found.name, "help")) {
-            const commands = [_][2][]const u8{
-                .{ "/help", "list commands and keybindings" },
-                .{ "/new", "start a new session" },
-                .{ "/provider", "choose the provider and model" },
-                .{ "/model", "choose a model for the current provider" },
-                .{ "/thinking", "set the thinking level" },
-            };
-            const keys = [_][2][]const u8{
-                .{ "Enter", "submit" },
-                .{ "Shift+Enter", "newline (Ctrl+J also works)" },
-                .{ "Esc", "pause the turn at the next step boundary" },
-                .{ "Ctrl+C", "cancel the turn" },
-                .{ "Ctrl+D", "exit on an empty draft" },
-                .{ "Tab", "complete command or path" },
-            };
-            var width: usize = 0;
-            for (commands) |row| width = @max(width, row[0].len);
-            for (keys) |row| width = @max(width, row[0].len);
-            self.separator = true;
-            self.push("commands");
-            for (commands) |row| self.push(helpRow(self.s, row[0], row[1], width));
-            self.push("");
-            self.push("keybindings");
-            for (keys) |row| self.push(helpRow(self.s, row[0], row[1], width));
-            self.separator = true;
-            return;
+    fn runCommand(self: *Tui, command: Command) void {
+        switch (command) {
+            .help => self.showHelp(),
+            .new => {
+                self.newSession();
+                self.note("new session");
+            },
+            .provider => self.startProviderSelect(),
+            .model => {
+                const m = self.opts.model orelse return self.fail("! no model configured", .{});
+                self.startModelSelect(m.provider);
+            },
+            .thinking => {
+                const m = self.opts.model orelse return self.fail("! no model configured", .{});
+                const levels = models_mod.supportedLevels(m.provider, m.id);
+                self.beginPrompt("Select a thinking level", levels, levels);
+                self.pending_command = .thinking;
+            },
         }
-        if (std.mem.eql(u8, found.name, "new")) {
-            self.newSession();
-            self.push("new session");
-            self.separator = true;
-            return;
+    }
+
+    fn showHelp(self: *Tui) void {
+        const keys = [_][2][]const u8{
+            .{ "Enter", "submit" },
+            .{ "Shift+Enter", "newline (Ctrl+J also works)" },
+            .{ "Esc", "pause the turn at the next step boundary" },
+            .{ "Ctrl+C", "cancel the turn" },
+            .{ "Ctrl+D", "exit on an empty draft" },
+            .{ "Tab", "complete command or path" },
+        };
+        var width: usize = 0;
+        for (Command.all) |c| width = @max(width, c.wire().len + 1);
+        for (keys) |row| width = @max(width, row[0].len);
+        self.note("commands");
+        for (Command.all) |c| {
+            self.push(helpRow(self.s, std.fmt.allocPrint(self.s, "/{s}", .{c.wire()}) catch c.wire(), c.summary(), width));
         }
-        if (std.mem.eql(u8, found.name, "provider")) {
-            self.startProviderSelect();
-            return;
-        }
-        if (std.mem.eql(u8, found.name, "model")) {
-            const m = self.opts.model orelse {
-                self.separator = true;
-                self.push(styles.red(self.a, "! no model configured"));
-                self.separator = true;
-                return;
-            };
-            self.startModelSelect(m.provider);
-            return;
-        }
-        if (std.mem.eql(u8, found.name, "thinking")) {
-            const m = self.opts.model orelse {
-                self.separator = true;
-                self.push(styles.red(self.a, "! no model configured"));
-                self.separator = true;
-                return;
-            };
-            const levels = models_mod.supportedLevels(m.provider, m.id);
-            self.beginPrompt(.select, "Select a thinking level", levels, levels);
-            self.pending_command = .thinking;
-            return;
-        }
+        self.push("");
+        self.push("keybindings");
+        for (keys) |row| self.push(helpRow(self.s, row[0], row[1], width));
     }
 
     /// Starts a fresh session: the current log is closed, a new one is opened
@@ -883,20 +856,16 @@ const Tui = struct {
             names.append(self.a, p.name) catch {};
         }
         if (ids.items.len == 0) {
-            self.separator = true;
-            self.push(styles.red(self.a, "! no authenticated providers"));
-            self.separator = true;
+            self.fail("! no authenticated providers", .{});
             return;
         }
-        self.beginPrompt(.select, "Select a provider", names.items, ids.items);
+        self.beginPrompt("Select a provider", names.items, ids.items);
         self.pending_command = .provider;
     }
 
     fn startModelSelect(self: *Tui, provider_id: []const u8) void {
         const list = models_mod.catalogModels(self.a, self.cfg, provider_id) catch {
-            self.separator = true;
-            self.push(styles.red(self.a, "! out of memory"));
-            self.separator = true;
+            self.fail("! out of memory", .{});
             self.command_active = false;
             return;
         };
@@ -907,19 +876,19 @@ const Tui = struct {
             names.append(self.a, m.name) catch {};
         }
         if (ids.items.len == 0) {
-            self.separator = true;
-            self.push(styles.red(self.a, "! no models for provider"));
-            self.separator = true;
+            self.fail("! no models for provider", .{});
             self.command_active = false;
             return;
         }
-        self.beginPrompt(.select, std.fmt.allocPrint(self.a, "Select a model for {s}", .{provider_id}) catch "Select a model", names.items, ids.items);
+        self.beginPrompt(std.fmt.allocPrint(self.a, "Select a model for {s}", .{provider_id}) catch "Select a model", names.items, ids.items);
         self.pending_command = .model;
         self.pending_provider = provider_id;
     }
 
-    fn beginPrompt(self: *Tui, kind: PromptKind, message: []const u8, options: []const []const u8, ids: []const []const u8) void {
-        self.prompt_kind = kind;
+    /// Opens a numbered list prompt and prints it. `ids` are the values the
+    /// answer maps back to, one per option.
+    fn beginPrompt(self: *Tui, message: []const u8, options: []const []const u8, ids: []const []const u8) void {
+        self.prompt_open = true;
         self.prompt_options = options;
         self.prompt_ids = ids;
         self.prompt_answer = "";
@@ -933,75 +902,44 @@ const Tui = struct {
         self.separator = true;
     }
 
+    /// Applies the answer to the open prompt. The command is left inactive
+    /// unless the step it starts opens another prompt.
     fn answerPrompt(self: *Tui) void {
         const answer = std.mem.trim(u8, self.prompt_answer, " \t\r\n");
         const command = self.pending_command;
-        self.prompt_kind = .none;
+        self.prompt_open = false;
         self.prompt_answer = "";
-        if (command == .provider) {
-            const provider_id = matchOption(answer, self.prompt_options, self.prompt_ids) orelse {
-                self.command_active = false;
-                return;
-            };
-            self.startModelSelect(provider_id);
-            return;
-        }
-        if (command == .model) {
-            const model_id = matchOption(answer, self.prompt_options, self.prompt_ids) orelse {
-                self.command_active = false;
-                return;
-            };
-            const provider_id = self.pending_provider orelse {
-                self.command_active = false;
-                return;
-            };
-            var err: ?[]const u8 = null;
-            const m = models_mod.resolveNamed(self.a, self.cfg, provider_id, model_id, &err) orelse {
-                self.command_active = false;
-                return;
-            };
-            const ptr = self.a.create(types.Model) catch {
-                self.command_active = false;
-                return;
-            };
-            ptr.* = m;
-            self.select(ptr);
-            config.save(self.a, self.cfg, .{ .provider = provider_id, .model = model_id }) catch {};
-            self.command_active = false;
-            return;
-        }
-        if (command == .thinking) {
-            const level = matchOption(answer, self.prompt_options, self.prompt_ids) orelse {
-                self.command_active = false;
-                return;
-            };
-            const m = self.opts.model orelse {
-                self.command_active = false;
-                return;
-            };
-            const clamped = models_mod.clampNamed(m.provider, m.id, level);
-            const updated = self.a.create(types.Model) catch {
-                self.command_active = false;
-                return;
-            };
-            updated.* = m.*;
-            updated.effort = clamped;
-            self.opts.model = updated;
-            config.save(self.a, self.cfg, .{ .thinking_effort = level }) catch {};
-            self.pushBanner();
-            self.command_active = false;
-            return;
-        }
         self.command_active = false;
+        const id = matchOption(answer, self.prompt_options, self.prompt_ids) orelse return;
+        switch (command) {
+            .provider => self.startModelSelect(id),
+            .model => {
+                const provider_id = self.pending_provider orelse return;
+                var err: ?[]const u8 = null;
+                const m = models_mod.resolveNamed(self.a, self.cfg, provider_id, id, &err) orelse return;
+                const ptr = self.a.create(types.Model) catch return;
+                ptr.* = m;
+                self.select(ptr);
+                config.save(self.a, self.cfg, .{ .provider = provider_id, .model = id }) catch {};
+            },
+            .thinking => {
+                const m = self.opts.model orelse return;
+                const updated = self.a.create(types.Model) catch return;
+                updated.* = m.*;
+                updated.effort = models_mod.clampNamed(m.provider, m.id, id);
+                self.select(updated);
+                config.save(self.a, self.cfg, .{ .thinking_effort = id }) catch {};
+            },
+            .none => {},
+        }
     }
 
     /// Switches the running session to `model`; the tools and their image
     /// behaviour follow the new model.
     fn select(self: *Tui, m: *const types.Model) void {
         self.opts.model = m;
-        self.opts.supports_images = tools_index.acceptsImages(m);
-        const list = tools_index.schemas(self.a, self.tool_names, self.opts.supports_images);
-        self.opts.tools_json = tools_index.writeArray(self.a, list);
+        self.opts.supports_images = m.supports_images;
+        self.opts.tools_json = tools_index.json(self.a, self.tool_names, self.opts.supports_images);
         self.pushBanner();
         self.dirty = true;
     }
@@ -1068,37 +1006,57 @@ fn completePathStep(word: []const u8) ?[]const u8 {
     return complete.completePath(word);
 }
 
-const Command = struct { name: []const u8 };
+/// A command the prompt accepts. `wire` is the word typed after the slash and
+/// `help` is what `/help` lists it as.
+const Command = enum {
+    help,
+    new,
+    provider,
+    model,
+    thinking,
 
+    fn wire(self: Command) []const u8 {
+        return @tagName(self);
+    }
+
+    fn summary(self: Command) []const u8 {
+        return switch (self) {
+            .help => "list commands and keybindings",
+            .new => "start a new session",
+            .provider => "choose the provider and model",
+            .model => "choose a model for the current provider",
+            .thinking => "set the thinking level",
+        };
+    }
+
+    /// The whole table, in the order `/help` lists it.
+    const all = [_]Command{ .help, .new, .provider, .model, .thinking };
+};
+
+/// The command `text` names, or null when it names none. Only the first word
+/// is read, so `/model extra` still resolves to `/model`.
 fn findCommand(text: []const u8) ?Command {
     if (text.len == 0 or text[0] != '/') return null;
     var i: usize = 1;
     while (i < text.len and text[i] != ' ' and text[i] != '\t' and text[i] != '\n') i += 1;
-    const name = text[1..i];
-    const known = [_][]const u8{ "help", "new", "provider", "model", "thinking" };
-    for (known) |k| {
-        if (std.mem.eql(u8, k, name)) return .{ .name = k };
-    }
-    return null;
+    return std.meta.stringToEnum(Command, text[1..i]);
 }
 
+/// Completes a `/command` draft to the one command it names, or to the prefix
+/// every match shares. Null when nothing more can be filled in.
 fn completeCommand(draft: []const u8) ?[]const u8 {
     if (draft.len == 0 or draft[0] != '/') return null;
-    for (draft) |c| {
-        if (c == ' ' or c == '\t' or c == '\n') return null;
-    }
+    if (std.mem.indexOfAny(u8, draft, " \t\n") != null) return null;
     const typed = draft[1..];
-    const names = [_][]const u8{ "help", "new", "provider", "model", "thinking" };
-    var matches: std.ArrayList([]const u8) = .empty;
-    for (names) |n| {
-        if (std.mem.startsWith(u8, n, typed)) matches.append(platform.gpa, n) catch {};
+    var matched: ?[]const u8 = null;
+    for (Command.all) |c| {
+        if (!std.mem.startsWith(u8, c.wire(), typed)) continue;
+        matched = if (matched) |have| complete.commonPrefix(have, c.wire()) else c.wire();
     }
-    if (matches.items.len == 0) return null;
-    if (matches.items.len == 1) return std.fmt.allocPrint(platform.gpa, "/{s}", .{matches.items[0]}) catch null;
-    var shared = matches.items[0];
-    for (matches.items[1..]) |m| shared = complete.commonPrefix(shared, m);
-    if (std.mem.eql(u8, shared, typed)) return null;
-    return std.fmt.allocPrint(platform.gpa, "/{s}", .{shared}) catch null;
+    const name = matched orelse return null;
+    // Nothing to add when the draft is already what the matches share.
+    if (name.len <= typed.len) return null;
+    return std.fmt.allocPrint(platform.gpa, "/{s}", .{name}) catch null;
 }
 
 fn inputThread(self: *Tui) void {
@@ -1206,8 +1164,8 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
         self.key_mutex.lockUncancelable(platform.io);
         std.mem.swap(std.ArrayList(u8), &self.input_bytes, &self.input_batch);
         self.key_mutex.unlock(platform.io);
-        self.key_batch.clearRetainingCapacity();
-        const keys = &self.key_batch;
+        self.keys.clearRetainingCapacity();
+        const keys = &self.keys;
         if (self.input_batch.items.len > 0) {
             self.parser.feed(platform.gpa, self.input_batch.items, keys);
             self.last_input_ms = util.nowMs();
@@ -1240,7 +1198,7 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
         }
         self.event_mutex.unlock(platform.io);
 
-        if (self.prompt_kind != .none and self.prompt_ready.load(.seq_cst)) self.answerPrompt();
+        if (self.prompt_open and self.prompt_ready.load(.seq_cst)) self.answerPrompt();
 
         if (self.turn_done.load(.seq_cst) and self.active) {
             self.active = false;

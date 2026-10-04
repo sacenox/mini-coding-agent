@@ -52,16 +52,31 @@ fn isCombining(code: u21) bool {
         (code >= 0xfe20 and code <= 0xfe2f);
 }
 
+/// One code point of `text` and the cells it occupies. An SGR sequence is one
+/// piece of zero cells, so styled text measures and wraps as its plain text
+/// does. A tab is zero cells here; `expandTabs` is what gives it columns.
+const Piece = struct { text: []const u8, width: usize };
+
+fn nextPiece(text: []const u8, i: *usize) ?Piece {
+    if (i.* >= text.len) return null;
+    if (isSgrAt(text, i.*)) |n| {
+        const piece = Piece{ .text = text[i.* .. i.* + n], .width = 0 };
+        i.* += n;
+        return piece;
+    }
+    const n = std.unicode.utf8ByteSequenceLength(text[i.*]) catch 1;
+    const len = @min(@as(usize, n), text.len - i.*);
+    const cp = std.unicode.utf8Decode(text[i.* .. i.* + len]) catch text[i.*];
+    const piece = Piece{ .text = text[i.* .. i.* + len], .width = if (cp == '\t') 0 else charWidth(cp) };
+    i.* += len;
+    return piece;
+}
+
+/// The terminal cells `text` occupies.
 pub fn displayWidth(text: []const u8) usize {
     var width: usize = 0;
     var i: usize = 0;
-    while (i < text.len) {
-        const n = std.unicode.utf8ByteSequenceLength(text[i]) catch 1;
-        const len = @min(@as(usize, n), text.len - i);
-        const cp = std.unicode.utf8Decode(text[i .. i + len]) catch text[i];
-        width += charWidth(cp);
-        i += len;
-    }
+    while (nextPiece(text, &i)) |piece| width += piece.width;
     return width;
 }
 
@@ -132,31 +147,23 @@ pub fn sanitize(a: std.mem.Allocator, text: []const u8) []const u8 {
     return out.items;
 }
 
+/// Replaces each tab with the spaces that carry the column to the next tab
+/// stop, so a terminal never has to guess where a tab lands.
 pub fn expandTabs(a: std.mem.Allocator, text: []const u8, size: usize) []const u8 {
     if (std.mem.indexOfScalar(u8, text, '\t') == null) return text;
     var out: std.ArrayList(u8) = .empty;
     var column: usize = 0;
     var i: usize = 0;
-    while (i < text.len) {
-        if (isSgrAt(text, i)) |n| {
-            out.appendSlice(a, text[i .. i + n]) catch {};
-            i += n;
+    while (nextPiece(text, &i)) |piece| {
+        if (piece.text[0] != '\t') {
+            out.appendSlice(a, piece.text) catch {};
+            column += piece.width;
             continue;
         }
-        const seq_len = std.unicode.utf8ByteSequenceLength(text[i]) catch 1;
-        const len = @min(@as(usize, seq_len), text.len - i);
-        if (text[i] == '\t') {
-            const spaces = size - (column % size);
-            var k: usize = 0;
-            while (k < spaces) : (k += 1) out.append(a, ' ') catch {};
-            column += spaces;
-            i += 1;
-            continue;
-        }
-        const cp = std.unicode.utf8Decode(text[i .. i + len]) catch text[i];
-        out.appendSlice(a, text[i .. i + len]) catch {};
-        column += charWidth(cp);
-        i += len;
+        const spaces = size - (column % size);
+        var k: usize = 0;
+        while (k < spaces) : (k += 1) out.append(a, ' ') catch {};
+        column += spaces;
     }
     return out.items;
 }
@@ -172,24 +179,14 @@ pub fn wrapLine(a: std.mem.Allocator, text: []const u8, width: usize) []const []
     var current: std.ArrayList(u8) = .empty;
     var used: usize = 0;
     var i: usize = 0;
-    while (i < text.len) {
-        if (isSgrAt(text, i)) |n| {
-            current.appendSlice(a, text[i .. i + n]) catch {};
-            i += n;
-            continue;
-        }
-        const seq_len = std.unicode.utf8ByteSequenceLength(text[i]) catch 1;
-        const len = @min(@as(usize, seq_len), text.len - i);
-        const cp = std.unicode.utf8Decode(text[i .. i + len]) catch text[i];
-        const w = charWidth(cp);
-        if (used + w > width and current.items.len != 0) {
+    while (nextPiece(text, &i)) |piece| {
+        if (used + piece.width > width and current.items.len != 0) {
             rows.append(a, current.items) catch {};
             current = .empty;
             used = 0;
         }
-        current.appendSlice(a, text[i .. i + len]) catch {};
-        used += w;
-        i += len;
+        current.appendSlice(a, piece.text) catch {};
+        used += piece.width;
     }
     rows.append(a, current.items) catch {};
     return rows.items;

@@ -45,11 +45,9 @@ fn parseArgs(a: std.mem.Allocator) !ParsedArgs {
     return result;
 }
 
-const PrintCtx = struct {
-    failed: bool = false,
-    cancelled: bool = false,
-    no_model: bool = false,
-};
+/// The headless projection: tool activity on stderr, the reply on stdout. It
+/// records only whether anything went wrong, which sets the exit code.
+const PrintCtx = struct { failed: bool = false };
 
 fn printEvent(ctx: *anyopaque, event: agent.Event) void {
     const pc: *PrintCtx = @ptrCast(@alignCast(ctx));
@@ -57,7 +55,7 @@ fn printEvent(ctx: *anyopaque, event: agent.Event) void {
         .tool_call => |call| platform.printErr("[tool] {s}\n", .{call.name}),
         .tool_output => |chunk| platform.writeErr(chunk),
         .no_model => {
-            pc.no_model = true;
+            pc.failed = true;
             platform.printErr("[error] no model configured; add \"provider\" and \"model\" to {s}\n", .{config.configPath(platform.gpa)});
         },
         .err => |message| {
@@ -65,7 +63,7 @@ fn printEvent(ctx: *anyopaque, event: agent.Event) void {
             platform.printErr("[error] {s}\n", .{message});
         },
         .cancelled => {
-            pc.cancelled = true;
+            pc.failed = true;
             platform.printErr("[cancelled]\n", .{});
         },
         else => {},
@@ -93,26 +91,26 @@ fn runPrint(a: std.mem.Allocator, prompt_text: []const u8, opts: agent.Options) 
     std.posix.sigaction(std.posix.SIG.TERM, &act, null);
 
     var pc = PrintCtx{};
-    agent.runTurn(opts, &messages, agent.NO_INTERACTION, .{ .ctx = &pc, .on_event = printEvent });
+    agent.runTurn(opts, &messages, null, .{ .ctx = &pc, .on_event = printEvent });
     opts.session.close();
+    if (pc.failed) return 1;
 
-    var last: ?*types.AssistantMessage = null;
-    for (messages.items) |message| {
-        if (message == .assistant) last = message.assistant;
+    // The reply is the last assistant turn's text; anything before it is a
+    // tool round trip whose output already reached stderr.
+    var i = messages.items.len;
+    const last = while (i > 0) {
+        i -= 1;
+        if (messages.items[i] == .assistant) break messages.items[i].assistant;
+    } else return 0;
+    const text = types.assistantText(a, last) catch {
+        platform.printErr("[error] out of memory\n", .{});
+        return 1;
+    };
+    if (text.len > 0) {
+        platform.writeOut(text);
+        if (text[text.len - 1] != '\n') platform.writeOut("\n");
     }
-    if (!pc.failed and !pc.cancelled and !pc.no_model) {
-        if (last) |am| {
-            const text = types.assistantText(a, am) catch {
-                platform.printErr("[error] out of memory\n", .{});
-                return 1;
-            };
-            if (text.len > 0) {
-                platform.writeOut(text);
-                if (text[text.len - 1] != '\n') platform.writeOut("\n");
-            }
-        }
-    }
-    return if (pc.failed or pc.cancelled or pc.no_model) 1 else 0;
+    return 0;
 }
 
 pub fn main(init: std.process.Init) void {
@@ -154,13 +152,12 @@ fn run() !u8 {
         break :blk ptr;
     } else null;
 
-    const supports_images = if (model_ptr) |m| tools.acceptsImages(m) else false;
-    const tool_list = tools.schemas(a, cfg.tools, supports_images);
+    const supports_images = if (model_ptr) |m| m.supports_images else false;
     const opts = agent.Options{
         .a = a,
         .model = model_ptr,
         .system_prompt = try prompt.buildSystemPrompt(a, &cfg),
-        .tools_json = tools.writeArray(a, tool_list),
+        .tools_json = tools.json(a, cfg.tools, supports_images),
         .supports_images = supports_images,
         .session = &sess,
         .cancel = &cancel,

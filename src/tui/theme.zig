@@ -41,7 +41,7 @@ fn rgb(hex: []const u8) [3]u8 {
 }
 
 /// A compile-time SGR sequence for one fixed `#rrggbb`.
-pub fn sgrConst(comptime code: []const u8, comptime hex: []const u8) []const u8 {
+fn sgrConst(comptime code: []const u8, comptime hex: []const u8) []const u8 {
     const c = comptime rgb(hex);
     return std.fmt.comptimePrint("\x1b[{s}{d};{d};{d}m", .{ code, c[0], c[1], c[2] });
 }

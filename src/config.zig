@@ -7,15 +7,7 @@ const std = @import("std");
 const platform = @import("platform.zig");
 const util = @import("util.zig");
 
-pub const ToolName = enum {
-    edit,
-    read,
-    bash,
-
-    pub fn wire(self: ToolName) []const u8 {
-        return @tagName(self);
-    }
-};
+pub const ToolName = enum { edit, read, bash };
 
 pub const CustomProvider = struct {
     id: []const u8,

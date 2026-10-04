@@ -47,6 +47,15 @@ const Acc = struct {
     }
 };
 
+/// Ends the command's process group: `SIGTERM` first so it can clean up, then
+/// `SIGKILL` for whatever is left. Cancel must stop the whole tree, not just
+/// the shell, or a background grandchild outlives the turn.
+fn killGroup(pid: i32) void {
+    std.posix.kill(-pid, .TERM) catch {};
+    std.Io.sleep(platform.io, .{ .nanoseconds = 300 * std.time.ns_per_ms }, .boot) catch {};
+    std.posix.kill(-pid, .KILL) catch {};
+}
+
 fn fail(a: std.mem.Allocator, comptime fmt: []const u8, args: anytype) common.Result {
     return .{
         .text = std.fmt.allocPrint(a, fmt, args) catch "bash failed",
@@ -79,6 +88,7 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
 
     var acc = Acc{ .a = scratch, .on_output = ctx.on_output };
     var cancelled = false;
+    var broken = false;
     var oom = false;
 
     while (open[0] or open[1]) {
@@ -86,9 +96,15 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
             cancelled = true;
             break;
         }
-        const ready = std.posix.poll(&fds, 100) catch |e| {
-            return fail(a, "bash failed: {s}", .{@errorName(e)});
+        // A poll failure must not leave the command running: the tool returns
+        // at once, so nothing would ever collect it or its process group.
+        const ready = std.posix.poll(&fds, 100) catch {
+            broken = true;
+            break;
         };
+        // A timeout means neither stream has data yet. Reading anyway would
+        // return WouldBlock, but checking first keeps the wait a real one
+        // instead of a spin.
         if (ready == 0) continue;
         for (0..2) |i| {
             if (!open[i]) continue;
@@ -113,14 +129,13 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
         if (oom) break;
     }
 
-    if (cancelled or oom) {
-        std.posix.kill(-pid, .TERM) catch {};
-        std.Io.sleep(platform.io, .{ .nanoseconds = 300 * std.time.ns_per_ms }, .boot) catch {};
-        std.posix.kill(-pid, .KILL) catch {};
-    }
+    if (cancelled or oom or broken) killGroup(pid);
     const term = child.wait(platform.io) catch std.process.Child.Term{ .unknown = 0 };
 
     if (oom) return fail(a, "bash failed: out of memory", .{});
+    // A broken stream leaves the command's own output incomplete, so it is
+    // reported as a failure rather than as a quiet command.
+    if (broken) return fail(a, "bash failed: could not read the command's output", .{});
 
     const code: ?u8 = switch (term) {
         .exited => |c| c,

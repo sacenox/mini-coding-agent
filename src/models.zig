@@ -52,21 +52,40 @@ fn clampEffort(info: *const catalog.ModelInfo, desired: ?[]const u8) []const u8 
     for (info.effort) |accepted| {
         if (std.mem.eql(u8, normalizeEffort(accepted), want)) return normalizeEffort(accepted);
     }
-    const r0 = rank(want);
-    if (r0 < 0) return normalizeEffort(info.effort[0]);
-    var r: i32 = r0;
-    while (r <= 6) : (r += 1) {
-        for (info.effort) |accepted| {
-            if (rank(normalizeEffort(accepted)) == r) return normalizeEffort(accepted);
+    const want_rank = rank(want);
+    if (want_rank < 0) return normalizeEffort(info.effort[0]);
+
+    // Nearest accepted level by ladder rank, preferring to go up. One pass in
+    // each direction beats scanning the whole ladder per rank.
+    var up: ?[]const u8 = null;
+    var down: ?[]const u8 = null;
+    for (info.effort) |accepted| {
+        const r = rank(normalizeEffort(accepted));
+        if (r < 0) continue;
+        if (r >= want_rank) {
+            if (up == null or r < rank(up.?)) up = accepted;
+        } else if (down == null or r > rank(down.?)) {
+            down = accepted;
         }
     }
-    r = r0 - 1;
-    while (r >= 0) : (r -= 1) {
-        for (info.effort) |accepted| {
-            if (rank(normalizeEffort(accepted)) == r) return normalizeEffort(accepted);
-        }
+    const pick = up orelse down orelse return "off";
+    return normalizeEffort(pick);
+}
+
+/// The built-in provider with this id, or null.
+fn builtin(id: []const u8) ?*const Builtin {
+    for (&builtins) |*b| {
+        if (std.mem.eql(u8, b.id, id)) return b;
     }
-    return "off";
+    return null;
+}
+
+/// The custom provider with this id, or null.
+fn custom(cfg: *const config.Config, id: []const u8) ?*const config.CustomProvider {
+    for (cfg.custom_providers) |*p| {
+        if (std.mem.eql(u8, p.id, id)) return p;
+    }
+    return null;
 }
 
 fn firstEnv(keys: []const []const u8) ?[]const u8 {
@@ -89,12 +108,11 @@ pub fn resolve(a: std.mem.Allocator, cfg: *const config.Config, err: *?[]const u
 /// Resolves one named provider and model, clamped to what the catalog says the
 /// model accepts. `err` carries a message when the pair is unknown.
 pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id: []const u8, model_id: []const u8, err: *?[]const u8) ?types.Model {
-    for (builtins) |b| {
-        if (!std.mem.eql(u8, b.id, provider_id)) continue;
+    if (builtin(provider_id)) |b| {
         // The catalog is the only source of the wire and the base URL, and it
         // holds no model it cannot address. A missing entry is unresolvable.
         const info = catalog.lookup(provider_id, model_id) orelse {
-            err.* = std.fmt.allocPrint(a, "unknown model \"{s}\" for provider \"{s}\"", .{ model_id, provider_id }) catch "unknown model";
+            err.* = unknownModel(a, model_id, provider_id);
             return null;
         };
         return types.Model{
@@ -115,14 +133,13 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
         };
     }
 
-    for (cfg.custom_providers) |p| {
-        if (!std.mem.eql(u8, p.id, provider_id)) continue;
+    if (custom(cfg, provider_id)) |p| {
         var listed = false;
         for (p.models) |id| {
             if (std.mem.eql(u8, id, model_id)) listed = true;
         }
         if (!listed) {
-            err.* = std.fmt.allocPrint(a, "unknown model \"{s}\" for provider \"{s}\"", .{ model_id, provider_id }) catch "unknown model";
+            err.* = unknownModel(a, model_id, provider_id);
             return null;
         }
         return types.Model{
@@ -152,7 +169,7 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
 
 /// A provider the TUI can offer in `/provider`. `key_present` is only a hint;
 /// a provider without a key is listed but will fail at request time as-is.
-pub const ProviderEntry = struct { id: []const u8, name: []const u8, key_present: bool };
+const ProviderEntry = struct { id: []const u8, name: []const u8, key_present: bool };
 
 /// The built-in providers plus any custom provider in the config.
 pub fn providers(a: std.mem.Allocator, cfg: *const config.Config) []ProviderEntry {
@@ -170,46 +187,38 @@ pub fn providers(a: std.mem.Allocator, cfg: *const config.Config) []ProviderEntr
 /// declared ids for a custom provider.
 pub fn catalogModels(a: std.mem.Allocator, cfg: *const config.Config, provider_id: []const u8) ![]types.Model {
     var out: std.ArrayList(types.Model) = .empty;
-    for (builtins) |b| {
-        if (!std.mem.eql(u8, b.id, provider_id)) continue;
-        for (&catalog.entries) |*entry| {
-            if (!std.mem.eql(u8, entry.provider, provider_id)) continue;
-            var err: ?[]const u8 = null;
-            if (resolveNamed(a, cfg, provider_id, entry.id, &err)) |m| try out.append(a, m);
-        }
-        return try out.toOwnedSlice(a);
+    for (&catalog.entries) |*entry| {
+        if (!std.mem.eql(u8, entry.provider, provider_id)) continue;
+        var err: ?[]const u8 = null;
+        if (resolveNamed(a, cfg, provider_id, entry.id, &err)) |m| try out.append(a, m);
     }
-    for (cfg.custom_providers) |p| {
-        if (!std.mem.eql(u8, p.id, provider_id)) continue;
+    if (custom(cfg, provider_id)) |p| {
         for (p.models) |id| {
             var err: ?[]const u8 = null;
-            if (resolveNamed(a, cfg, provider_id, id, &err)) |m| out.append(a, m) catch {};
+            if (resolveNamed(a, cfg, provider_id, id, &err)) |m| try out.append(a, m);
         }
-        return out.toOwnedSlice(a) catch &.{};
     }
-    return out.toOwnedSlice(a) catch &.{};
+    return out.toOwnedSlice(a);
 }
 
 /// The thinking levels a model accepts, in ladder order.
 pub fn supportedLevels(provider_id: []const u8, model_id: []const u8) []const []const u8 {
-    for (builtins) |b| {
-        if (!std.mem.eql(u8, b.id, provider_id)) continue;
-        const info = catalog.lookup(provider_id, model_id) orelse return &ladder;
-        // A model that does not reason runs "off" and offers nothing else,
-        // matching what `clampEffort` will send.
-        if (!info.reasoning) return &.{"off"};
-        if (info.effort.len == 0) return &ladder;
-        return info.effort;
-    }
-    return &ladder;
+    if (builtin(provider_id) == null) return &ladder;
+    const info = catalog.lookup(provider_id, model_id) orelse return &ladder;
+    // A model that does not reason runs "off" and offers nothing else,
+    // matching what `clampEffort` will send.
+    if (!info.reasoning) return &.{"off"};
+    if (info.effort.len == 0) return &ladder;
+    return info.effort;
 }
 
 /// Clamps a requested thinking level to what the named model accepts.
 pub fn clampNamed(provider_id: []const u8, model_id: []const u8, desired: []const u8) []const u8 {
-    for (builtins) |b| {
-        if (!std.mem.eql(u8, b.id, provider_id)) continue;
-        const info = catalog.lookup(provider_id, model_id) orelse return desired;
-        return clampEffort(info, desired);
-    }
-    return desired;
+    if (builtin(provider_id) == null) return desired;
+    const info = catalog.lookup(provider_id, model_id) orelse return desired;
+    return clampEffort(info, desired);
+}
+
+fn unknownModel(a: std.mem.Allocator, model_id: []const u8, provider_id: []const u8) []const u8 {
+    return std.fmt.allocPrint(a, "unknown model \"{s}\" for provider \"{s}\"", .{ model_id, provider_id }) catch "unknown model";
 }

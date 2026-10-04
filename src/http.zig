@@ -5,7 +5,7 @@ const platform = @import("platform.zig");
 const build_options = @import("build_options");
 
 /// Providers require a product user-agent; the client default is the std one.
-pub const user_agent = "mini-coding-agent/" ++ build_options.version;
+const user_agent = "mini-coding-agent/" ++ build_options.version;
 
 pub const Header = struct { name: []const u8, value: []const u8 };
 
@@ -18,7 +18,7 @@ pub const SseHandler = struct {
     }
 };
 
-pub const HttpError = error{
+const HttpError = error{
     RequestFailed,
     HttpStatus,
     ReadFailed,

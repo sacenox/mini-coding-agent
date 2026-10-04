@@ -26,11 +26,7 @@ pub fn writeString(w: *std.Io.Writer, s: []const u8) !void {
     try w.writeByte('"');
 }
 
-pub fn writeInt(w: *std.Io.Writer, n: i64) !void {
-    try w.print("{d}", .{n});
-}
-
-pub fn writeUint(w: *std.Io.Writer, n: u64) !void {
+pub fn writeNum(w: *std.Io.Writer, n: anytype) !void {
     try w.print("{d}", .{n});
 }
 

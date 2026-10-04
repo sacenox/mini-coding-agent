@@ -37,8 +37,8 @@ pub const Listener = struct {
 };
 
 /// How the agent reaches the projection while a turn is in flight. Headless
-/// uses `NO_INTERACTION`; the TUI supplies its own. `requestSteering` blocks
-/// the turn thread until the user submits a line or the turn is cancelled.
+/// passes `null`; the TUI supplies its own. `request_steering` blocks the turn
+/// thread until the user submits a line or the turn is cancelled.
 pub const Interaction = struct {
     ctx: *anyopaque,
     is_pause_requested: *const fn (ctx: *anyopaque) bool,
@@ -55,21 +55,6 @@ pub const Interaction = struct {
         return self.request_steering(self.ctx);
     }
 };
-
-pub const NO_INTERACTION = Interaction{
-    .ctx = undefined,
-    .is_pause_requested = noPause,
-    .clear_pause = noop,
-    .request_steering = noSteering,
-};
-
-fn noPause(_: *anyopaque) bool {
-    return false;
-}
-fn noop(_: *anyopaque) void {}
-fn noSteering(_: *anyopaque) []const u8 {
-    return "";
-}
 
 pub const Options = struct {
     /// Long-lived allocator for the transcript and its messages.
@@ -115,13 +100,14 @@ fn steer(opts: Options, messages: *std.ArrayList(types.Message), content: []cons
 
 /// Returns the steering typed while paused, or "" when there was no pause;
 /// null once the turn has been cancelled.
-fn pauseStep(run: Run, listener: Listener) ?[]const u8 {
+fn pauseStep(run: Run) ?[]const u8 {
     if (run.opts.cancel.load(.acquire)) return null;
-    if (!run.interaction.pauseRequested()) return "";
-    run.interaction.clearPause();
-    listener.emit(.{ .phase = .{ .phase = .pausing } });
-    const steering = run.interaction.requestSteering();
-    listener.emit(.{ .phase = .{ .phase = .idle } });
+    const interaction = run.interaction orelse return "";
+    if (!interaction.pauseRequested()) return "";
+    interaction.clearPause();
+    run.listener.emit(.{ .phase = .{ .phase = .pausing } });
+    const steering = interaction.requestSteering();
+    run.listener.emit(.{ .phase = .{ .phase = .idle } });
     if (run.opts.cancel.load(.acquire)) return null;
     return steering;
 }
@@ -129,14 +115,14 @@ fn pauseStep(run: Run, listener: Listener) ?[]const u8 {
 const Run = struct {
     opts: Options,
     messages: *std.ArrayList(types.Message),
-    interaction: Interaction,
+    interaction: ?Interaction,
     listener: Listener,
 };
 
 /// Runs one turn to completion, appending to `messages`. Returns after the
 /// model stops without tool calls, after a cancellation, or after an error;
 /// every outcome is reported through the listener.
-pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interaction: Interaction, listener: Listener) void {
+pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interaction: ?Interaction, listener: Listener) void {
     const run = Run{ .opts = opts, .messages = messages, .interaction = interaction, .listener = listener };
 
     const model = opts.model orelse {
@@ -153,7 +139,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
 
         // Cancellation and steering land at the step boundary, never between an
         // assistant turn and its tool results.
-        const steering = pauseStep(run, listener) orelse {
+        const steering = pauseStep(run) orelse {
             listener.emit(.cancelled);
             return;
         };
@@ -232,7 +218,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
             if (block != .tool_call) continue;
             const call = block.tool_call;
 
-            const step = pauseStep(run, listener) orelse {
+            const step = pauseStep(run) orelse {
                 listener.emit(.cancelled);
                 return;
             };

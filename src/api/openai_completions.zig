@@ -4,17 +4,13 @@
 const std = @import("std");
 const api = @import("../api.zig");
 const types = @import("../types.zig");
-const http = @import("../http.zig");
 const json = @import("../json.zig");
 
-const Value = std.json.Value;
-
-/// An untrusted stream index is a hint, never a size. Anything past this is
-/// treated like a missing index so a hostile chunk cannot force an allocation.
-const max_stream_index = 10_000;
 
 // ---- request building -----------------------------------------------------
 
+/// An assistant turn: its text, then one `tool_calls` entry per call. The
+/// `tool_calls` key is written only when there is a call.
 fn writeAssistant(w: *std.Io.Writer, am: *const types.AssistantMessage, a: std.mem.Allocator) !void {
     try w.writeAll("{\"role\":\"assistant\",\"content\":");
     try json.writeString(w, try types.assistantText(a, am));
@@ -22,7 +18,7 @@ fn writeAssistant(w: *std.Io.Writer, am: *const types.AssistantMessage, a: std.m
     var calls: usize = 0;
     for (am.content.items) |block| {
         if (block != .tool_call) continue;
-        if (calls == 0) try w.writeAll(",\"tool_calls\":[") else try w.writeByte(',');
+        if (calls > 0) try w.writeByte(',') else try w.writeAll(",\"tool_calls\":[");
         calls += 1;
         const call = block.tool_call;
         try w.writeAll("{\"id\":");
@@ -30,7 +26,7 @@ fn writeAssistant(w: *std.Io.Writer, am: *const types.AssistantMessage, a: std.m
         try w.writeAll(",\"type\":\"function\",\"function\":{\"name\":");
         try json.writeString(w, call.name);
         try w.writeAll(",\"arguments\":");
-        try json.writeString(w, if (call.arguments.len > 0) call.arguments else "{}");
+        try json.writeString(w, api.argumentsOrObject(call.arguments));
         try w.writeAll("}}");
     }
     if (calls > 0) try w.writeByte(']');
@@ -120,42 +116,18 @@ fn buildBody(req: api.Request) ![]u8 {
         i += 1;
     }
     try w.writeByte(']');
-    try writeTools(w, req.scratch, req.tools_json);
+    try api.writeTools(w, req.scratch, req.tools_json, .{
+        .open = ",\"tools\":[",
+        .entry = "{\"type\":\"function\",\"function\":{",
+        .params_key = "parameters",
+        .entry_close = "}}",
+        .close = "]",
+    });
     try w.writeByte('}');
     return out.written();
 }
 
-/// The tool schemas as chat completions wants them: each wrapped in a
-/// `function` object. The flat form recorded in the session is not the wire
-/// form here.
-fn writeTools(w: *std.Io.Writer, a: std.mem.Allocator, tools_json: []const u8) !void {
-    const tools = api.parseTools(a, tools_json) orelse return;
-    try w.writeAll(",\"tools\":[");
-    for (tools, 0..) |tool, i| {
-        if (i > 0) try w.writeByte(',');
-        try w.writeAll("{\"type\":\"function\",\"function\":{");
-        try api.writeToolBody(w, tool.object, "parameters");
-        try w.writeAll("}}");
-    }
-    try w.writeByte(']');
-}
-
-fn buildUrl(a: std.mem.Allocator, base: []const u8) ![]u8 {
-    return api.buildUrl(a, base, "/chat/completions");
-}
-
-fn headers(a: std.mem.Allocator, req: api.Request, auth: []const u8) ![]http.Header {
-    return api.headers(a, req, &.{.{ "Authorization", auth }});
-}
-
 // ---- streaming state ------------------------------------------------------
-
-const PendingCall = struct {
-    id: []const u8 = "",
-    name: []const u8 = "",
-    args: std.ArrayList(u8) = .empty,
-    started: bool = false,
-};
 
 const State = struct {
     req: api.Request,
@@ -165,21 +137,40 @@ const State = struct {
     text: std.ArrayList(u8) = .empty,
     thinking: std.ArrayList(u8) = .empty,
     signature: ?[]const u8 = null,
-    calls: std.ArrayList(PendingCall) = .empty,
+    calls: std.ArrayList(api.Call) = .empty,
+    usage: types.Usage = .{},
     finish_reason: ?[]const u8 = null,
     stream_error: ?[]const u8 = null,
-};
+    /// Set by `run` when the stream did not run to completion.
+    failed: bool = false,
 
-fn ensureCall(st: *State, index: i64) !*PendingCall {
-    const idx: usize = if (index >= 0 and index <= max_stream_index)
-        @intCast(index)
-    else
-        st.calls.items.len;
-    while (st.calls.items.len <= idx) {
-        try st.calls.append(st.req.pers, .{});
+    /// One payload, already parsed. Everything this wire records about the
+    /// response it learns here; `run` owns the life cycle around it.
+    pub fn handle(st: *State, obj: std.json.ObjectMap) !void {
+        if (api.errorMessage(obj, "error")) |message| {
+            if (st.stream_error == null) st.stream_error = try st.req.pers.dupe(u8, message);
+            return;
+        }
+
+        if (st.msg.response_id == null) {
+            if (api.stringField(obj, "id")) |v| st.msg.response_id = try st.req.pers.dupe(u8, v);
+        }
+        if (st.msg.response_model == null) {
+            if (api.stringField(obj, "model")) |v| {
+                if (!std.mem.eql(u8, v, st.req.model.id)) st.msg.response_model = try st.req.pers.dupe(u8, v);
+            }
+        }
+
+        if (api.firstObjField(obj, "choices")) |choice| {
+            if (api.objField(choice, "delta")) |delta| try handleDelta(st, delta);
+            if (api.stringField(choice, "finish_reason")) |fr| {
+                st.finish_reason = try st.req.pers.dupe(u8, fr);
+            }
+        }
+
+        if (api.objField(obj, "usage")) |u| st.usage = usageOf(u);
     }
-    return &st.calls.items[idx];
-}
+};
 
 fn handleDelta(st: *State, delta: std.json.ObjectMap) !void {
     if (api.stringField(delta, "content")) |s| {
@@ -205,20 +196,14 @@ fn handleDelta(st: *State, delta: std.json.ObjectMap) !void {
             .integer => |n| n,
             else => -1,
         };
-        const call = try ensureCall(st, index);
+        const call = try api.blockAt(api.Call, &st.calls, st.req.pers, index);
         if (tc.object.get("id")) |id| {
             if (id == .string and call.id.len == 0) call.id = try st.req.pers.dupe(u8, id.string);
         }
         const fn_ = tc.object.get("function") orelse continue;
         if (fn_ != .object) continue;
-        if (fn_.object.get("name")) |name| {
-            if (name == .string and name.string.len > 0) {
-                if (call.name.len == 0) call.name = try st.req.pers.dupe(u8, name.string);
-                if (!call.started) {
-                    call.started = true;
-                    st.sink.emit(.{ .tool_start = call.name });
-                }
-            }
+        if (api.stringField(fn_.object, "name")) |name| {
+            try call.announce(st.req.pers, st.sink, name);
         }
         if (fn_.object.get("arguments")) |args| {
             if (args == .string) try call.args.appendSlice(st.req.pers, args.string);
@@ -226,107 +211,31 @@ fn handleDelta(st: *State, delta: std.json.ObjectMap) !void {
     }
 }
 
-fn parseUsage(st: *State, usage: std.json.ObjectMap) void {
-    var u = types.Usage{};
-    const prompt = api.numField(usage, "prompt_tokens");
-    var cache_read: u64 = 0;
-    if (usage.get("prompt_tokens_details")) |details| {
-        if (details == .object) cache_read = api.numField(details.object, "cached_tokens");
-    }
-    if (cache_read == 0) cache_read = api.numField(usage, "cached_tokens");
-    var cache_write: u64 = 0;
-    if (usage.get("prompt_tokens_details")) |details| {
-        if (details == .object) cache_write = api.numField(details.object, "cache_write_tokens");
-    }
-    const output = api.numField(usage, "completion_tokens");
-    if (usage.get("completion_tokens_details")) |details| {
-        if (details == .object) {
-            if (details.object.get("reasoning_tokens") != null) {
-                u.reasoning = api.numField(details.object, "reasoning_tokens");
-            }
-        }
-    }
-    u.input = prompt -| cache_read -| cache_write;
-    u.output = output;
-    u.cache_read = cache_read;
-    u.cache_write = cache_write;
-    u.total_tokens = u.input + output + cache_read + cache_write;
-    api.applyCost(st.req.model, &u);
-    st.msg.usage = u;
-}
-
-fn errorMessageFrom(root: std.json.ObjectMap) ?[]const u8 {
-    const err = root.get("error") orelse return null;
-    return switch (err) {
-        .object => |o| blk: {
-            const m = o.get("message") orelse break :blk null;
-            break :blk switch (m) {
-                .string => |s| s,
-                else => null,
-            };
-        },
-        .string => |s| s,
-        else => null,
+/// The usage facts one chunk carries. Every field is a delta on the running
+/// total except the counts themselves, which the provider sends whole. A
+/// prompt that is mostly a cache hit is billed as the difference, so the
+/// cached and written-back tokens come out of `input`.
+fn usageOf(u: std.json.ObjectMap) types.Usage {
+    const details = api.objField(u, "prompt_tokens_details");
+    var cache_read: u64 = if (details) |d| api.numField(d, "cached_tokens") else 0;
+    if (cache_read == 0) cache_read = api.numField(u, "cached_tokens");
+    const cache_write: u64 = if (details) |d| api.numField(d, "cache_write_tokens") else 0;
+    var usage = types.Usage{
+        .input = api.numField(u, "prompt_tokens") -| cache_read -| cache_write,
+        .output = api.numField(u, "completion_tokens"),
+        .cache_read = cache_read,
+        .cache_write = cache_write,
     };
+    if (api.objField(u, "completion_tokens_details")) |d| {
+        usage.reasoning = api.optNumField(d, "reasoning_tokens");
+    }
+    return usage;
 }
 
-fn onData(ctx: *anyopaque, data: []const u8) void {
-    const st: *State = @ptrCast(@alignCast(ctx));
-    const a = st.arena.allocator();
-    defer _ = st.arena.reset(.retain_capacity);
-
-    const trimmed = std.mem.trim(u8, data, " \r\n");
-    if (std.mem.eql(u8, trimmed, "[DONE]")) return;
-
-    const root = std.json.parseFromSliceLeaky(Value, a, data, .{}) catch {
-        if (st.stream_error == null) st.stream_error = "stream: invalid JSON chunk";
-        return;
-    };
-    if (root != .object) return;
-
-    if (errorMessageFrom(root.object)) |message| {
-        if (st.stream_error == null) st.stream_error = st.req.pers.dupe(u8, message) catch null;
-        return;
-    }
-
-    if (st.msg.response_id == null) {
-        if (root.object.get("id")) |v| {
-            if (v == .string) st.msg.response_id = st.req.pers.dupe(u8, v.string) catch null;
-        }
-    }
-    if (st.msg.response_model == null) {
-        if (root.object.get("model")) |v| {
-            if (v == .string and !std.mem.eql(u8, v.string, st.req.model.id)) {
-                st.msg.response_model = st.req.pers.dupe(u8, v.string) catch null;
-            }
-        }
-    }
-
-    if (root.object.get("choices")) |choices| {
-        if (choices == .array and choices.array.items.len > 0) {
-            const choice = choices.array.items[0];
-            if (choice == .object) {
-                if (choice.object.get("delta")) |delta| {
-                    if (delta == .object) {
-                        handleDelta(st, delta.object) catch {
-                            if (st.stream_error == null) st.stream_error = "stream: out of memory";
-                        };
-                    }
-                }
-                if (choice.object.get("finish_reason")) |fr| {
-                    if (fr == .string) st.finish_reason = st.req.pers.dupe(u8, fr.string) catch null;
-                }
-            }
-        }
-    }
-
-    if (root.object.get("usage")) |usage| {
-        if (usage == .object) parseUsage(st, usage.object);
-    }
-}
-
-fn mapStopReason(st: *State) void {
-    if (st.calls.items.len > 0) {
+/// A stream that produced finished calls is a tool turn, not a stop. A broken
+/// stream reports none, and `run` restores the transport's own reason.
+fn mapStopReason(st: *State, has_calls: bool) void {
+    if (has_calls) {
         st.msg.stop_reason = .tool_use;
         return;
     }
@@ -355,49 +264,19 @@ fn finalize(st: *State) !void {
         } });
     }
     if (st.text.items.len > 0) try st.msg.content.append(a, .{ .text = st.text.items });
-    for (st.calls.items) |call| {
-        if (call.name.len == 0) continue;
-        const arguments = if (call.args.items.len > 0) call.args.items else "{}";
-        try st.msg.content.append(a, .{ .tool_call = .{
-            .id = call.id,
-            .name = call.name,
-            .arguments = arguments,
-        } });
-        st.sink.emit(.{ .tool_call = .{
-            .id = call.id,
-            .name = call.name,
-            .arguments = arguments,
-        } });
-    }
+    const has_calls = try api.appendCalls(st.msg, st.sink, a, st.calls.items, st.failed);
+    api.finishUsage(st.msg, st.req.model, st.usage);
     st.msg.raw_stop_reason = st.finish_reason;
+    mapStopReason(st, has_calls);
 }
 
+const wire = api.Wire{
+    .key_header = "Authorization",
+    .key_prefix = "Bearer ",
+    .path = "/chat/completions",
+    .build_body = buildBody,
+};
+
 pub fn stream(req: api.Request, sink: api.Sink) std.mem.Allocator.Error!types.AssistantMessage {
-    var msg = api.newAssistant(req);
-
-    var arena = std.heap.ArenaAllocator.init(req.scratch);
-    defer arena.deinit();
-
-    const body = buildBody(req) catch return error.OutOfMemory;
-    const url = buildUrl(req.scratch, req.model.base_url) catch return error.OutOfMemory;
-
-    const auth = if (req.model.api_key) |key|
-        std.fmt.allocPrint(req.scratch, "Bearer {s}", .{key}) catch return error.OutOfMemory
-    else
-        "";
-    const hdrs = headers(req.scratch, req, auth) catch return error.OutOfMemory;
-
-    var st = State{ .req = req, .sink = sink, .arena = &arena, .msg = &msg };
-
-    if (!try api.post(req, url, hdrs, body, .{ .ctx = &st, .onEvent = onData }, &msg)) return msg;
-
-    if (st.stream_error) |message| {
-        msg.stop_reason = .err;
-        msg.error_message = try req.pers.dupe(u8, message);
-        return msg;
-    }
-
-    try finalize(&st);
-    mapStopReason(&st);
-    return msg;
+    return api.run(State, wire, req, sink, finalize);
 }

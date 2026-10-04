@@ -24,6 +24,7 @@ pub const Session = struct {
     a: std.mem.Allocator,
     sessions_dir: []const u8,
     cwd: []const u8,
+    /// The session directory name; the header of the request carries it.
     id: ?[]const u8 = null,
     file: ?std.Io.File = null,
     closed: bool = false,
@@ -96,10 +97,15 @@ pub const Session = struct {
                 error.PathAlreadyExists => continue,
                 else => return e,
             };
-            self.id = name;
             const log_path = try util.join(self.a, &.{ dir, "session.jsonl" });
-            self.file = try std.Io.Dir.cwd().createFile(platform.io, log_path, .{ .truncate = false });
+            // The id is published only once the log is open, so a failure here
+            // leaves the session retryable rather than naming a session whose
+            // log does not exist.
+            const file = try std.Io.Dir.cwd().createFile(platform.io, log_path, .{ .truncate = false });
+            self.id = name;
+            self.file = file;
             var header_buf: std.Io.Writer.Allocating = .init(self.a);
+            defer header_buf.deinit();
             const w = &header_buf.writer;
             try w.writeAll("{\"type\":\"session\",\"version\":1,\"id\":");
             try json.writeString(w, name);
@@ -135,7 +141,7 @@ fn writeMessage(w: *std.Io.Writer, message: types.Message) !void {
             try w.writeAll("{\"role\":\"user\",\"content\":");
             try json.writeString(w, u.content);
             try w.writeAll(",\"timestamp\":");
-            try json.writeInt(w, u.timestamp);
+            try json.writeNum(w, u.timestamp);
             try w.writeByte('}');
         },
         .tool_result => |t| {
@@ -157,7 +163,7 @@ fn writeMessage(w: *std.Io.Writer, message: types.Message) !void {
             try w.writeAll(",\"isError\":");
             try json.writeBool(w, t.is_error);
             try w.writeAll(",\"timestamp\":");
-            try json.writeInt(w, t.timestamp);
+            try json.writeNum(w, t.timestamp);
             try w.writeByte('}');
         },
         .assistant => |m| {
@@ -192,13 +198,6 @@ fn writeMessage(w: *std.Io.Writer, message: types.Message) !void {
                         }
                         try w.writeByte('}');
                     },
-                    .image => |img| {
-                        try w.writeAll("{\"type\":\"image\",\"data\":");
-                        try json.writeString(w, img.data);
-                        try w.writeAll(",\"mimeType\":");
-                        try json.writeString(w, img.mime_type);
-                        try w.writeByte('}');
-                    },
                 }
             }
             try w.writeAll("],\"api\":");
@@ -212,7 +211,7 @@ fn writeMessage(w: *std.Io.Writer, message: types.Message) !void {
             try w.writeAll(",\"stopReason\":");
             try json.writeString(w, m.stop_reason.wire());
             try w.writeAll(",\"timestamp\":");
-            try json.writeInt(w, m.timestamp);
+            try json.writeNum(w, m.timestamp);
             if (m.response_id) |v| {
                 try w.writeAll(",\"responseId\":");
                 try json.writeString(w, v);
@@ -236,27 +235,25 @@ fn writeMessage(w: *std.Io.Writer, message: types.Message) !void {
 
 fn writeUsage(w: *std.Io.Writer, u: types.Usage) !void {
     try w.writeAll("{\"input\":");
-    try json.writeUint(w, u.input);
+    try json.writeNum(w, u.input);
     try w.writeAll(",\"output\":");
-    try json.writeUint(w, u.output);
+    try json.writeNum(w, u.output);
     try w.writeAll(",\"cacheRead\":");
-    try json.writeUint(w, u.cache_read);
+    try json.writeNum(w, u.cache_read);
     try w.writeAll(",\"cacheWrite\":");
-    try json.writeUint(w, u.cache_write);
+    try json.writeNum(w, u.cache_write);
     if (u.reasoning) |r| {
         try w.writeAll(",\"reasoning\":");
-        try json.writeUint(w, r);
+        try json.writeNum(w, r);
     }
     try w.writeAll(",\"totalTokens\":");
-    try json.writeUint(w, u.total_tokens);
+    try json.writeNum(w, u.total_tokens);
     try w.writeAll(",\"cost\":{\"input\":");
     try json.writeFloat(w, u.cost_input);
     try w.writeAll(",\"output\":");
     try json.writeFloat(w, u.cost_output);
     try w.writeAll(",\"cacheRead\":");
     try json.writeFloat(w, u.cost_cache_read);
-    try w.writeAll(",\"cacheWrite\":");
-    try json.writeFloat(w, u.cost_cache_write);
     try w.writeAll(",\"total\":");
     try json.writeFloat(w, u.cost_total);
     try w.writeAll("}}");

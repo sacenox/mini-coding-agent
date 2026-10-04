@@ -208,6 +208,7 @@ pub const Editor = struct {
         return out.items;
     }
 
+    /// The code point column whose cell is the last one at or before `cell`.
     fn colAtCell(self: *Editor, line: []const u8, cell: usize) usize {
         const cs = self.cells(line);
         var i = cs.len - 1;
@@ -215,15 +216,18 @@ pub const Editor = struct {
         return i;
     }
 
+    /// The wrapped row and column the caret sits at on the current line.
     fn caret(self: *Editor) struct { row: usize, col: usize } {
+        // `width` is set by `render2`; a key can arrive before the first frame,
+        // and the division below must not be by zero.
+        const width = @max(self.width, 1);
         const line = self.lines.items[self.row];
         const expanded = render.expandTabs(self.s, line, TAB);
-        const chunks = render.wrapLine(self.s, expanded, self.width);
-        const cs = self.cells(line);
-        const cell = cs[self.col];
-        const row = cell / self.width;
+        const chunks = render.wrapLine(self.s, expanded, width);
+        const cell = self.cells(line)[self.col];
+        const row = cell / width;
         if (row >= chunks.len) return .{ .row = chunks.len - 1, .col = render.displayWidth(chunks[chunks.len - 1]) };
-        return .{ .row = row, .col = cell - row * self.width };
+        return .{ .row = row, .col = cell - row * width };
     }
 
     pub fn render2(self: *Editor, width: usize, max_rows: usize) Render {
@@ -337,26 +341,28 @@ pub const Editor = struct {
     }
 
     fn up(self: *Editor) void {
+        const width = @max(self.width, 1);
         const line = self.lines.items[self.row];
         const ct = self.caret();
         if (ct.row > 0) {
-            self.col = self.colAtCell(line, self.cells(line)[self.col] - self.width);
+            self.col = self.colAtCell(line, self.cells(line)[self.col] - width);
             return;
         }
         if (self.row == 0) return;
         self.row -= 1;
         const previous = self.lines.items[self.row];
         const expanded = render.expandTabs(self.s, previous, TAB);
-        const last_row = render.wrapLine(self.s, expanded, self.width).len - 1;
-        self.col = self.colAtCell(previous, last_row * self.width + ct.col);
+        const last_row = render.wrapLine(self.s, expanded, width).len - 1;
+        self.col = self.colAtCell(previous, last_row * width + ct.col);
     }
 
     fn down(self: *Editor) void {
+        const width = @max(self.width, 1);
         const line = self.lines.items[self.row];
         const ct = self.caret();
         const expanded = render.expandTabs(self.s, line, TAB);
-        if (ct.row < render.wrapLine(self.s, expanded, self.width).len - 1) {
-            self.col = self.colAtCell(line, self.cells(line)[self.col] + self.width);
+        if (ct.row < render.wrapLine(self.s, expanded, width).len - 1) {
+            self.col = self.colAtCell(line, self.cells(line)[self.col] + width);
             return;
         }
         if (self.row == self.lines.items.len - 1) return;

@@ -76,16 +76,9 @@ pub fn buildSystemPrompt(a: std.mem.Allocator, cfg: *const config.Config) ![]con
         const skills = try discoverSkills(a, cfg.skills_dirs);
         if (skills.len > 0) {
             var out: std.ArrayList(u8) = .empty;
-            try out.appendSlice(a, "## Skills\n\n");
-            for (skills, 0..) |s, i| {
-                if (i > 0) try out.append(a, '\n');
-                try out.appendSlice(a, "- ");
-                try out.appendSlice(a, s.name);
-                try out.appendSlice(a, ": ");
-                try out.appendSlice(a, s.description);
-                try out.appendSlice(a, " (");
-                try out.appendSlice(a, s.path);
-                try out.append(a, ')');
+            try out.appendSlice(a, "## Skills\n");
+            for (skills) |s| {
+                try out.print(a, "\n- {s}: {s} ({s})", .{ s.name, s.description, s.path });
             }
             try sections.append(a, out.items);
         }
@@ -94,13 +87,10 @@ pub fn buildSystemPrompt(a: std.mem.Allocator, cfg: *const config.Config) ![]con
     if (cfg.discover_agent_files) {
         for (try agentFiles(a)) |path| {
             const text = try util.readFileAlloc(a, path, 1 << 24);
-            const trimmed = std.mem.trim(u8, text, " \t\r\n");
-            var out: std.ArrayList(u8) = .empty;
-            try out.appendSlice(a, "## ");
-            try out.appendSlice(a, path);
-            try out.appendSlice(a, "\n\n");
-            try out.appendSlice(a, trimmed);
-            try sections.append(a, out.items);
+            try sections.append(a, try std.fmt.allocPrint(a, "## {s}\n\n{s}", .{
+                path,
+                std.mem.trim(u8, text, " \t\r\n"),
+            }));
         }
     }
 

@@ -4,15 +4,9 @@
 const std = @import("std");
 const api = @import("../api.zig");
 const types = @import("../types.zig");
-const http = @import("../http.zig");
 const json = @import("../json.zig");
 
-const Value = std.json.Value;
 const anthropic_version = "2023-06-01";
-
-/// An untrusted stream index is a hint, never a size. Anything past this is
-/// treated like a missing index so a hostile chunk cannot force an allocation.
-const max_stream_index = 10_000;
 
 // ---- request building -----------------------------------------------------
 
@@ -77,11 +71,6 @@ fn writeAssistant(w: *std.Io.Writer, am: *const types.AssistantMessage) !void {
             try json.writeString(w, t.text);
             try w.writeByte('}');
         },
-        .image => |img| {
-            if (!first) try w.writeByte(',');
-            first = false;
-            try writeImage(w, img);
-        },
         .tool_call => |c| {
             if (!first) try w.writeByte(',');
             first = false;
@@ -90,7 +79,7 @@ fn writeAssistant(w: *std.Io.Writer, am: *const types.AssistantMessage) !void {
             try w.writeAll(",\"name\":");
             try json.writeString(w, c.name);
             try w.writeAll(",\"input\":");
-            try w.writeAll(if (c.arguments.len > 0) c.arguments else "{}");
+            try w.writeAll(api.argumentsOrObject(c.arguments));
             try w.writeByte('}');
         },
     };
@@ -101,18 +90,6 @@ fn writeUser(w: *std.Io.Writer, u: types.Message) !void {
     try w.writeAll("{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":");
     try json.writeString(w, u.user.content);
     try w.writeAll("}]}");
-}
-
-fn writeTools(w: *std.Io.Writer, a: std.mem.Allocator, tools_json: []const u8, params_key: []const u8) !void {
-    const tools = api.parseTools(a, tools_json) orelse return;
-    try w.writeAll(",\"tools\":[");
-    for (tools, 0..) |tool, i| {
-        if (i > 0) try w.writeByte(',');
-        try w.writeByte('{');
-        try api.writeToolBody(w, tool.object, params_key);
-        try w.writeByte('}');
-    }
-    try w.writeByte(']');
 }
 
 /// Anthropic thinking budget per effort. Anthropic requires max_tokens to
@@ -143,7 +120,7 @@ fn buildBody(req: api.Request) ![]u8 {
     try w.writeAll("{\"model\":");
     try json.writeString(w, req.model.id);
     try w.writeAll(",\"max_tokens\":");
-    try json.writeUint(w, max_tokens);
+    try json.writeNum(w, max_tokens);
     try w.writeAll(",\"stream\":true");
     if (req.system_prompt.len > 0) {
         try w.writeAll(",\"system\":");
@@ -151,7 +128,7 @@ fn buildBody(req: api.Request) ![]u8 {
     }
     if (budget > 0) {
         try w.writeAll(",\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":");
-        try json.writeUint(w, budget);
+        try json.writeNum(w, budget);
         try w.writeByte('}');
     }
 
@@ -184,20 +161,15 @@ fn buildBody(req: api.Request) ![]u8 {
     }
     try w.writeByte(']');
 
-    try writeTools(w, req.scratch, req.tools_json, "input_schema");
+    try api.writeTools(w, req.scratch, req.tools_json, .{
+        .open = ",\"tools\":[",
+        .entry = "{",
+        .params_key = "input_schema",
+        .entry_close = "}",
+        .close = "]",
+    });
     try w.writeByte('}');
     return out.written();
-}
-
-fn buildUrl(a: std.mem.Allocator, base: []const u8) ![]u8 {
-    return api.buildUrl(a, base, "/messages");
-}
-
-fn headers(a: std.mem.Allocator, req: api.Request, key: []const u8) ![]http.Header {
-    return api.headers(a, req, &.{
-        .{ "anthropic-version", anthropic_version },
-        .{ "x-api-key", key },
-    });
 }
 
 // ---- streaming state ------------------------------------------------------
@@ -208,10 +180,8 @@ const Block = struct {
     kind: BlockKind = .text,
     text: std.ArrayList(u8) = .empty,
     signature: std.ArrayList(u8) = .empty,
-    id: []const u8 = "",
-    name: []const u8 = "",
-    args: std.ArrayList(u8) = .empty,
-    started: bool = false,
+    /// The call this block's arguments belong to, when `kind` is `.tool`.
+    call: usize = 0,
 };
 
 const State = struct {
@@ -220,166 +190,109 @@ const State = struct {
     arena: *std.heap.ArenaAllocator,
     msg: *types.AssistantMessage,
     blocks: std.ArrayList(Block) = .empty,
-    tokens_in: u64 = 0,
-    tokens_out: u64 = 0,
-    cache_read: u64 = 0,
-    cache_write: u64 = 0,
-    reasoning_tokens: ?u64 = null,
+    calls: std.ArrayList(api.Call) = .empty,
+    usage: types.Usage = .{},
     stop_reason: ?[]const u8 = null,
     stream_error: ?[]const u8 = null,
-};
+    /// Set by `run` when the stream did not run to completion.
+    failed: bool = false,
 
-fn blockAt(st: *State, index: i64) !*Block {
-    const idx: usize = if (index >= 0 and index <= max_stream_index)
-        @intCast(index)
-    else
-        st.blocks.items.len;
-    while (st.blocks.items.len <= idx) try st.blocks.append(st.req.pers, .{});
-    return &st.blocks.items[idx];
-}
+    pub fn handle(st: *State, obj: std.json.ObjectMap) !void {
+        const event_type = api.stringField(obj, "type") orelse "";
 
-fn handle(st: *State, obj: std.json.ObjectMap) !void {
-    const event_type = api.stringOr(obj, "type");
-
-    if (std.mem.eql(u8, event_type, "error")) {
-        if (st.stream_error == null) st.stream_error = try st.req.pers.dupe(u8, errorMessage(obj));
-        return;
-    }
-
-    if (std.mem.eql(u8, event_type, "message_start")) {
-        const message = obj.get("message") orelse return;
-        if (message != .object) return;
-        const message_obj = message.object;
-        if (st.msg.response_id == null) {
-            if (message_obj.get("id")) |v| {
-                if (v == .string) st.msg.response_id = try st.req.pers.dupe(u8, v.string);
-            }
+        if (std.mem.eql(u8, event_type, "error")) {
+            if (st.stream_error == null) st.stream_error = try st.req.pers.dupe(u8, api.errorMessage(obj, "error") orelse "stream: provider error");
+            return;
         }
-        if (message_obj.get("usage")) |usage| {
-            if (usage == .object) {
-                st.tokens_in = api.numField(usage.object, "input_tokens");
-                st.tokens_out = api.numField(usage.object, "output_tokens");
-                st.cache_read = api.numField(usage.object, "cache_read_input_tokens");
-                st.cache_write = api.numField(usage.object, "cache_creation_input_tokens");
-            }
-        }
-        return;
-    }
 
-    if (std.mem.eql(u8, event_type, "content_block_start")) {
-        const raw = api.intOr(obj, "index", -1);
-        if (raw < 0 or raw > max_stream_index) return;
-        const block = try blockAt(st, raw);
-        const cb = obj.get("content_block") orelse return;
-        if (cb != .object) return;
-        const bt = api.stringOr(cb.object, "type");
-        if (std.mem.eql(u8, bt, "tool_use")) {
-            block.kind = .tool;
-            if (cb.object.get("id")) |id| {
-                if (id == .string) block.id = try st.req.pers.dupe(u8, id.string);
+        if (std.mem.eql(u8, event_type, "message_start")) {
+            const message = api.objField(obj, "message") orelse return;
+            if (st.msg.response_id == null) {
+                if (api.stringField(message, "id")) |id| st.msg.response_id = try st.req.pers.dupe(u8, id);
             }
-            if (cb.object.get("name")) |name| {
-                if (name == .string) block.name = try st.req.pers.dupe(u8, name.string);
+            if (api.objField(message, "usage")) |u| {
+                st.usage.input = api.numField(u, "input_tokens");
+                st.usage.output = api.numField(u, "output_tokens");
+                st.usage.cache_read = api.numField(u, "cache_read_input_tokens");
+                st.usage.cache_write = api.numField(u, "cache_creation_input_tokens");
             }
-            if (!block.started and block.name.len > 0) {
-                block.started = true;
-                st.sink.emit(.{ .tool_start = block.name });
+            return;
+        }
+
+        if (std.mem.eql(u8, event_type, "content_block_start")) {
+            const block = try api.blockAt(Block, &st.blocks, st.req.pers, api.intOr(obj, "index", -1));
+            const cb = api.objField(obj, "content_block") orelse return;
+            const bt = api.stringField(cb, "type") orelse "";
+            if (std.mem.eql(u8, bt, "tool_use")) {
+                block.kind = .tool;
+                block.call = st.calls.items.len;
+                const call = try st.calls.addOne(st.req.pers);
+                call.* = .{};
+                if (api.stringField(cb, "id")) |id| call.id = try st.req.pers.dupe(u8, id);
+                try call.announce(st.req.pers, st.sink, api.stringField(cb, "name") orelse "");
+            } else if (std.mem.eql(u8, bt, "thinking") or std.mem.eql(u8, bt, "redacted_thinking")) {
+                block.kind = .thinking;
+                if (std.mem.eql(u8, bt, "redacted_thinking")) {
+                    if (api.stringField(cb, "data")) |d| try block.signature.appendSlice(st.req.pers, d);
+                }
+            } else {
+                block.kind = .text;
             }
-        } else if (std.mem.eql(u8, bt, "thinking") or std.mem.eql(u8, bt, "redacted_thinking")) {
-            block.kind = .thinking;
-            if (std.mem.eql(u8, bt, "redacted_thinking")) {
-                if (cb.object.get("data")) |d| {
-                    if (d == .string) try block.signature.appendSlice(st.req.pers, d.string);
+            return;
+        }
+
+        if (std.mem.eql(u8, event_type, "content_block_delta")) {
+            const idx = api.intOr(obj, "index", -1);
+            if (idx < 0 or idx >= st.blocks.items.len) return;
+            const delta = api.objField(obj, "delta") orelse return;
+            const block = &st.blocks.items[@intCast(idx)];
+            const call = if (block.kind == .tool) &st.calls.items[block.call] else null;
+            const dt = api.stringField(delta, "type") orelse "";
+            if (std.mem.eql(u8, dt, "text_delta")) {
+                if (api.stringField(delta, "text")) |s| {
+                    try block.text.appendSlice(st.req.pers, s);
+                    st.sink.emit(.{ .text = s });
+                }
+            } else if (std.mem.eql(u8, dt, "thinking_delta")) {
+                if (api.stringField(delta, "thinking")) |s| {
+                    try block.text.appendSlice(st.req.pers, s);
+                    st.sink.emit(.{ .reasoning = s });
+                }
+            } else if (std.mem.eql(u8, dt, "signature_delta")) {
+                if (api.stringField(delta, "signature")) |s| {
+                    try block.signature.appendSlice(st.req.pers, s);
+                }
+            } else if (std.mem.eql(u8, dt, "input_json_delta")) {
+                if (call) |c| {
+                    if (api.stringField(delta, "partial_json")) |s| try c.args.appendSlice(st.req.pers, s);
                 }
             }
-        } else {
-            block.kind = .text;
+            return;
         }
-        return;
-    }
 
-    if (std.mem.eql(u8, event_type, "content_block_delta")) {
-        const idx = api.intOr(obj, "index", -1);
-        if (idx < 0 or idx >= st.blocks.items.len) return;
-        const delta = obj.get("delta") orelse return;
-        if (delta != .object) return;
-        const block = &st.blocks.items[@intCast(idx)];
-        const dt = api.stringOr(delta.object, "type");
-        if (std.mem.eql(u8, dt, "text_delta")) {
-            if (api.stringField(delta.object, "text")) |s| {
-                try block.text.appendSlice(st.req.pers, s);
-                st.sink.emit(.{ .text = s });
-            }
-        } else if (std.mem.eql(u8, dt, "thinking_delta")) {
-            if (api.stringField(delta.object, "thinking")) |s| {
-                try block.text.appendSlice(st.req.pers, s);
-                st.sink.emit(.{ .reasoning = s });
-            }
-        } else if (std.mem.eql(u8, dt, "signature_delta")) {
-            if (api.stringField(delta.object, "signature")) |s| {
-                try block.signature.appendSlice(st.req.pers, s);
-            }
-        } else if (std.mem.eql(u8, dt, "input_json_delta")) {
-            if (api.stringField(delta.object, "partial_json")) |s| {
-                try block.args.appendSlice(st.req.pers, s);
-            }
-        }
-        return;
-    }
-
-    if (std.mem.eql(u8, event_type, "message_delta")) {
-        if (obj.get("delta")) |delta| {
-            if (delta == .object) {
-                if (api.stringField(delta.object, "stop_reason")) |s| {
+        if (std.mem.eql(u8, event_type, "message_delta")) {
+            if (api.objField(obj, "delta")) |delta| {
+                if (api.stringField(delta, "stop_reason")) |s| {
                     st.stop_reason = try st.req.pers.dupe(u8, s);
                 }
             }
-        }
-        if (obj.get("usage")) |usage| {
-            if (usage == .object) {
-                if (usage.object.get("input_tokens") != null) st.tokens_in = api.numField(usage.object, "input_tokens");
-                if (usage.object.get("output_tokens") != null) st.tokens_out = api.numField(usage.object, "output_tokens");
-                if (usage.object.get("cache_read_input_tokens") != null) st.cache_read = api.numField(usage.object, "cache_read_input_tokens");
-                if (usage.object.get("cache_creation_input_tokens") != null) st.cache_write = api.numField(usage.object, "cache_creation_input_tokens");
-                if (usage.object.get("output_tokens_details")) |details| {
-                    if (details == .object and details.object.get("thinking_tokens") != null) {
-                        st.reasoning_tokens = api.numField(details.object, "thinking_tokens");
-                    }
+            if (api.objField(obj, "usage")) |u| {
+                if (api.optNumField(u, "input_tokens")) |v| st.usage.input = v;
+                if (api.optNumField(u, "output_tokens")) |v| st.usage.output = v;
+                if (api.optNumField(u, "cache_read_input_tokens")) |v| st.usage.cache_read = v;
+                if (api.optNumField(u, "cache_creation_input_tokens")) |v| st.usage.cache_write = v;
+                if (api.objField(u, "output_tokens_details")) |d| {
+                    st.usage.reasoning = api.optNumField(d, "thinking_tokens");
                 }
             }
+            return;
         }
-        return;
     }
-}
+};
 
-fn onData(ctx: *anyopaque, data: []const u8) void {
-    const st: *State = @ptrCast(@alignCast(ctx));
-    const a = st.arena.allocator();
-    defer _ = st.arena.reset(.retain_capacity);
-
-    const root = std.json.parseFromSliceLeaky(Value, a, data, .{}) catch {
-        if (st.stream_error == null) st.stream_error = "stream: invalid JSON chunk";
-        return;
-    };
-    if (root != .object) return;
-    handle(st, root.object) catch {
-        if (st.stream_error == null) st.stream_error = "stream: out of memory";
-    };
-}
-
-fn errorMessage(obj: std.json.ObjectMap) []const u8 {
-    const err = obj.get("error") orelse return "stream: provider error";
-    return switch (err) {
-        .object => |o| api.stringField(o, "message") orelse "stream: provider error",
-        else => "stream: provider error",
-    };
-}
-
-fn mapStopReason(st: *State) void {
-    var has_calls = false;
-    for (st.blocks.items) |block| {
-        if (block.kind == .tool and block.name.len > 0) has_calls = true;
-    }
+/// A stream that produced finished calls is a tool turn, not a stop. A broken
+/// stream reports none, and `run` restores the transport's own reason.
+fn mapStopReason(st: *State, has_calls: bool) void {
     if (has_calls) {
         st.msg.stop_reason = .tool_use;
         return;
@@ -418,56 +331,20 @@ fn finalize(st: *State) !void {
         if (block.text.items.len == 0) continue;
         try st.msg.content.append(a, .{ .text = block.text.items });
     }
-    for (st.blocks.items) |block| {
-        if (block.kind != .tool or block.name.len == 0) continue;
-        const arguments = if (block.args.items.len > 0) block.args.items else "{}";
-        try st.msg.content.append(a, .{ .tool_call = .{
-            .id = block.id,
-            .name = block.name,
-            .arguments = arguments,
-        } });
-        st.sink.emit(.{ .tool_call = .{
-            .id = block.id,
-            .name = block.name,
-            .arguments = arguments,
-        } });
-    }
-
-    var usage = types.Usage{};
-    usage.input = st.tokens_in;
-    usage.output = st.tokens_out;
-    usage.cache_read = st.cache_read;
-    usage.cache_write = st.cache_write;
-    usage.reasoning = st.reasoning_tokens;
-    usage.total_tokens = st.tokens_in + st.tokens_out + st.cache_read + st.cache_write;
-    api.applyCost(st.req.model, &usage);
-    st.msg.usage = usage;
+    const has_calls = try api.appendCalls(st.msg, st.sink, a, st.calls.items, st.failed);
+    api.finishUsage(st.msg, st.req.model, st.usage);
 
     st.msg.raw_stop_reason = st.stop_reason;
-    mapStopReason(st);
+    mapStopReason(st, has_calls);
 }
 
+const wire = api.Wire{
+    .key_header = "x-api-key",
+    .version = .{ "anthropic-version", anthropic_version },
+    .path = "/messages",
+    .build_body = buildBody,
+};
+
 pub fn stream(req: api.Request, sink: api.Sink) std.mem.Allocator.Error!types.AssistantMessage {
-    var msg = api.newAssistant(req);
-
-    var arena = std.heap.ArenaAllocator.init(req.scratch);
-    defer arena.deinit();
-
-    const body = buildBody(req) catch return error.OutOfMemory;
-    const url = buildUrl(req.scratch, req.model.base_url) catch return error.OutOfMemory;
-    const key = req.model.api_key orelse "";
-    const hdrs = headers(req.scratch, req, key) catch return error.OutOfMemory;
-
-    var st = State{ .req = req, .sink = sink, .arena = &arena, .msg = &msg };
-
-    if (!try api.post(req, url, hdrs, body, .{ .ctx = &st, .onEvent = onData }, &msg)) return msg;
-
-    if (st.stream_error) |message| {
-        msg.stop_reason = .err;
-        msg.error_message = try req.pers.dupe(u8, message);
-        return msg;
-    }
-
-    try finalize(&st);
-    return msg;
+    return api.run(State, wire, req, sink, finalize);
 }
