@@ -1,26 +1,85 @@
 #!/usr/bin/env python3
-"""Generates src/catalog.zig from the models.dev catalog.
+"""Generates src/catalog.zig.
 
-Run `python3 tools/gen_catalog.py` to refresh it. The output is committed, so a
-normal `zig build` needs no network. Override the source with a path or URL and
-the output with a second argument.
+The gateway decides which models exist and the docs decide which wire serves
+each one, so every per-model fact comes from a live source. The output is
+committed, so a normal `zig build` needs no network. Run
+`python3 tools/gen_catalog.py` to refresh it.
 """
 
 import json
 import sys
 import urllib.request
 
-SOURCE = "https://models.dev/api.json"
-PROVIDERS = ["opencode", "opencode-go"]
+MODELS_DEV = "https://models.dev/api.json"
+
+PROVIDERS = [
+    {
+        "id": "opencode",
+        "listing": "https://opencode.ai/zen/v1/models",
+        "docs": "https://opencode.ai/docs/zen.md",
+    },
+    {
+        "id": "opencode-go",
+        "listing": "https://opencode.ai/zen/go/v1/models",
+        "docs": "https://opencode.ai/docs/go.md",
+    },
+]
+
+# The four wires, as the path suffix that ends their endpoint URL.
+SUFFIX_WIRES = [
+    ("/chat/completions", "openai-completions"),
+    ("/responses", "openai-responses"),
+    ("/messages", "anthropic-messages"),
+]
+
+# The AI SDK package names the docs and models.dev use for each wire.
+NPM_WIRES = {
+    "@ai-sdk/openai-compatible": "openai-completions",
+    "@ai-sdk/openai": "openai-responses",
+    "@ai-sdk/anthropic": "anthropic-messages",
+    "@ai-sdk/google": "google-generative-ai",
+}
 
 
-def fetch(src):
-    if src.startswith(("http://", "https://")):
-        req = urllib.request.Request(src, headers={"User-Agent": "mini-catalog/1"})
-        with urllib.request.urlopen(req) as r:
-            return json.load(r)
-    with open(src) as f:
-        return json.load(f)
+def fetch(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "mini-catalog/1"})
+    with urllib.request.urlopen(req) as r:
+        return r.read()
+
+
+def fetch_json(url):
+    return json.loads(fetch(url))
+
+
+def parse_docs(text):
+    """Model id -> endpoint URL, from every pipe table row in the docs."""
+    out = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) < 3:
+            continue
+        endpoint = cells[2]
+        if not (endpoint.startswith("`") and endpoint.endswith("`")):
+            continue
+        endpoint = endpoint[1:-1]
+        if endpoint.startswith("http"):
+            out[cells[1]] = endpoint
+    return out
+
+
+def wire_of(url, model_id):
+    """The wire and the base URL an endpoint URL names, or (None, None)."""
+    for suffix, wire in SUFFIX_WIRES:
+        if url.endswith(suffix):
+            return wire, url[: -len(suffix)]
+    google = "/models/" + model_id
+    if url.endswith(google):
+        return "google-generative-ai", url[: -len(google)]
+    return None, None
 
 
 def zstr(s):
@@ -34,13 +93,65 @@ def effort_of(model):
     return []
 
 
+def resolve(provider, model_id, docs, models_dev):
+    """The wire and base URL for one model, or (None, None) when neither the
+    docs nor models.dev names a wire and the provider has no usable default."""
+    url = docs.get(model_id)
+    if url is not None:
+        # The docs named an endpoint, so they own the answer: either it is one
+        # of the four wires or the model is unaddressable.
+        wire, base = wire_of(url, model_id)
+        return wire, (base or "").rstrip("/")
+    entry = (models_dev.get("models") or {}).get(model_id) or {}
+    npm = (entry.get("provider") or {}).get("npm") or (
+        provider.get("npm") if "npm" in provider else None
+    )
+    wire = NPM_WIRES.get(npm)
+    base = (provider.get("api") or "").rstrip("/")
+    if wire and base.startswith("https://") and "/models/" not in base:
+        return wire, base
+    return None, None
+
+
+def entry_line(provider_id, model_id, api, base_url, model):
+    limit = model.get("limit") or {}
+    cost = model.get("cost") or {}
+    effort = effort_of(model)
+    if len(effort) == 1:
+        eff = "&.{%s}" % zstr(effort[0])
+    elif effort:
+        eff = "&.{ %s }" % ", ".join(zstr(v) for v in effort)
+    else:
+        eff = "&.{}"
+    return (
+        "    .{ .provider = %s, .id = %s, .name = %s, .api = %s, "
+        ".base_url = %s, .images = %s, .reasoning = %s, .context = %d, "
+        ".max_output = %d, .effort = %s, .cost_input = %s, .cost_output = %s, "
+        ".cost_cache_read = %s },"
+        % (
+            zstr(provider_id),
+            zstr(model_id),
+            zstr(model.get("name") or model_id),
+            zstr(api),
+            zstr(base_url),
+            "true" if model.get("attachment") else "false",
+            "true" if model.get("reasoning") else "false",
+            int(limit.get("context") or 0),
+            int(limit.get("output") or 0),
+            eff,
+            repr(float(cost.get("input") or 0)),
+            repr(float(cost.get("output") or 0)),
+            repr(float(cost.get("cache_read") or 0)),
+        )
+    )
+
+
 def main():
-    src = sys.argv[1] if len(sys.argv) > 1 else SOURCE
-    out = sys.argv[2] if len(sys.argv) > 2 else "src/catalog.zig"
-    data = fetch(src)
+    out = sys.argv[1] if len(sys.argv) > 1 else "src/catalog.zig"
+    models_dev = fetch_json(MODELS_DEV)
 
     lines = [
-        "// Generated by tools/gen_catalog.py from models.dev. Do not edit.",
+        "// Generated by tools/gen_catalog.py. Do not edit.",
         "// Refresh with `python3 tools/gen_catalog.py`.",
         "",
         "const std = @import(\"std\");",
@@ -49,6 +160,8 @@ def main():
         "    provider: []const u8,",
         "    id: []const u8,",
         "    name: []const u8,",
+        "    api: []const u8,",
+        "    base_url: []const u8,",
         "    images: bool,",
         "    reasoning: bool,",
         "    context: u64,",
@@ -63,40 +176,30 @@ def main():
     ]
 
     count = 0
-    for provider in PROVIDERS:
-        p = data.get(provider)
-        if not p:
-            sys.exit("catalog: provider %r missing from source" % provider)
-        for mid in sorted(p["models"]):
-            m = p["models"][mid]
-            effort = effort_of(m)
-            if len(effort) == 1:
-                eff = "&.{%s}" % zstr(effort[0])
-            elif effort:
-                eff = "&.{ %s }" % ", ".join(zstr(v) for v in effort)
-            else:
-                eff = "&.{}"
-            limit = m.get("limit") or {}
-            cost = m.get("cost") or {}
+    for spec in PROVIDERS:
+        provider_id = spec["id"]
+        provider = models_dev.get(provider_id)
+        if provider is None:
+            sys.exit("catalog: provider %r missing from models.dev" % provider_id)
+        docs = parse_docs(fetch(spec["docs"]).decode("utf-8"))
+        listing = sorted(m["id"] for m in fetch_json(spec["listing"])["data"])
+        catalog = provider["models"]
+
+        skipped = []
+        for model_id in listing:
+            api, base_url = resolve(provider, model_id, docs, catalog)
+            if api is None:
+                where = docs.get(model_id)
+                skipped.append((model_id, where or "no endpoint"))
+                continue
             lines.append(
-                "    .{ .provider = %s, .id = %s, .name = %s, .images = %s, "
-                ".reasoning = %s, .context = %d, .max_output = %d, .effort = %s, "
-                ".cost_input = %s, .cost_output = %s, .cost_cache_read = %s },"
-                % (
-                    zstr(provider),
-                    zstr(mid),
-                    zstr(m.get("name") or mid),
-                    "true" if m.get("attachment") else "false",
-                    "true" if m.get("reasoning") else "false",
-                    int(limit.get("context") or 0),
-                    int(limit.get("output") or 0),
-                    eff,
-                    repr(float(cost.get("input") or 0)),
-                    repr(float(cost.get("output") or 0)),
-                    repr(float(cost.get("cache_read") or 0)),
-                )
+                entry_line(provider_id, model_id, api, base_url, catalog.get(model_id) or {})
             )
             count += 1
+
+        print("%s: %d models" % (provider_id, len(listing) - len(skipped)))
+        for model_id, endpoint in skipped:
+            print("  skipped %s (%s)" % (model_id, endpoint), file=sys.stderr)
 
     lines += [
         "};",

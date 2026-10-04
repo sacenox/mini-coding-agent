@@ -893,7 +893,13 @@ const Tui = struct {
     }
 
     fn startModelSelect(self: *Tui, provider_id: []const u8) void {
-        const list = models_mod.catalogModels(self.a, self.cfg, provider_id);
+        const list = models_mod.catalogModels(self.a, self.cfg, provider_id) catch {
+            self.separator = true;
+            self.push(styles.red(self.a, "! out of memory"));
+            self.separator = true;
+            self.command_active = false;
+            return;
+        };
         var ids: std.ArrayList([]const u8) = .empty;
         var names: std.ArrayList([]const u8) = .empty;
         for (list) |m| {

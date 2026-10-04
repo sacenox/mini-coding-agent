@@ -6,12 +6,11 @@ const catalog = @import("catalog.zig");
 const config = @import("config.zig");
 const types = @import("types.zig");
 
-/// A provider whose wire details are compiled in. The catalog carries the
-/// per-model metadata; this carries where and how the provider is reached.
+/// A provider whose authentication is compiled in. Where and how the provider
+/// is reached — the wire and the base URL — is a property of each catalog
+/// model, not of the provider: one provider id may serve several wires.
 const Builtin = struct {
     id: []const u8,
-    base_url: []const u8,
-    api: []const u8,
     env_keys: []const []const u8,
     session_header: ?[]const u8,
 };
@@ -19,15 +18,11 @@ const Builtin = struct {
 const builtins = [_]Builtin{
     .{
         .id = "opencode-go",
-        .base_url = "https://opencode.ai/zen/go/v1",
-        .api = "openai-completions",
         .env_keys = &.{"OPENCODE_API_KEY"},
         .session_header = "x-opencode-session",
     },
     .{
         .id = "opencode",
-        .base_url = "https://opencode.ai/zen/v1",
-        .api = "openai-completions",
         .env_keys = &.{"OPENCODE_API_KEY"},
         .session_header = "x-opencode-session",
     },
@@ -96,21 +91,26 @@ pub fn resolve(a: std.mem.Allocator, cfg: *const config.Config, err: *?[]const u
 pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id: []const u8, model_id: []const u8, err: *?[]const u8) ?types.Model {
     for (builtins) |b| {
         if (!std.mem.eql(u8, b.id, provider_id)) continue;
-        const info = catalog.lookup(b.id, model_id);
+        // The catalog is the only source of the wire and the base URL, and it
+        // holds no model it cannot address. A missing entry is unresolvable.
+        const info = catalog.lookup(provider_id, model_id) orelse {
+            err.* = std.fmt.allocPrint(a, "unknown model \"{s}\" for provider \"{s}\"", .{ model_id, provider_id }) catch "unknown model";
+            return null;
+        };
         return types.Model{
             .id = model_id,
-            .name = if (info) |i| i.name else model_id,
-            .api = b.api,
+            .name = info.name,
+            .api = info.api,
             .provider = provider_id,
-            .base_url = b.base_url,
+            .base_url = info.base_url,
             .api_key = firstEnv(b.env_keys),
-            .effort = if (info) |i| clampEffort(i, cfg.thinking_effort) else cfg.thinking_effort orelse "",
-            .supports_images = if (info) |i| i.images else true,
-            .context_window = if (info) |i| i.context else 0,
-            .max_tokens = if (info) |i| i.max_output else 0,
-            .cost_input = if (info) |i| i.cost_input else 0,
-            .cost_output = if (info) |i| i.cost_output else 0,
-            .cost_cache_read = if (info) |i| i.cost_cache_read else 0,
+            .effort = clampEffort(info, cfg.thinking_effort),
+            .supports_images = info.images,
+            .context_window = info.context,
+            .max_tokens = info.max_output,
+            .cost_input = info.cost_input,
+            .cost_output = info.cost_output,
+            .cost_cache_read = info.cost_cache_read,
             .session_header = b.session_header,
         };
     }
@@ -168,16 +168,16 @@ pub fn providers(a: std.mem.Allocator, cfg: *const config.Config) []ProviderEntr
 
 /// Every model a provider offers: the catalog entries for a built-in, the
 /// declared ids for a custom provider.
-pub fn catalogModels(a: std.mem.Allocator, cfg: *const config.Config, provider_id: []const u8) []types.Model {
+pub fn catalogModels(a: std.mem.Allocator, cfg: *const config.Config, provider_id: []const u8) ![]types.Model {
     var out: std.ArrayList(types.Model) = .empty;
     for (builtins) |b| {
         if (!std.mem.eql(u8, b.id, provider_id)) continue;
         for (&catalog.entries) |*entry| {
-            if (!std.mem.eql(u8, entry.provider, b.id)) continue;
+            if (!std.mem.eql(u8, entry.provider, provider_id)) continue;
             var err: ?[]const u8 = null;
-            if (resolveNamed(a, cfg, provider_id, entry.id, &err)) |m| out.append(a, m) catch {};
+            if (resolveNamed(a, cfg, provider_id, entry.id, &err)) |m| try out.append(a, m);
         }
-        return out.toOwnedSlice(a) catch &.{};
+        return try out.toOwnedSlice(a);
     }
     for (cfg.custom_providers) |p| {
         if (!std.mem.eql(u8, p.id, provider_id)) continue;
@@ -194,7 +194,7 @@ pub fn catalogModels(a: std.mem.Allocator, cfg: *const config.Config, provider_i
 pub fn supportedLevels(provider_id: []const u8, model_id: []const u8) []const []const u8 {
     for (builtins) |b| {
         if (!std.mem.eql(u8, b.id, provider_id)) continue;
-        const info = catalog.lookup(b.id, model_id) orelse return &ladder;
+        const info = catalog.lookup(provider_id, model_id) orelse return &ladder;
         // A model that does not reason runs "off" and offers nothing else,
         // matching what `clampEffort` will send.
         if (!info.reasoning) return &.{"off"};
@@ -208,7 +208,7 @@ pub fn supportedLevels(provider_id: []const u8, model_id: []const u8) []const []
 pub fn clampNamed(provider_id: []const u8, model_id: []const u8, desired: []const u8) []const u8 {
     for (builtins) |b| {
         if (!std.mem.eql(u8, b.id, provider_id)) continue;
-        const info = catalog.lookup(b.id, model_id) orelse return desired;
+        const info = catalog.lookup(provider_id, model_id) orelse return desired;
         return clampEffort(info, desired);
     }
     return desired;

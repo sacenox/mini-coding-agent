@@ -190,7 +190,7 @@ fn buildBody(req: api.Request) ![]u8 {
 }
 
 fn buildUrl(a: std.mem.Allocator, base: []const u8) ![]u8 {
-    return api.buildUrl(a, base, "/v1/messages");
+    return api.buildUrl(a, base, "/messages");
 }
 
 fn headers(a: std.mem.Allocator, req: api.Request, key: []const u8) ![]http.Header {
