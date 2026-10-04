@@ -35,24 +35,9 @@ const ELIDED_TAIL = 4;
 /// One announced call, held until its result commits the line to scrollback.
 const PendingCall = struct { name: []const u8, summary: []const u8 };
 
-/// Rows the queue block may occupy, including its overflow row.
-const MAX_QUEUE_ROWS = 5;
-
 /// Width every state word is padded to, so the tool heads align.
 const STATE_WIDTH = "running".len;
 const STATE_PAD = std.fmt.comptimePrint("{{s: <{d}}}", .{STATE_WIDTH});
-
-/// Clips one call to a single row: head and tail of `text` with a dim mark
-/// between them. A bad argument can sit at either end, so the tail is kept.
-fn clipCall(a: std.mem.Allocator, text: []const u8, available: usize) []const u8 {
-    if (available == 0) return "";
-    // One wrapped element means the text fits.
-    if (render.wrapLine(a, text, available).len == 1) return text;
-    const head_budget = available / 2;
-    const head = render.wrapLine(a, text, head_budget)[0];
-    const tails = render.wrapLine(a, text, available - 1 - head_budget);
-    return std.fmt.allocPrint(a, "{s}{s}{s}", .{ head, styles.dim(a, "…"), tails[tails.len - 1] }) catch text;
-}
 
 fn paintRow(a: std.mem.Allocator, line: []const u8) []const u8 {
     return std.fmt.allocPrint(a, "{s}{s}\x1b[K", .{ theme.SGR_PLAIN, line }) catch line;
@@ -107,6 +92,16 @@ fn bodyRows(a: std.mem.Allocator, lines: []const stream.BodyLine, width: usize) 
 
 fn callHead(a: std.mem.Allocator, name: []const u8) []const u8 {
     return styles.teal(a, std.fmt.allocPrint(a, "-> {s}", .{name}) catch "->");
+}
+
+/// The rows of one announced call: the state word and the tool head, then the
+/// arguments, wrapped at `width`.
+fn callRows(a: std.mem.Allocator, width: usize, call: PendingCall, running: bool) []const []const u8 {
+    const padded = std.fmt.allocPrint(a, STATE_PAD, .{if (running) "running" else "queued"}) catch "";
+    const word = if (running) styles.teal(a, padded) else styles.dim(a, padded);
+    const head = callHead(a, call.name);
+    const text = render.expandTabs(a, render.sanitize(a, call.summary), 4);
+    return render.wrapLine(a, std.fmt.allocPrint(a, "{s} {s} {s}", .{ word, head, text }) catch text, width);
 }
 
 fn collapseWs(a: std.mem.Allocator, s: []const u8) []const u8 {
@@ -526,26 +521,23 @@ const Tui = struct {
         return " ";
     }
 
-    /// Styled rows for the queue block, one row per call, clipped to `width`.
-    fn queueRows(self: *Tui, width: usize) []const []const u8 {
+    /// Styled rows for the announced calls, wrapped to `width` and capped at
+    /// `budget` rows. The running call is drawn first, so its arguments are what
+    /// survives a full region; the tail the cap cuts is counted in one dim row.
+    /// The block never exceeds its budget, which keeps the live region's row
+    /// count exact.
+    fn queueRows(self: *Tui, width: usize, budget: usize) []const []const u8 {
+        if (budget == 0) return &.{};
         var out: std.ArrayList([]const u8) = .empty;
-        const calls = self.pending_calls.items;
-        const overflow = calls.len > MAX_QUEUE_ROWS;
-        const shown = if (overflow) MAX_QUEUE_ROWS - 1 else calls.len;
-        for (calls[0..shown], 0..) |call, i| {
-            const running = i == 0 and self.phase == .running_tool;
-            const label = if (running) "running" else "queued";
-            const padded = std.fmt.allocPrint(self.s, STATE_PAD, .{label}) catch label;
-            const word = if (running) styles.teal(self.s, padded) else styles.dim(self.s, padded);
-            const head = callHead(self.s, call.name);
-            const prefix = STATE_WIDTH + 1 + "-> ".len + call.name.len + 1;
-            const available = if (width > prefix) width - prefix else 0;
-            const text = render.expandTabs(self.s, render.sanitize(self.s, call.summary), 4);
-            out.append(self.s, std.fmt.allocPrint(self.s, "{s} {s} {s}", .{ word, head, clipCall(self.s, text, available) }) catch "") catch {};
+        for (self.pending_calls.items, 0..) |call, i| {
+            for (callRows(self.s, width, call, i == 0 and self.phase == .running_tool)) |row| out.append(self.s, row) catch {};
         }
-        if (overflow) {
-            out.append(self.s, styles.dim(self.s, std.fmt.allocPrint(self.s, "... {d} more queued ...", .{calls.len - shown}) catch "...")) catch {};
-        }
+        if (out.items.len <= budget) return out.items;
+        // The last budgeted row carries the count of the rows that do not fit.
+        const keep = budget - 1;
+        const hidden = out.items.len - keep;
+        out.shrinkRetainingCapacity(keep);
+        out.append(self.s, styles.dim(self.s, std.fmt.allocPrint(self.s, "... {d} more lines ...", .{hidden}) catch "...")) catch {};
         return out.items;
     }
 
@@ -562,8 +554,9 @@ const Tui = struct {
         const rows = renderRows(self.s, inflight, width);
 
         const room = if (height > status.len + 1) height - status.len - 1 else 0;
-        const queue_all = self.queueRows(width);
-        const queue = queue_all[0..@min(queue_all.len, room)];
+        // Announced calls wrap, so their row count is not known until they are
+        // built; the cap keeps the block inside the room the body shares.
+        const queue = self.queueRows(width, room);
         const keep = @min(rows.len, room - queue.len);
         const body = rows[rows.len - keep ..];
         const ed = self.editor.render2(width, @max(height - status.len - queue.len - body.len, 1));
