@@ -164,8 +164,8 @@ fn predicatesPass(a: std.mem.Allocator, query: *const ts.Query, match: ts.Query.
     return true;
 }
 
-/// The C query parser stores a predicate's name without its leading `#`, so
-/// every comparison here is against the bare name.
+/// tree-sitter stores a predicate's name without its leading `#`, so every
+/// comparison here is against the bare name.
 fn evalPredicate(a: std.mem.Allocator, query: *const ts.Query, match: ts.Query.Match, name: ?[]const u8, args: []const ts.Query.PredicateStep, u: Utf16, text: []const u8) bool {
     const n = name orelse return true;
     if (std.mem.eql(u8, n, "eq?")) return eqText(query, match, args, u, text);
@@ -486,9 +486,10 @@ pub fn formatTables(a: std.mem.Allocator, text: []const u8) []const u8 {
     return out.items;
 }
 
-/// The reference binding feeds every grammar UTF16LE and reports offsets in
-/// UTF16 code units; the grammars' scanners parse input without a final line
-/// ending differently per encoding, so the port feeds the same one.
+/// Every grammar is fed UTF16LE, so a node's offsets are UTF16 code units and
+/// not UTF-8 byte offsets. The choice matters: the markdown block grammar
+/// reports an ERROR for input with no final line ending in UTF-8, and parses
+/// that same input in UTF-16.
 const Utf16 = struct {
     units: []u16,
     /// One byte offset in the UTF-8 text per code unit, plus a final end entry.

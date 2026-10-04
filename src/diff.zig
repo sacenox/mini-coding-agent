@@ -1,5 +1,5 @@
-//! Unified diffs, matching `createTwoFilesPatch(path, path, before, after, "",
-//! "", { context: 3 })` from the `diff` package. Display-only.
+//! Unified diffs: an `Index:` line and a `---`/`+++` header pair, then hunks
+//! with three lines of context. Display-only.
 
 const std = @import("std");
 
@@ -27,8 +27,8 @@ fn splitLines(a: std.mem.Allocator, text: []const u8) ![]Line {
     return out.toOwnedSlice(a);
 }
 
-/// The `diff` package is line-based on raw text, so a final line without a
-/// newline is a different line from the same text with one.
+/// A line is its text plus whether it ended with a newline: a final line
+/// without one is a different line from the same text with one.
 fn lineEq(x: Line, y: Line) bool {
     return x.nl == y.nl and x.p.len == y.p.len and std.mem.eql(u8, x.p, y.p);
 }

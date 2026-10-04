@@ -1,7 +1,7 @@
 //! The tool set: schemas handed to the model, and dispatch to implementations.
 //!
 //! A name in the config that has no implementation is not advertised to the
-//! model, so a request can never reach a tool the harness cannot run.
+//! model, so a request can never reach a tool that cannot run.
 
 const std = @import("std");
 const config = @import("../config.zig");

@@ -1,6 +1,10 @@
-# mini
+# mini-coding-agent
 
 A fast, transparent, config-first terminal coding agent.
+
+<p align="center">
+  <img src="preview.png" alt="mini TUI" width="931">
+</p>
 
 ## Build
 

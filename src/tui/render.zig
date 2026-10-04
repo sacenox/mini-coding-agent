@@ -1,7 +1,8 @@
 const std = @import("std");
 
-/// East-Asian-width plus combining/zero-width rules, mirroring the TypeScript
-/// `charWidth`. Combining marks use the common Unicode mark ranges.
+/// The cell count one code point occupies on screen: two for an East-Asian
+/// wide code point, zero for a combining or zero-width one, one otherwise.
+/// Combining marks use the common Unicode mark ranges.
 pub fn charWidth(code: u21) u8 {
     if (code < 32 or (code >= 0x7f and code < 0xa0)) return 0;
     if (code == 0x200b or code == 0x200c or code == 0x200d or code == 0xfeff) return 0;

@@ -55,7 +55,7 @@ pub fn configPath(a: std.mem.Allocator) []const u8 {
 
 /// `$XDG_STATE_HOME/mini-coding-agent/sessions`, else
 /// `$HOME/.local/state/mini-coding-agent/sessions`, else the relative
-/// `sessions`. Paths are not mini-coder's cwd-relative default.
+/// `sessions`.
 fn sessionsDir(a: std.mem.Allocator) []const u8 {
     const state = platform.getEnv("XDG_STATE_HOME") orelse blk: {
         const home = platform.home() orelse return "sessions";

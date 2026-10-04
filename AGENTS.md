@@ -1,7 +1,6 @@
 # mini-coding-agent (`mini` for short)
 
 A fast, transparent, config-first terminal coding agent for one user at a time.
-A careful Zig port of mini-coder.
 
 This file holds intent, direction, and guardrails — not a description of the
 code. The source is the source of truth for behavior. If a fact can be learned
@@ -18,18 +17,6 @@ by reading the code, it does not belong here; keep this file short.
 - One `zig build` produces one static binary. No runtime, no interpreter, no
   Node, no `node_modules`, no post-install scripts, no supply chain beyond what
   the code needs.
-
-## Provenance
-
-This project is a port. Its references are behavioral and structural, not
-templates to copy:
-
-- `../mini-coder/` — the TypeScript implementation. The behavior specification.
-  Port its behavior, never its code.
-- `../tiny-c-agent/` — a careful C port of the same design. The detail reference
-  for the low-level work: the four wire protocols, streaming reassembly, diff
-  capture, UTF-8 and base64 handling, session durability. Consult its structure
-  and its comments when porting those layers.
 
 ## Direction
 
@@ -56,8 +43,8 @@ Hard constraints. Do not cross these without explicit direction:
   full-screen cell grid.
 - **The provider layer is in-tree.** Implement the wire protocols directly —
   `openai-completions`, `openai-responses`, `anthropic-messages`,
-  `google-generative-ai`. Never depend on another harness's provider code.
-- **Write original code.** `../mini-coder/` is a behavioral reference only.
+  `google-generative-ai`. Never depend on an external provider library.
+- **Write original code.** Copy nothing from another project.
 - **No sandbox or permission layer.** Tools run with the user's permissions;
   isolation is an environment concern, not the agent's.
 - **No loop limits.** No max turns, tool calls, token budgets, or agent-imposed
@@ -68,7 +55,7 @@ Hard constraints. Do not cross these without explicit direction:
   a provider's catalog or env vars.
 - **Minimal context.** The model sees the configured system prompt plus
   explicitly opted-in resource files — never reminders, hidden blocks, or
-  harness meta-text.
+  injected meta-text.
 - **The agent never imports the TUI.** Headless and TUI are two projections of
   the same agent events; the TUI owns no agent or provider semantics.
 
@@ -98,8 +85,8 @@ Hard constraints. Do not cross these without explicit direction:
 
 ## Memory
 
-The port's reason for existing is that manual memory bookkeeping was the C port's
-largest fragility. Do not reintroduce it.
+Manual memory bookkeeping is the largest fragility a program of this shape can
+carry. Do not reintroduce it.
 
 - One allocator, chosen at startup, threaded explicitly. Long-lived state and
   per-turn scratch are separate lifetimes, not one global pool.

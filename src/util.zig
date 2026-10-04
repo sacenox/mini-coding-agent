@@ -98,7 +98,6 @@ pub fn randomBytes(buf: []u8) void {
 }
 
 /// The byte length of a valid UTF-8 sequence at the start of `p`, or null.
-/// Ported from the C reference so decoding is identical there and here.
 fn utf8SeqLen(p: []const u8) ?usize {
     if (p.len == 0) return null;
     const c = p[0];

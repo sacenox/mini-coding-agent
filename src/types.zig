@@ -1,4 +1,5 @@
-//! Provider-neutral transcript types, mirroring pi-ai's message shapes.
+//! Provider-neutral transcript types: what a message is, before any wire
+//! protocol encodes it.
 //!
 //! A tool call's arguments are kept as their raw JSON object text, exactly as
 //! the provider streamed them, so provider continuation data survives a
