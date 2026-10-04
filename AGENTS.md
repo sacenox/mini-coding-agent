@@ -141,26 +141,18 @@ use the models above. Run a real tool call, not just a text turn.
 
 ## Driving the TUI with kitty
 
-There is no `tmux` here; drive the TUI through kitty's remote control on a
-private socket, one window per session:
+There is no `tmux` here. `tools/stress.sh` drives the TUI in a real kitty
+window over remote control on a private socket, one window per run: it launches
+the app in a scratch cwd, waits for the banner, types the prompt, and
+screenshots the window at 15fps until the capture window ends or the app exits.
 
-    kitty --detach --listen-on unix:/tmp/mz-<name>.sock \
-      -o allow_remote_control=yes -o remember_window_size=no \
-      -o initial_window_width=100c -o initial_window_height=30c \
-      --title mz-<name> env PS1='\n$ ' bash --norc --noprofile -i
+    tools/stress.sh -C <scratch cwd> -o /tmp/mz-runs/<name> -d 300 -p '<prompt>'
 
-Run every `kitty @ --to unix:/tmp/mz-<name>.sock` call through that socket; the
-window id comes from `ls`, don't assume it. Run the app (`./zig-out/bin/mza`)
-with a scratch cwd so its tool calls write nowhere that matters.
-
-- `send-text` types literal text and never submits — Enter is its own key,
-  `send-key enter`, and it does nothing while a turn is active.
-- `send-key` for named keys: `enter escape ctrl+c ctrl+d shift+enter tab`.
-- `get-text -m id:N --extent=all --ansi` returns the pane with the app's
-  truecolor SGR — assert colors from those escapes, not from pixels;
-  `--extent=screen` is the live screen alone.
-- `screenshot -m id:N out.png` for the visual check; `identify` it and look at
-  it before trusting it.
+Frames land in `frame-NNNNN.png`. At the end of a run the pane is written with
+its truecolor SGR to `final.txt` (scrollback) and `final-screen.txt` (live
+screen). The last line reports frames, wall time, and achieved fps; an
+`ended early: MZA-EXIT <n>` line means the app died, and `final.txt` holds the
+dump. Read the pane text and the frames, not pixels.
 
 ## Working agreement
 
