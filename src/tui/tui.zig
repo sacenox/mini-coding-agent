@@ -32,6 +32,29 @@ const MAX_BODY_ROWS = 12;
 const ELIDED_HEAD = 4;
 const ELIDED_TAIL = 4;
 
+/// One announced call, held until its result commits the line to scrollback.
+const PendingCall = struct { name: []const u8, summary: []const u8 };
+
+/// Rows the queue block may occupy, including its overflow row.
+const MAX_QUEUE_ROWS = 5;
+
+/// Width every state word is padded to, so the tool heads align.
+const STATE_WIDTH = "running".len;
+const STATE_PAD = std.fmt.comptimePrint("{{s: <{d}}}", .{STATE_WIDTH});
+
+/// Clips one call to a single row: head and tail of `text` with a dim mark
+/// between them. A bad argument can sit at either end, so the tail is kept.
+fn clipCall(a: std.mem.Allocator, text: []const u8, available: usize) []const u8 {
+    if (available == 0) return "";
+    // One wrapped element means the text fits. Testing through the wrapper
+    // keeps SGR sequences out of the width, which `displayWidth` would count.
+    if (render.wrapLine(a, text, available).len == 1) return text;
+    const head_budget = available / 2;
+    const head = render.wrapLine(a, text, head_budget)[0];
+    const tails = render.wrapLine(a, text, available - 1 - head_budget);
+    return std.fmt.allocPrint(a, "{s}{s}{s}", .{ head, styles.dim(a, "…"), tails[tails.len - 1] }) catch text;
+}
+
 fn paintRow(a: std.mem.Allocator, line: []const u8) []const u8 {
     return std.fmt.allocPrint(a, "{s}{s}\x1b[K", .{ theme.SGR_PLAIN, line }) catch line;
 }
@@ -367,7 +390,7 @@ const Tui = struct {
 
     reply: stream.MarkdownStream,
     activity: stream.TailStream,
-    pending_calls: std.ArrayList(stream.BodyLine) = .empty,
+    pending_calls: std.ArrayList(PendingCall) = .empty,
     streamed: std.ArrayList(u8) = .empty,
     turn_start: i64 = 0,
     frame: usize = 0,
@@ -504,6 +527,29 @@ const Tui = struct {
         return " ";
     }
 
+    /// Styled rows for the queue block, one row per call, clipped to `width`.
+    fn queueRows(self: *Tui, width: usize) []const []const u8 {
+        var out: std.ArrayList([]const u8) = .empty;
+        const calls = self.pending_calls.items;
+        const overflow = calls.len > MAX_QUEUE_ROWS;
+        const shown = if (overflow) MAX_QUEUE_ROWS - 1 else calls.len;
+        for (calls[0..shown], 0..) |call, i| {
+            const running = i == 0 and self.phase == .running_tool;
+            const label = if (running) "running" else "queued";
+            const padded = std.fmt.allocPrint(self.s, STATE_PAD, .{label}) catch label;
+            const word = if (running) styles.teal(self.s, padded) else styles.dim(self.s, padded);
+            const head = callHead(self.s, call.name);
+            const prefix = STATE_WIDTH + 1 + "-> ".len + call.name.len + 1;
+            const available = if (width > prefix) width - prefix else 0;
+            const text = render.expandTabs(self.s, render.sanitize(self.s, call.summary), 4);
+            out.append(self.s, std.fmt.allocPrint(self.s, "{s} {s} {s}", .{ word, head, clipCall(self.s, text, available) }) catch "") catch {};
+        }
+        if (overflow) {
+            out.append(self.s, styles.dim(self.s, std.fmt.allocPrint(self.s, "... {d} more queued ...", .{calls.len - shown}) catch "...")) catch {};
+        }
+        return out.items;
+    }
+
     // ---- drawing ---------------------------------------------------------
     fn draw(self: *Tui) void {
         if (self.closed) return;
@@ -516,15 +562,19 @@ const Tui = struct {
         if (inflight.len == 0) inflight = self.activity.pending();
         const rows = renderRows(self.s, inflight, width);
 
-        const keep = @min(rows.len, if (height > status.len + 1) height - status.len - 1 else 0);
+        const room = if (height > status.len + 1) height - status.len - 1 else 0;
+        const queue_all = self.queueRows(width);
+        const queue = queue_all[0..@min(queue_all.len, room)];
+        const keep = @min(rows.len, room - queue.len);
         const body = rows[rows.len - keep ..];
-        const ed = self.editor.render2(width, @max(height - status.len - body.len, 1));
+        const ed = self.editor.render2(width, @max(height - status.len - queue.len - body.len, 1));
 
         var lines: std.ArrayList([]const u8) = .empty;
         for (body) |r| lines.append(self.s, paintRow(self.s, r)) catch {};
+        for (queue) |r| lines.append(self.s, paintRow(self.s, r)) catch {};
         for (status) |r| lines.append(self.s, paintRow(self.s, r)) catch {};
         for (ed.rows) |r| lines.append(self.s, paintRow(self.s, r)) catch {};
-        var cursor_row = status.len + body.len + ed.cursor_row;
+        var cursor_row = body.len + queue.len + status.len + ed.cursor_row;
         if (cursor_row >= lines.items.len and lines.items.len > 0) cursor_row = lines.items.len - 1;
 
         const scroll = self.scroll.items;
@@ -572,8 +622,10 @@ const Tui = struct {
                 self.keepName(&self.writing_tool, null);
                 self.commitLines(self.reply.flush());
                 self.activity.reset();
-                const summary = callSummary(self.a, tc.name, tc.arguments);
-                self.pending_calls.append(self.a, .{ .text = std.fmt.allocPrint(self.a, "{s}  {s}", .{ callHead(self.a, tc.name), summary }) catch "" }) catch {};
+                self.pending_calls.append(self.a, .{
+                    .name = self.a.dupe(u8, tc.name) catch "",
+                    .summary = callSummary(self.a, tc.name, tc.arguments),
+                }) catch {};
             },
             .tool_call_start => |name| self.keepName(&self.writing_tool, name),
             .tool_output => |chunk| self.activity.feed(chunk),
@@ -621,7 +673,7 @@ const Tui = struct {
         self.separator = true;
         if (self.pending_calls.items.len > 0) {
             const call = self.pending_calls.orderedRemove(0);
-            self.commitLines(&.{call});
+            self.commitLines(&.{.{ .text = std.fmt.allocPrint(self.s, "{s}  {s}", .{ callHead(self.s, call.name), call.summary }) catch call.summary }});
         }
         const width = @max(self.term.width() - BODY_PREFIX.len, 1);
         const lines = resultLines(self.s, name, text, is_error);
@@ -641,7 +693,7 @@ const Tui = struct {
     fn flushCalls(self: *Tui) void {
         for (self.pending_calls.items) |call| {
             self.separator = true;
-            self.commitLines(&.{call});
+            self.commitLines(&.{.{ .text = std.fmt.allocPrint(self.s, "{s}  {s}", .{ callHead(self.s, call.name), call.summary }) catch call.summary }});
         }
         self.pending_calls.clearRetainingCapacity();
     }
