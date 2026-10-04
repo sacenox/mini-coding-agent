@@ -2,6 +2,10 @@
 
 const std = @import("std");
 const platform = @import("platform.zig");
+const build_options = @import("build_options");
+
+/// Providers require a product user-agent; the client default is the std one.
+pub const user_agent = "mini-coding-agent/" ++ build_options.version;
 
 pub const Header = struct { name: []const u8, value: []const u8 };
 
@@ -46,6 +50,7 @@ pub fn postSse(
     var req = client.request(.POST, uri, .{
         .redirect_behavior = .unhandled,
         .extra_headers = hdrs.items,
+        .headers = .{ .user_agent = .{ .override = user_agent } },
     }) catch return error.RequestFailed;
     defer req.deinit();
 

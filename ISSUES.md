@@ -1,6 +1,6 @@
 # Issues from QA/Live use
 
-- Pause doesn't work, agent keeps working through the pause, with the UI saying "paused - ...".
+- ~~No user-agent is sent, this is explicit against Opencode Go and many other providers rules. Start sending `mini-coding-agent/VERSION`~~
 - Audit statusline states, I never see "waiting for provider". Seems that we don't have that much granularity
 - `authFile` in config is a fragment of mini-coder's functionality that we don't have, why was it ported without thinking?
 - Agents use markdown tables in their replies, and usually with terrible whitespace, can we format them for readability?
@@ -16,3 +16,5 @@
 - Read tool bodies aren't useful. Instead we should show a single line body, with the read tool call arguments and the count of lines read.
   Users can already see the full path in the tool header. If it's an image we show the path twice, thats is not needed, let's just show the
   image metadata in the single line body to match the new behaviour suggested here.
+- Add to the banner a second line, that shows the count of AGENTS.md files loaded and the SKILL.md files loaded.
+- When we start a new session, print a blank line, the banner, and then the "new session" label but dimmed.

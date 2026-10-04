@@ -1,4 +1,5 @@
 const std = @import("std");
+const zon = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -13,6 +14,10 @@ pub fn build(b: *std.Build) void {
         }),
     });
     b.installArtifact(exe);
+
+    const options = b.addOptions();
+    options.addOption([]const u8, "version", zon.version);
+    exe.root_module.addOptions("build_options", options);
 
     const tree_sitter = b.dependency("tree_sitter", .{ .target = target, .optimize = optimize });
     exe.root_module.addImport("tree-sitter", tree_sitter.module("tree_sitter"));

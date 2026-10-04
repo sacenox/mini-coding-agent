@@ -30,11 +30,6 @@ templates to copy:
   for the low-level work: the four wire protocols, streaming reassembly, diff
   capture, UTF-8 and base64 handling, session durability. Consult its structure
   and its comments when porting those layers.
-- `../zig-agent-kanso/` — an experimental one-shot Zig port. The idiom reference
-  for current Zig: the allocator wiring, `std.http.Client` for SSE streaming,
-  the tree-sitter module integration, `build.zig.zon` dependency pinning. It is
-  a starting point for language technique, not for correctness or completeness —
-  it has known gaps in the provider layer and it swallows errors.
 
 ## Direction
 
@@ -119,8 +114,8 @@ largest fragility. Do not reintroduce it.
 
 ## Verification
 
-Verify against the real provider. Do not stand up mock servers, fixture
-endpoints, or replay files; they stall and prove nothing. Use the
+Verify against the real provider. **Do not stand up mock servers, fixture
+endpoints, or replay files**; they stall and prove nothing. Use the
 `OPENCODE_API_KEY` environment variable and a scratch `XDG_CONFIG_HOME` with a
 `mini-coding-agent/config.json` that declares the provider under test.
 
