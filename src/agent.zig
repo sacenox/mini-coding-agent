@@ -19,7 +19,7 @@ pub const Event = union(enum) {
     tool_call_start: []const u8,
     tool_call: struct { name: []const u8, arguments: []const u8 },
     tool_output: []const u8,
-    tool_result: struct { name: []const u8, text: []const u8, is_error: bool, diffs: []const common.FileDiff },
+    tool_result: struct { name: []const u8, text: []const u8, is_error: bool, diffs: []const common.FileDiff, body: ?[]const u8 },
     message: *types.AssistantMessage,
     no_model,
     err: []const u8,
@@ -256,6 +256,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
                 .text = result.text,
                 .is_error = result.is_error,
                 .diffs = result.diffs,
+                .body = result.body,
             } });
         }
         const joined = tryJoin(opts.a, held.items) catch {

@@ -38,4 +38,7 @@ pub const Result = struct {
     images: []const types.ImageContent = &.{},
     /// Files the tool changed, for display only.
     diffs: []const FileDiff = &.{},
+    /// One line that replaces the result body on screen, for display only.
+    /// Null shows `text` instead.
+    body: ?[]const u8 = null,
 };

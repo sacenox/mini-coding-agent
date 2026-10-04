@@ -624,7 +624,7 @@ const Tui = struct {
             .message => |am| self.commitMessage(am),
             .tool_result => |tr| {
                 self.activity.reset();
-                self.commitToolResult(tr.name, tr.text, tr.is_error, tr.diffs);
+                self.commitToolResult(tr.name, tr.text, tr.is_error, tr.diffs, tr.body);
             },
             .err => |m| self.endTurn(styles.red(self.s, std.fmt.allocPrint(self.s, "! {s}", .{m}) catch "! error")),
             .no_model => self.endTurn(styles.red(self.s, "! no model configured")),
@@ -660,14 +660,20 @@ const Tui = struct {
         }
     }
 
-    fn commitToolResult(self: *Tui, name: []const u8, text: []const u8, is_error: bool, diffs: []const common.FileDiff) void {
+    fn commitToolResult(self: *Tui, name: []const u8, text: []const u8, is_error: bool, diffs: []const common.FileDiff, body: ?[]const u8) void {
         self.separator = true;
         if (self.pending_calls.items.len > 0) {
             const call = self.pending_calls.orderedRemove(0);
             self.commitLines(&.{.{ .text = std.fmt.allocPrint(self.s, "{s}  {s}", .{ callHead(self.s, call.name), call.summary }) catch call.summary }});
         }
         const width = @max(self.term.width() - BODY_PREFIX.len, 1);
-        const lines = resultLines(self.s, name, text, is_error);
+        // A tool that supplies a body wants one line instead of its text: the
+        // header already carries the path, so the body carries what is not
+        // visible anywhere else.
+        const lines: []const stream.BodyLine = if (!is_error and body != null)
+            &.{.{ .text = body.? }}
+        else
+            resultLines(self.s, name, text, is_error);
         const rows = if (std.mem.eql(u8, name, "edit")) renderRows(self.s, lines, width) else bodyRows(self.s, lines, width);
         for (rows, 0..) |row, i| {
             const prefix = if (is_error and i == rows.len - 1) styles.red(self.s, ERROR_PREFIX) else styles.dim(self.s, BODY_PREFIX);
@@ -1110,6 +1116,7 @@ fn copyEvent(a: std.mem.Allocator, e: agent.Event) agent.Event {
                 .text = a.dupe(u8, tr.text) catch "",
                 .is_error = tr.is_error,
                 .diffs = diffs,
+                .body = if (tr.body) |b| a.dupe(u8, b) catch "" else null,
             } };
         },
         else => e,

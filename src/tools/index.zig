@@ -12,7 +12,7 @@ const edit_tool = @import("edit.zig");
 const bash_tool = @import("bash.zig");
 
 const read_params =
-    \\{"type":"object","required":["path"],"properties":{"path":{"type":"string","description":"File path"}},"additionalProperties":false}
+    \\{"type":"object","required":["path"],"properties":{"path":{"type":"string","description":"File path"},"offset":{"type":"integer","description":"First line to return, 1-based"},"range":{"type":"integer","description":"Number of lines to return from offset"}},"additionalProperties":false}
 ;
 
 const edit_params =
@@ -23,8 +23,8 @@ const bash_params =
     \\{"type":"object","required":["command"],"properties":{"command":{"type":"string","description":"Command to run"}},"additionalProperties":false}
 ;
 
-const read_description = "Read a file. Returns its text. Prefer bash for search, ranges, or binary files.";
-const read_image_description = "Read a file. Returns its text, or the image itself when the file is a png, jpg, or webp. Prefer bash for search, ranges, or binary files.";
+const read_description = "Read a file. Returns its text. Returns the whole file unless offset and range give a line window. Prefer bash for search or binary files.";
+const read_image_description = "Read a file. Returns its text, or the image itself when the file is a png, jpg, or webp. Returns the whole file unless offset and range give a line window. Prefer bash for search or binary files.";
 const edit_description = "Edit a file by exact text replacement. oldText must occur exactly once. With empty oldText, create a new file (fails if it exists).";
 const bash_description = "Run a bash command in the current working directory.";
 
