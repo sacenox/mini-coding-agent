@@ -272,17 +272,17 @@ pub const Terminal = struct {
     started: bool = false,
     winsize: [2]usize = .{ 80, 24 },
 
+    /// The window size is refreshed at startup and whenever a resize arrives,
+    /// so the per-frame readers are pure field reads rather than ioctls.
     pub fn width(self: *Terminal) usize {
-        self.updateSize();
         return self.winsize[0];
     }
 
     pub fn height(self: *Terminal) usize {
-        self.updateSize();
         return self.winsize[1];
     }
 
-    fn updateSize(self: *Terminal) void {
+    pub fn refreshSize(self: *Terminal) void {
         var wsz: std.posix.winsize = .{ .row = 0, .col = 0, .xpixel = 0, .ypixel = 0 };
         const r = platform.io.operate(.{ .device_io_control = .{
             .file = std.Io.File.stdout(),
@@ -298,7 +298,7 @@ pub const Terminal = struct {
     pub fn start(self: *Terminal) void {
         if (self.started) return;
         self.started = true;
-        self.updateSize();
+        self.refreshSize();
         if (std.Io.File.stdin().isTty(platform.io) catch false) {
             self.original = std.posix.tcgetattr(std.posix.STDIN_FILENO) catch return;
             var raw = self.original;

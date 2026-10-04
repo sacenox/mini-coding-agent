@@ -94,14 +94,6 @@ pub const Message = union(enum) {
     user: struct { content: []const u8, timestamp: i64 },
     assistant: *AssistantMessage,
     tool_result: ToolResultMessage,
-
-    pub fn role(self: Message) []const u8 {
-        return switch (self) {
-            .user => "user",
-            .assistant => "assistant",
-            .tool_result => "toolResult",
-        };
-    }
 };
 
 /// Concatenates an assistant message's text blocks. An allocation failure is
@@ -125,7 +117,6 @@ pub const Model = struct {
     api_key: ?[]const u8,
     /// The effort actually sent, after clamping to what the model accepts.
     effort: []const u8,
-    reasoning: bool,
     supports_images: bool,
     context_window: u64,
     max_tokens: u64,

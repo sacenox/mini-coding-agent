@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const types = @import("types.zig");
+const http = @import("http.zig");
 
 pub const Event = union(enum) {
     /// Assistant text delta.
@@ -70,4 +71,124 @@ pub fn newAssistant(req: Request) types.AssistantMessage {
         .model = req.model.id,
         .timestamp = @import("util.zig").nowMs(),
     };
+}
+
+/// The header list every provider shares: the content negotiation pair, the
+/// provider's own extra pairs (skipped when their value is empty), and then
+/// the caller's custom and session headers.
+pub fn headers(a: std.mem.Allocator, req: Request, extra: []const [2][]const u8) ![]http.Header {
+    var list: std.ArrayList(http.Header) = .empty;
+    errdefer list.deinit(a);
+    try list.append(a, .{ .name = "Content-Type", .value = "application/json" });
+    try list.append(a, .{ .name = "Accept", .value = "text/event-stream" });
+    for (extra) |kv| {
+        if (kv[1].len > 0) try list.append(a, .{ .name = kv[0], .value = kv[1] });
+    }
+    for (req.model.headers) |kv| try list.append(a, .{ .name = kv[0], .value = kv[1] });
+    if (req.session_id) |sid| {
+        if (req.model.session_header) |name| {
+            if (sid.len > 0) try list.append(a, .{ .name = name, .value = sid });
+        }
+    }
+    return list.toOwnedSlice(a);
+}
+
+/// Sends the request and maps a transport failure onto `msg`. Returns false
+/// once the caller must return `msg` as-is; true when the stream completed and
+/// the caller should proceed to finalize.
+pub fn post(req: Request, url: []const u8, hdrs: []const http.Header, body: []const u8, handler: http.SseHandler, msg: *types.AssistantMessage) std.mem.Allocator.Error!bool {
+    var err_body: ?[]const u8 = null;
+    http.postSse(req.scratch, url, hdrs, body, handler, req.cancel, &err_body) catch |e| {
+        if (e == error.OutOfMemory) return error.OutOfMemory;
+        if (e == error.Aborted or req.cancel.load(.acquire)) {
+            msg.stop_reason = .aborted;
+        } else {
+            msg.stop_reason = .err;
+            const message = switch (e) {
+                error.HttpStatus => err_body orelse "provider returned an error status",
+                error.ReadFailed => "stream read failed",
+                else => "request failed",
+            };
+            msg.error_message = try req.pers.dupe(u8, message);
+        }
+        return false;
+    };
+    if (req.cancel.load(.acquire)) {
+        msg.stop_reason = .aborted;
+        return false;
+    }
+    return true;
+}
+
+/// The `{d}` cost fields, shared by every provider's usage accounting.
+pub fn applyCost(model: *const types.Model, u: *types.Usage) void {
+    const m = 1_000_000.0;
+    u.cost_input = @as(f64, @floatFromInt(u.input)) * model.cost_input / m;
+    u.cost_output = @as(f64, @floatFromInt(u.output)) * model.cost_output / m;
+    u.cost_cache_read = @as(f64, @floatFromInt(u.cache_read)) * model.cost_cache_read / m;
+    u.cost_cache_write = 0;
+    u.cost_total = u.cost_input + u.cost_output + u.cost_cache_read + u.cost_cache_write;
+}
+
+pub fn num(v: std.json.Value) u64 {
+    return switch (v) {
+        .integer => |n| @intCast(@max(n, 0)),
+        .float => |f| @intFromFloat(@max(f, 0)),
+        else => 0,
+    };
+}
+
+pub fn numField(obj: std.json.ObjectMap, key: []const u8) u64 {
+    return num(obj.get(key) orelse return 0);
+}
+
+/// A non-empty string field, or null.
+pub fn stringField(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
+    const v = obj.get(key) orelse return null;
+    return switch (v) {
+        .string => |s| if (s.len > 0) s else null,
+        else => null,
+    };
+}
+
+/// A string field, or `""` when the field is missing or not a string.
+pub fn stringOr(obj: std.json.ObjectMap, key: []const u8) []const u8 {
+    return switch (obj.get(key) orelse .null) {
+        .string => |s| s,
+        else => "",
+    };
+}
+
+/// An integer field, or `default` when the field is missing or not an integer.
+pub fn intOr(obj: std.json.ObjectMap, key: []const u8, default: i64) i64 {
+    return switch (obj.get(key) orelse .null) {
+        .integer => |n| n,
+        else => default,
+    };
+}
+
+/// `base_url` plus one path segment, with a trailing slash on the base ignored.
+pub fn buildUrl(a: std.mem.Allocator, base: []const u8, path: []const u8) ![]u8 {
+    return std.fmt.allocPrint(a, "{s}{s}", .{ std.mem.trimEnd(u8, base, "/"), path });
+}
+
+/// The tool schemas parsed from the session's flat form, or null when there
+/// are none. Borrowed from `a`.
+pub fn parseTools(a: std.mem.Allocator, tools_json: []const u8) ?[]const std.json.Value {
+    if (tools_json.len == 0) return null;
+    const root = std.json.parseFromSliceLeaky(std.json.Value, a, tools_json, .{}) catch return null;
+    return if (root == .array) root.array.items else null;
+}
+
+/// `"name":"…","description":"…","<params_key>":<schema>` — the body every
+/// provider's tool encoding shares. The caller supplies the wrapper.
+pub fn writeToolBody(w: *std.Io.Writer, obj: std.json.ObjectMap, params_key: []const u8) !void {
+    try w.writeAll("\"name\":");
+    try @import("json.zig").writeString(w, obj.get("name").?.string);
+    try w.writeAll(",\"description\":");
+    try @import("json.zig").writeString(w, obj.get("description").?.string);
+    try w.writeAll(",\"");
+    try w.writeAll(params_key);
+    try w.writeAll("\":");
+    try std.json.Stringify.value(obj.get("parameters").?, .{}, w);
 }

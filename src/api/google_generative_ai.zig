@@ -87,19 +87,12 @@ fn writeToolResults(w: *std.Io.Writer, run: []const types.Message) !void {
 }
 
 fn writeTools(w: *std.Io.Writer, a: std.mem.Allocator, tools_json: []const u8) !void {
-    if (tools_json.len == 0) return;
-    const root = std.json.parseFromSliceLeaky(Value, a, tools_json, .{}) catch return;
-    if (root != .array) return;
+    const tools = api.parseTools(a, tools_json) orelse return;
     try w.writeAll(",\"tools\":[{\"functionDeclarations\":[");
-    for (root.array.items, 0..) |tool, i| {
+    for (tools, 0..) |tool, i| {
         if (i > 0) try w.writeByte(',');
-        const obj = tool.object;
-        try w.writeAll("{\"name\":");
-        try json.writeString(w, obj.get("name").?.string);
-        try w.writeAll(",\"description\":");
-        try json.writeString(w, obj.get("description").?.string);
-        try w.writeAll(",\"parametersJsonSchema\":");
-        try std.json.Stringify.value(obj.get("parameters").?, .{}, w);
+        try w.writeByte('{');
+        try api.writeToolBody(w, tool.object, "parametersJsonSchema");
         try w.writeByte('}');
     }
     try w.writeAll("]}]");
@@ -184,18 +177,7 @@ fn buildUrl(a: std.mem.Allocator, base: []const u8, id: []const u8) ![]u8 {
 }
 
 fn headers(a: std.mem.Allocator, req: api.Request, key: []const u8) ![]http.Header {
-    var list: std.ArrayList(http.Header) = .empty;
-    errdefer list.deinit(a);
-    try list.append(a, .{ .name = "Content-Type", .value = "application/json" });
-    try list.append(a, .{ .name = "Accept", .value = "text/event-stream" });
-    if (key.len > 0) try list.append(a, .{ .name = "x-goog-api-key", .value = key });
-    for (req.model.headers) |kv| try list.append(a, .{ .name = kv[0], .value = kv[1] });
-    if (req.session_id) |sid| {
-        if (req.model.session_header) |name| {
-            if (sid.len > 0) try list.append(a, .{ .name = name, .value = sid });
-        }
-    }
-    return list.toOwnedSlice(a);
+    return api.headers(a, req, &.{.{ "x-goog-api-key", key }});
 }
 
 // ---- streaming state ------------------------------------------------------
@@ -222,44 +204,15 @@ const State = struct {
     stream_error: ?[]const u8 = null,
 };
 
-fn num(v: Value) u64 {
-    return switch (v) {
-        .integer => |n| @intCast(@max(n, 0)),
-        .float => |f| @intFromFloat(@max(f, 0)),
-        else => 0,
-    };
-}
-
-fn numField(obj: std.json.ObjectMap, key: []const u8) u64 {
-    return num(obj.get(key) orelse return 0);
-}
-
-fn stringField(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
-    const v = obj.get(key) orelse return null;
-    return switch (v) {
-        .string => |s| if (s.len > 0) s else null,
-        else => null,
-    };
-}
-
-fn applyCost(model: *const types.Model, u: *types.Usage) void {
-    const m = 1_000_000.0;
-    u.cost_input = @as(f64, @floatFromInt(u.input)) * model.cost_input / m;
-    u.cost_output = @as(f64, @floatFromInt(u.output)) * model.cost_output / m;
-    u.cost_cache_read = @as(f64, @floatFromInt(u.cache_read)) * model.cost_cache_read / m;
-    u.cost_cache_write = 0;
-    u.cost_total = u.cost_input + u.cost_output + u.cost_cache_read + u.cost_cache_write;
-}
-
 fn addCall(st: *State, part: std.json.ObjectMap) !void {
     const fc = part.get("functionCall") orelse return;
     if (fc != .object) return;
-    const name = stringField(fc.object, "name") orelse "";
+    const name = api.stringField(fc.object, "name") orelse "";
     const call = try st.calls.addOne(st.req.pers);
     call.* = .{ .name = try st.req.pers.dupe(u8, name) };
     // Google omits a call id, so derive a stable one from the name and order.
     call.id = try std.fmt.allocPrint(st.req.pers, "{s}_{d}", .{ call.name, st.calls.items.len });
-    if (stringField(part, "thoughtSignature")) |sig| {
+    if (api.stringField(part, "thoughtSignature")) |sig| {
         call.thought_signature = try st.req.pers.dupe(u8, sig);
     }
     if (call.name.len > 0) st.sink.emit(.{ .tool_start = call.name });
@@ -275,7 +228,7 @@ fn addCall(st: *State, part: std.json.ObjectMap) !void {
 fn handle(st: *State, obj: std.json.ObjectMap) !void {
     if (obj.get("error")) |err| {
         if (err == .object) {
-            const message = stringField(err.object, "message") orelse "stream: provider error";
+            const message = api.stringField(err.object, "message") orelse "stream: provider error";
             if (st.stream_error == null) st.stream_error = try st.req.pers.dupe(u8, message);
         }
         return;
@@ -295,8 +248,8 @@ fn handle(st: *State, obj: std.json.ObjectMap) !void {
                                         if (fc == .object) try addCall(st, part.object);
                                         continue;
                                     }
-                                    const text = stringField(part.object, "text") orelse continue;
-                                    const thought = part.object.get("thought") orelse Value{ .null = {} };
+                                    const text = api.stringField(part.object, "text") orelse continue;
+                                    const thought = part.object.get("thought") orelse .null;
                                     if (thought == .bool and thought.bool) {
                                         try st.reasoning.appendSlice(st.req.pers, text);
                                         st.sink.emit(.{ .reasoning = text });
@@ -309,7 +262,7 @@ fn handle(st: *State, obj: std.json.ObjectMap) !void {
                         }
                     }
                 }
-                if (stringField(candidate.object, "finishReason")) |fr| {
+                if (api.stringField(candidate.object, "finishReason")) |fr| {
                     st.finish = try st.req.pers.dupe(u8, fr);
                 }
             }
@@ -318,9 +271,9 @@ fn handle(st: *State, obj: std.json.ObjectMap) !void {
 
     if (obj.get("usageMetadata")) |usage| {
         if (usage == .object) {
-            st.tokens_in = numField(usage.object, "promptTokenCount");
-            st.tokens_out = numField(usage.object, "candidatesTokenCount") + numField(usage.object, "thoughtsTokenCount");
-            st.tokens_total = numField(usage.object, "totalTokenCount");
+            st.tokens_in = api.numField(usage.object, "promptTokenCount");
+            st.tokens_out = api.numField(usage.object, "candidatesTokenCount") + api.numField(usage.object, "thoughtsTokenCount");
+            st.tokens_total = api.numField(usage.object, "totalTokenCount");
         }
     }
 }
@@ -366,7 +319,7 @@ fn finalize(st: *State) !void {
     usage.input = st.tokens_in;
     usage.output = st.tokens_out;
     usage.total_tokens = if (st.tokens_total > 0) st.tokens_total else st.tokens_in + st.tokens_out;
-    applyCost(st.req.model, &usage);
+    api.applyCost(st.req.model, &usage);
     st.msg.usage = usage;
 
     st.msg.raw_stop_reason = st.finish;
@@ -391,28 +344,9 @@ pub fn stream(req: api.Request, sink: api.Sink) std.mem.Allocator.Error!types.As
     const hdrs = headers(req.scratch, req, key) catch return error.OutOfMemory;
 
     var st = State{ .req = req, .sink = sink, .arena = &arena, .msg = &msg };
-    var err_body: ?[]const u8 = null;
 
-    http.postSse(req.scratch, url, hdrs, body, .{ .ctx = &st, .onEvent = onData }, req.cancel, &err_body) catch |e| {
-        if (e == error.OutOfMemory) return error.OutOfMemory;
-        if (e == error.Aborted or req.cancel.load(.acquire)) {
-            msg.stop_reason = .aborted;
-        } else {
-            msg.stop_reason = .err;
-            const message = switch (e) {
-                error.HttpStatus => err_body orelse "provider returned an error status",
-                error.ReadFailed => "stream read failed",
-                else => "request failed",
-            };
-            msg.error_message = try req.pers.dupe(u8, message);
-        }
-        return msg;
-    };
+    if (!try api.post(req, url, hdrs, body, .{ .ctx = &st, .onEvent = onData }, &msg)) return msg;
 
-    if (req.cancel.load(.acquire)) {
-        msg.stop_reason = .aborted;
-        return msg;
-    }
     if (st.stream_error) |message| {
         msg.stop_reason = .err;
         msg.error_message = try req.pers.dupe(u8, message);

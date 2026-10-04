@@ -8,19 +8,6 @@ fn isSpace(cp: u21) bool {
     return cp == ' ' or cp == '\t' or cp == '\n' or cp == '\r' or cp == 0x0b or cp == 0x0c or cp == 0xa0;
 }
 
-/// Byte offsets of every codepoint boundary in `line`, plus the end.
-fn boundaries(a: std.mem.Allocator, line: []const u8) []usize {
-    var out: std.ArrayList(usize) = .empty;
-    var i: usize = 0;
-    out.append(a, 0) catch {};
-    while (i < line.len) {
-        const n = std.unicode.utf8ByteSequenceLength(line[i]) catch 1;
-        i += @min(@as(usize, n), line.len - i);
-        out.append(a, i) catch {};
-    }
-    return out.items;
-}
-
 fn cpLen(line: []const u8) usize {
     var i: usize = 0;
     var count: usize = 0;

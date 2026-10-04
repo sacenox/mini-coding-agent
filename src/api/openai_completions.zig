@@ -17,12 +17,7 @@ const max_stream_index = 10_000;
 
 fn writeAssistant(w: *std.Io.Writer, am: *const types.AssistantMessage, a: std.mem.Allocator) !void {
     try w.writeAll("{\"role\":\"assistant\",\"content\":");
-    var text: std.ArrayList(u8) = .empty;
-    for (am.content.items) |block| switch (block) {
-        .text => |t| text.appendSlice(a, t) catch return error.OutOfMemory,
-        else => {},
-    };
-    try json.writeString(w, text.items);
+    try json.writeString(w, try types.assistantText(a, am));
 
     var calls: usize = 0;
     for (am.content.items) |block| {
@@ -134,47 +129,28 @@ fn buildBody(req: api.Request) ![]u8 {
 /// `function` object. The flat form recorded in the session is not the wire
 /// form here.
 fn writeTools(w: *std.Io.Writer, a: std.mem.Allocator, tools_json: []const u8) !void {
-    if (tools_json.len == 0) return;
-    const root = std.json.parseFromSliceLeaky(Value, a, tools_json, .{}) catch return;
-    if (root != .array) return;
+    const tools = api.parseTools(a, tools_json) orelse return;
     try w.writeAll(",\"tools\":[");
-    for (root.array.items, 0..) |tool, i| {
+    for (tools, 0..) |tool, i| {
         if (i > 0) try w.writeByte(',');
-        const obj = tool.object;
-        try w.writeAll("{\"type\":\"function\",\"function\":{\"name\":");
-        try json.writeString(w, obj.get("name").?.string);
-        try w.writeAll(",\"description\":");
-        try json.writeString(w, obj.get("description").?.string);
-        try w.writeAll(",\"parameters\":");
-        try std.json.Stringify.value(obj.get("parameters").?, .{}, w);
+        try w.writeAll("{\"type\":\"function\",\"function\":{");
+        try api.writeToolBody(w, tool.object, "parameters");
         try w.writeAll("}}");
     }
     try w.writeByte(']');
 }
 
 fn buildUrl(a: std.mem.Allocator, base: []const u8) ![]u8 {
-    return std.fmt.allocPrint(a, "{s}/chat/completions", .{std.mem.trimEnd(u8, base, "/")});
+    return api.buildUrl(a, base, "/chat/completions");
 }
 
 fn headers(a: std.mem.Allocator, req: api.Request, auth: []const u8) ![]http.Header {
-    var list: std.ArrayList(http.Header) = .empty;
-    errdefer list.deinit(a);
-    try list.append(a, .{ .name = "Content-Type", .value = "application/json" });
-    try list.append(a, .{ .name = "Accept", .value = "text/event-stream" });
-    if (auth.len > 0) try list.append(a, .{ .name = "Authorization", .value = auth });
-    for (req.model.headers) |kv| try list.append(a, .{ .name = kv[0], .value = kv[1] });
-    if (req.session_id) |sid| {
-        if (req.model.session_header) |name| {
-            if (sid.len > 0) try list.append(a, .{ .name = name, .value = sid });
-        }
-    }
-    return list.toOwnedSlice(a);
+    return api.headers(a, req, &.{.{ "Authorization", auth }});
 }
 
 // ---- streaming state ------------------------------------------------------
 
 const PendingCall = struct {
-    index: i64,
     id: []const u8 = "",
     name: []const u8 = "",
     args: std.ArrayList(u8) = .empty,
@@ -200,28 +176,20 @@ fn ensureCall(st: *State, index: i64) !*PendingCall {
     else
         st.calls.items.len;
     while (st.calls.items.len <= idx) {
-        try st.calls.append(st.req.pers, .{ .index = @intCast(st.calls.items.len) });
+        try st.calls.append(st.req.pers, .{});
     }
     return &st.calls.items[idx];
 }
 
-fn deltaString(delta: std.json.ObjectMap, key: []const u8) ?[]const u8 {
-    const v = delta.get(key) orelse return null;
-    return switch (v) {
-        .string => |s| if (s.len > 0) s else null,
-        else => null,
-    };
-}
-
 fn handleDelta(st: *State, delta: std.json.ObjectMap) !void {
-    if (deltaString(delta, "content")) |s| {
+    if (api.stringField(delta, "content")) |s| {
         try st.text.appendSlice(st.req.pers, s);
         st.sink.emit(.{ .text = s });
     }
 
     const reasoning_fields = [_][]const u8{ "reasoning_content", "reasoning", "reasoning_text" };
     for (reasoning_fields) |field| {
-        if (deltaString(delta, field)) |s| {
+        if (api.stringField(delta, field)) |s| {
             if (st.signature == null) st.signature = field;
             try st.thinking.appendSlice(st.req.pers, s);
             st.sink.emit(.{ .reasoning = s });
@@ -258,36 +226,23 @@ fn handleDelta(st: *State, delta: std.json.ObjectMap) !void {
     }
 }
 
-fn num(v: Value) u64 {
-    return switch (v) {
-        .integer => |i| @intCast(@max(i, 0)),
-        .float => |f| @intFromFloat(@max(f, 0)),
-        else => 0,
-    };
-}
-
-fn numField(obj: std.json.ObjectMap, key: []const u8) u64 {
-    const v = obj.get(key) orelse return 0;
-    return num(v);
-}
-
 fn parseUsage(st: *State, usage: std.json.ObjectMap) void {
     var u = types.Usage{};
-    const prompt = numField(usage, "prompt_tokens");
+    const prompt = api.numField(usage, "prompt_tokens");
     var cache_read: u64 = 0;
     if (usage.get("prompt_tokens_details")) |details| {
-        if (details == .object) cache_read = numField(details.object, "cached_tokens");
+        if (details == .object) cache_read = api.numField(details.object, "cached_tokens");
     }
-    if (cache_read == 0) cache_read = numField(usage, "cached_tokens");
+    if (cache_read == 0) cache_read = api.numField(usage, "cached_tokens");
     var cache_write: u64 = 0;
     if (usage.get("prompt_tokens_details")) |details| {
-        if (details == .object) cache_write = numField(details.object, "cache_write_tokens");
+        if (details == .object) cache_write = api.numField(details.object, "cache_write_tokens");
     }
-    const output = numField(usage, "completion_tokens");
+    const output = api.numField(usage, "completion_tokens");
     if (usage.get("completion_tokens_details")) |details| {
         if (details == .object) {
             if (details.object.get("reasoning_tokens") != null) {
-                u.reasoning = numField(details.object, "reasoning_tokens");
+                u.reasoning = api.numField(details.object, "reasoning_tokens");
             }
         }
     }
@@ -296,17 +251,8 @@ fn parseUsage(st: *State, usage: std.json.ObjectMap) void {
     u.cache_read = cache_read;
     u.cache_write = cache_write;
     u.total_tokens = u.input + output + cache_read + cache_write;
-    applyCost(st.req.model, &u);
+    api.applyCost(st.req.model, &u);
     st.msg.usage = u;
-}
-
-fn applyCost(model: *const types.Model, u: *types.Usage) void {
-    const m = 1_000_000.0;
-    u.cost_input = @as(f64, @floatFromInt(u.input)) * model.cost_input / m;
-    u.cost_output = @as(f64, @floatFromInt(u.output)) * model.cost_output / m;
-    u.cost_cache_read = @as(f64, @floatFromInt(u.cache_read)) * model.cost_cache_read / m;
-    u.cost_cache_write = 0;
-    u.cost_total = u.cost_input + u.cost_output + u.cost_cache_read + u.cost_cache_write;
 }
 
 fn errorMessageFrom(root: std.json.ObjectMap) ?[]const u8 {
@@ -442,28 +388,9 @@ pub fn stream(req: api.Request, sink: api.Sink) std.mem.Allocator.Error!types.As
     const hdrs = headers(req.scratch, req, auth) catch return error.OutOfMemory;
 
     var st = State{ .req = req, .sink = sink, .arena = &arena, .msg = &msg };
-    var err_body: ?[]const u8 = null;
 
-    http.postSse(req.scratch, url, hdrs, body, .{ .ctx = &st, .onEvent = onData }, req.cancel, &err_body) catch |e| {
-        if (e == error.OutOfMemory) return error.OutOfMemory;
-        if (e == error.Aborted or req.cancel.load(.acquire)) {
-            msg.stop_reason = .aborted;
-        } else {
-            msg.stop_reason = .err;
-            const message = switch (e) {
-                error.HttpStatus => err_body orelse "provider returned an error status",
-                error.ReadFailed => "stream read failed",
-                else => "request failed",
-            };
-            msg.error_message = try req.pers.dupe(u8, message);
-        }
-        return msg;
-    };
+    if (!try api.post(req, url, hdrs, body, .{ .ctx = &st, .onEvent = onData }, &msg)) return msg;
 
-    if (req.cancel.load(.acquire)) {
-        msg.stop_reason = .aborted;
-        return msg;
-    }
     if (st.stream_error) |message| {
         msg.stop_reason = .err;
         msg.error_message = try req.pers.dupe(u8, message);

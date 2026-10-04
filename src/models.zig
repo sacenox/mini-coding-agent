@@ -10,7 +10,6 @@ const types = @import("types.zig");
 /// per-model metadata; this carries where and how the provider is reached.
 const Builtin = struct {
     id: []const u8,
-    catalog_id: []const u8,
     base_url: []const u8,
     api: []const u8,
     env_keys: []const []const u8,
@@ -20,7 +19,6 @@ const Builtin = struct {
 const builtins = [_]Builtin{
     .{
         .id = "opencode-go",
-        .catalog_id = "opencode-go",
         .base_url = "https://opencode.ai/zen/go/v1",
         .api = "openai-completions",
         .env_keys = &.{"OPENCODE_API_KEY"},
@@ -28,7 +26,6 @@ const builtins = [_]Builtin{
     },
     .{
         .id = "opencode",
-        .catalog_id = "opencode",
         .base_url = "https://opencode.ai/zen/v1",
         .api = "openai-completions",
         .env_keys = &.{"OPENCODE_API_KEY"},
@@ -96,7 +93,7 @@ pub fn resolve(a: std.mem.Allocator, cfg: *const config.Config, err: *?[]const u
 pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id: []const u8, model_id: []const u8, err: *?[]const u8) ?types.Model {
     for (builtins) |b| {
         if (!std.mem.eql(u8, b.id, provider_id)) continue;
-        const info = catalog.lookup(b.catalog_id, model_id);
+        const info = catalog.lookup(b.id, model_id);
         return types.Model{
             .id = model_id,
             .name = if (info) |i| i.name else model_id,
@@ -105,7 +102,6 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
             .base_url = b.base_url,
             .api_key = firstEnv(b.env_keys),
             .effort = if (info) |i| clampEffort(i, cfg.thinking_effort) else cfg.thinking_effort,
-            .reasoning = if (info) |i| i.reasoning else true,
             .supports_images = if (info) |i| i.images else true,
             .context_window = if (info) |i| i.context else 0,
             .max_tokens = if (info) |i| i.max_output else 0,
@@ -134,7 +130,6 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
             .base_url = p.base_url,
             .api_key = firstEnv(p.env_keys),
             .effort = cfg.thinking_effort,
-            .reasoning = true,
             // Custom providers are uncatalogued; assume image input. A model
             // that rejects images surfaces the provider error as-is.
             .supports_images = true,
@@ -175,7 +170,7 @@ pub fn catalogModels(a: std.mem.Allocator, cfg: *const config.Config, provider_i
     for (builtins) |b| {
         if (!std.mem.eql(u8, b.id, provider_id)) continue;
         for (&catalog.entries) |*entry| {
-            if (!std.mem.eql(u8, entry.provider, b.catalog_id)) continue;
+            if (!std.mem.eql(u8, entry.provider, b.id)) continue;
             var err: ?[]const u8 = null;
             if (resolveNamed(a, cfg, provider_id, entry.id, &err)) |m| out.append(a, m) catch {};
         }
@@ -193,26 +188,24 @@ pub fn catalogModels(a: std.mem.Allocator, cfg: *const config.Config, provider_i
 }
 
 /// The thinking levels a model accepts, in ladder order.
-pub fn supportedLevels(cfg: *const config.Config, provider_id: []const u8, model_id: []const u8) []const []const u8 {
+pub fn supportedLevels(provider_id: []const u8, model_id: []const u8) []const []const u8 {
     for (builtins) |b| {
         if (!std.mem.eql(u8, b.id, provider_id)) continue;
-        const info = catalog.lookup(b.catalog_id, model_id) orelse return &ladder;
+        const info = catalog.lookup(b.id, model_id) orelse return &ladder;
         // A model that does not reason runs "off" and offers nothing else,
         // matching what `clampEffort` will send.
         if (!info.reasoning) return &.{"off"};
         if (info.effort.len == 0) return &ladder;
         return info.effort;
     }
-    _ = cfg;
     return &ladder;
 }
 
 /// Clamps a requested thinking level to what the named model accepts.
-pub fn clampNamed(cfg: *const config.Config, provider_id: []const u8, model_id: []const u8, desired: []const u8) []const u8 {
-    _ = cfg;
+pub fn clampNamed(provider_id: []const u8, model_id: []const u8, desired: []const u8) []const u8 {
     for (builtins) |b| {
         if (!std.mem.eql(u8, b.id, provider_id)) continue;
-        const info = catalog.lookup(b.catalog_id, model_id) orelse return desired;
+        const info = catalog.lookup(b.id, model_id) orelse return desired;
         return clampEffort(info, desired);
     }
     return desired;

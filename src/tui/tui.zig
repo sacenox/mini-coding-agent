@@ -32,7 +32,7 @@ const ELIDED_HEAD = 4;
 const ELIDED_TAIL = 4;
 
 fn paintRow(a: std.mem.Allocator, line: []const u8) []const u8 {
-    return std.fmt.allocPrint(a, "{s}{s}\x1b[K", .{ theme.sgrPlain(a), line }) catch line;
+    return std.fmt.allocPrint(a, "{s}{s}\x1b[K", .{ theme.SGR_PLAIN, line }) catch line;
 }
 
 /// Wraps plain text, then styles each row: styling after the break is what lets
@@ -47,7 +47,7 @@ fn styleRow(a: std.mem.Allocator, line: stream.BodyLine, width: usize) []const [
             out.append(a, "") catch {};
             continue;
         }
-        const row_bg = theme.sgrBg(a, line.bg orelse theme.NORMAL_BG);
+        const row_bg = if (line.bg) |bg| theme.sgrBg(a, bg) else theme.SGR_NORMAL_BG;
         // The span's foreground must not hand the row's own background back to
         // `Normal`: a diff row's tint has to cover its text, not just the cells
         // `ESC[K` erases after it.
@@ -194,7 +194,7 @@ fn estimateTextTokens(text: []const u8) u64 {
     return (text.len + 3) / 4;
 }
 
-fn estimateMessageTokens(a: std.mem.Allocator, m: types.Message) u64 {
+fn estimateMessageTokens(m: types.Message) u64 {
     switch (m) {
         .user => |u| return estimateTextTokens(u.content),
         .tool_result => |t| return estimateTextTokens(t.text),
@@ -209,10 +209,9 @@ fn estimateMessageTokens(a: std.mem.Allocator, m: types.Message) u64 {
             return (chars + 3) / 4;
         },
     }
-    _ = a;
 }
 
-fn estimateContextTokens(a: std.mem.Allocator, messages: []const types.Message, system_prompt: []const u8, tools_json: []const u8) u64 {
+fn estimateContextTokens(messages: []const types.Message, system_prompt: []const u8, tools_json: []const u8) u64 {
     var last_idx: ?usize = null;
     var usage: u64 = 0;
     for (messages, 0..) |m, i| {
@@ -229,11 +228,11 @@ fn estimateContextTokens(a: std.mem.Allocator, messages: []const types.Message, 
     }
     if (last_idx) |idx| {
         var trailing: u64 = 0;
-        for (messages[idx + 1 ..]) |m| trailing += estimateMessageTokens(a, m);
+        for (messages[idx + 1 ..]) |m| trailing += estimateMessageTokens(m);
         return usage + trailing;
     }
     var total: u64 = 0;
-    for (messages) |m| total += estimateMessageTokens(a, m);
+    for (messages) |m| total += estimateMessageTokens(m);
     return total + estimateTextTokens(system_prompt) + estimateTextTokens(tools_json);
 }
 
@@ -275,7 +274,7 @@ const LiveRegion = struct {
         if (self.cursor_up > 0) out.appendSlice(a, std.fmt.allocPrint(a, "\x1b[{d}B", .{self.cursor_up}) catch "") catch {};
         if (self.rows > 1) out.appendSlice(a, std.fmt.allocPrint(a, "\x1b[{d}A", .{self.rows - 1}) catch "") catch {};
         out.appendSlice(a, "\r") catch {};
-        out.appendSlice(a, theme.sgrPlain(a)) catch {};
+        out.appendSlice(a, theme.SGR_PLAIN) catch {};
         out.appendSlice(a, "\x1b[J") catch {};
         self.rows = 0;
         self.cursor_up = 0;
@@ -381,7 +380,6 @@ const Tui = struct {
     prompt_kind: PromptKind = .none,
     prompt_options: []const []const u8 = &.{},
     prompt_ids: []const []const u8 = &.{},
-    prompt_message: []const u8 = "",
     prompt_answer: []const u8 = "",
     prompt_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     pending_command: enum { none, provider, model, thinking } = .none,
@@ -472,7 +470,7 @@ const Tui = struct {
     // ---- status ----------------------------------------------------------
     fn statusLine(self: *Tui) []const u8 {
         const model = self.opts.model orelse return styles.dim(self.s, "no model configured");
-        const used = estimateContextTokens(self.s, self.messages.items, self.opts.system_prompt, self.opts.tools_json);
+        const used = estimateContextTokens(self.messages.items, self.opts.system_prompt, self.opts.tools_json);
         const usage = contextUsageLine(self.s, used, model);
         if (self.paused or self.phase == .pausing) {
             return std.fmt.allocPrint(self.s, "{s} · {s}", .{ styles.dim(self.s, "paused - type steering, Enter to submit"), usage }) catch usage;
@@ -795,7 +793,7 @@ const Tui = struct {
                 self.separator = true;
                 return;
             };
-            const levels = models_mod.supportedLevels(self.cfg, m.provider, m.id);
+            const levels = models_mod.supportedLevels(m.provider, m.id);
             self.beginPrompt(.select, "Select a thinking level", levels, levels);
             self.pending_command = .thinking;
             return;
@@ -843,7 +841,6 @@ const Tui = struct {
 
     fn beginPrompt(self: *Tui, kind: PromptKind, message: []const u8, options: []const []const u8, ids: []const []const u8) void {
         self.prompt_kind = kind;
-        self.prompt_message = message;
         self.prompt_options = options;
         self.prompt_ids = ids;
         self.prompt_answer = "";
@@ -903,7 +900,7 @@ const Tui = struct {
                 self.command_active = false;
                 return;
             };
-            const clamped = models_mod.clampNamed(self.cfg, m.provider, m.id, level);
+            const clamped = models_mod.clampNamed(m.provider, m.id, level);
             const updated = self.a.create(types.Model) catch {
                 self.command_active = false;
                 return;
@@ -992,22 +989,16 @@ fn completePathStep(word: []const u8) ?[]const u8 {
     return complete.completePath(word);
 }
 
-const Command = struct { name: []const u8, args: []const u8 };
+const Command = struct { name: []const u8 };
 
 fn findCommand(text: []const u8) ?Command {
     if (text.len == 0 or text[0] != '/') return null;
     var i: usize = 1;
     while (i < text.len and text[i] != ' ' and text[i] != '\t' and text[i] != '\n') i += 1;
     const name = text[1..i];
-    var args: []const u8 = "";
-    if (i < text.len) {
-        var j = i;
-        while (j < text.len and (text[j] == ' ' or text[j] == '\t')) j += 1;
-        args = text[j..];
-    }
     const known = [_][]const u8{ "help", "provider", "model", "thinking" };
     for (known) |k| {
-        if (std.mem.eql(u8, k, name)) return .{ .name = k, .args = args };
+        if (std.mem.eql(u8, k, name)) return .{ .name = k };
     }
     return null;
 }
@@ -1179,7 +1170,10 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
             self.dirty = true;
         }
 
-        if (resize_flag.swap(false, .seq_cst)) self.dirty = true;
+        if (resize_flag.swap(false, .seq_cst)) {
+            self.term.refreshSize();
+            self.dirty = true;
+        }
         if (exit_flag.swap(false, .seq_cst)) self.exit();
 
         const now = util.nowMs();

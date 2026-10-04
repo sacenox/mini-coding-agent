@@ -50,10 +50,16 @@ pub const MarkdownStream = struct {
     pub fn feed(self: *MarkdownStream, delta: []const u8) []BodyLine {
         self.rest.appendSlice(self.a, delta) catch {};
         var out: std.ArrayList(BodyLine) = .empty;
-        while (std.mem.indexOfScalar(u8, self.rest.items, '\n')) |nl| {
-            const line = self.a.dupe(u8, self.rest.items[0..nl]) catch "";
-            _ = self.rest.replaceRange(self.a, 0, nl + 1, &.{}) catch {};
+        var i: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, self.rest.items, i, '\n')) |nl| {
+            const line = self.a.dupe(u8, self.rest.items[i..nl]) catch "";
             self.commit(line, &out);
+            i = nl + 1;
+        }
+        if (i > 0) {
+            const keep = self.rest.items[i..];
+            std.mem.copyForwards(u8, self.rest.items[0..keep.len], keep);
+            self.rest.items.len = keep.len;
         }
         return out.items;
     }

@@ -9,14 +9,14 @@ fn fg(a: std.mem.Allocator, hex: []const u8, text: []const u8) []const u8 {
     return std.fmt.allocPrint(a, "{s}{s}{s}", .{
         theme.sgrFg(a, hex),
         text,
-        theme.sgrFg(a, theme.NORMAL_FG),
+        theme.SGR_NORMAL_FG,
     }) catch text;
 }
 
 /// Applies a full style, restoring `Normal` after: bold and italic must not
 /// bleed past the span, and no cell may fall back to the terminal's colours.
 pub fn styledWith(a: std.mem.Allocator, style: theme.Style, text: []const u8) []const u8 {
-    return std.fmt.allocPrint(a, "{s}{s}{s}", .{ theme.sgr(a, style), text, theme.sgrPlain(a) }) catch text;
+    return std.fmt.allocPrint(a, "{s}{s}{s}", .{ theme.sgr(a, style), text, theme.SGR_PLAIN }) catch text;
 }
 
 /// `Comment`, the colour diff context lines share.
@@ -26,19 +26,8 @@ pub fn dim(a: std.mem.Allocator, text: []const u8) []const u8 {
 pub fn red(a: std.mem.Allocator, text: []const u8) []const u8 {
     return fg(a, theme.PALETTE.red, text);
 }
-pub fn green(a: std.mem.Allocator, text: []const u8) []const u8 {
-    return fg(a, theme.PALETTE.green, text);
-}
 pub fn yellow(a: std.mem.Allocator, text: []const u8) []const u8 {
     return fg(a, theme.PALETTE.yellow, text);
-}
-/// Diff hunk headers; the palette's `blue` sits closest to the old ANSI cyan.
-pub fn cyan(a: std.mem.Allocator, text: []const u8) []const u8 {
-    return fg(a, theme.PALETTE.blue, text);
-}
-/// The user's own words; also `Function`, which user rows never collide with.
-pub fn blue(a: std.mem.Allocator, text: []const u8) []const u8 {
-    return fg(a, theme.PALETTE.blue, text);
 }
 /// The tool accent: call-line heads.
 pub fn teal(a: std.mem.Allocator, text: []const u8) []const u8 {

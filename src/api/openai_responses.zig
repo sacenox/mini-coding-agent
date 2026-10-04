@@ -57,19 +57,12 @@ fn writeInput(w: *std.Io.Writer, msg: types.Message) !void {
 }
 
 fn writeTools(w: *std.Io.Writer, a: std.mem.Allocator, tools_json: []const u8) !void {
-    if (tools_json.len == 0) return;
-    const root = std.json.parseFromSliceLeaky(Value, a, tools_json, .{}) catch return;
-    if (root != .array) return;
+    const tools = api.parseTools(a, tools_json) orelse return;
     try w.writeAll(",\"tools\":[");
-    for (root.array.items, 0..) |tool, i| {
+    for (tools, 0..) |tool, i| {
         if (i > 0) try w.writeByte(',');
-        const obj = tool.object;
-        try w.writeAll("{\"type\":\"function\",\"name\":");
-        try json.writeString(w, obj.get("name").?.string);
-        try w.writeAll(",\"description\":");
-        try json.writeString(w, obj.get("description").?.string);
-        try w.writeAll(",\"parameters\":");
-        try std.json.Stringify.value(obj.get("parameters").?, .{}, w);
+        try w.writeAll("{\"type\":\"function\",");
+        try api.writeToolBody(w, tool.object, "parameters");
         try w.writeByte('}');
     }
     try w.writeByte(']');
@@ -110,22 +103,11 @@ fn buildBody(req: api.Request) ![]u8 {
 }
 
 fn buildUrl(a: std.mem.Allocator, base: []const u8) ![]u8 {
-    return std.fmt.allocPrint(a, "{s}/responses", .{std.mem.trimEnd(u8, base, "/")});
+    return api.buildUrl(a, base, "/responses");
 }
 
 fn headers(a: std.mem.Allocator, req: api.Request, auth: []const u8) ![]http.Header {
-    var list: std.ArrayList(http.Header) = .empty;
-    errdefer list.deinit(a);
-    try list.append(a, .{ .name = "Content-Type", .value = "application/json" });
-    try list.append(a, .{ .name = "Accept", .value = "text/event-stream" });
-    if (auth.len > 0) try list.append(a, .{ .name = "Authorization", .value = auth });
-    for (req.model.headers) |kv| try list.append(a, .{ .name = kv[0], .value = kv[1] });
-    if (req.session_id) |sid| {
-        if (req.model.session_header) |name| {
-            if (sid.len > 0) try list.append(a, .{ .name = name, .value = sid });
-        }
-    }
-    return list.toOwnedSlice(a);
+    return api.headers(a, req, &.{.{ "Authorization", auth }});
 }
 
 // ---- streaming state ------------------------------------------------------
@@ -166,43 +148,14 @@ fn streamIndex(obj: std.json.ObjectMap, fallback: usize) usize {
     };
 }
 
-fn num(v: Value) u64 {
-    return switch (v) {
-        .integer => |n| @intCast(@max(n, 0)),
-        .float => |f| @intFromFloat(@max(f, 0)),
-        else => 0,
-    };
-}
-
-fn numField(obj: std.json.ObjectMap, key: []const u8) u64 {
-    return num(obj.get(key) orelse return 0);
-}
-
-fn stringField(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
-    const v = obj.get(key) orelse return null;
-    return switch (v) {
-        .string => |s| if (s.len > 0) s else null,
-        else => null,
-    };
-}
-
-fn applyCost(model: *const types.Model, u: *types.Usage) void {
-    const m = 1_000_000.0;
-    u.cost_input = @as(f64, @floatFromInt(u.input)) * model.cost_input / m;
-    u.cost_output = @as(f64, @floatFromInt(u.output)) * model.cost_output / m;
-    u.cost_cache_read = @as(f64, @floatFromInt(u.cache_read)) * model.cost_cache_read / m;
-    u.cost_cache_write = 0;
-    u.cost_total = u.cost_input + u.cost_output + u.cost_cache_read + u.cost_cache_write;
-}
-
 fn handle(st: *State, obj: std.json.ObjectMap) !void {
-    const event_type = stringField(obj, "type") orelse "";
+    const event_type = api.stringField(obj, "type") orelse "";
 
     if (std.mem.eql(u8, event_type, "error")) {
-        const message = stringField(obj, "message") orelse blk: {
+        const message = api.stringField(obj, "message") orelse blk: {
             const e = obj.get("error") orelse break :blk "stream: provider error";
             break :blk switch (e) {
-                .object => |o| stringField(o, "message") orelse "stream: provider error",
+                .object => |o| api.stringField(o, "message") orelse "stream: provider error",
                 else => "stream: provider error",
             };
         };
@@ -213,7 +166,7 @@ fn handle(st: *State, obj: std.json.ObjectMap) !void {
     if (std.mem.eql(u8, event_type, "response.created")) {
         if (obj.get("response")) |resp| {
             if (resp == .object and st.msg.response_id == null) {
-                if (stringField(resp.object, "id")) |id| {
+                if (api.stringField(resp.object, "id")) |id| {
                     st.msg.response_id = try st.req.pers.dupe(u8, id);
                 }
             }
@@ -224,12 +177,12 @@ fn handle(st: *State, obj: std.json.ObjectMap) !void {
     if (std.mem.eql(u8, event_type, "response.output_item.added")) {
         const item = obj.get("item") orelse return;
         if (item != .object) return;
-        if (!std.mem.eql(u8, stringField(item.object, "type") orelse "", "function_call")) return;
+        if (!std.mem.eql(u8, api.stringField(item.object, "type") orelse "", "function_call")) return;
         const index = streamIndex(obj, st.calls.items.len);
         try grow(st, index + 1);
         const call = &st.calls.items[index];
-        if (stringField(item.object, "call_id")) |id| call.id = try st.req.pers.dupe(u8, id);
-        if (stringField(item.object, "name")) |name| call.name = try st.req.pers.dupe(u8, name);
+        if (api.stringField(item.object, "call_id")) |id| call.id = try st.req.pers.dupe(u8, id);
+        if (api.stringField(item.object, "name")) |name| call.name = try st.req.pers.dupe(u8, name);
         if (!call.started and call.name.len > 0) {
             call.started = true;
             st.sink.emit(.{ .tool_start = call.name });
@@ -240,7 +193,7 @@ fn handle(st: *State, obj: std.json.ObjectMap) !void {
     if (std.mem.eql(u8, event_type, "response.output_text.delta") or
         std.mem.eql(u8, event_type, "response.refusal.delta"))
     {
-        if (stringField(obj, "delta")) |s| {
+        if (api.stringField(obj, "delta")) |s| {
             try st.text.appendSlice(st.req.pers, s);
             st.sink.emit(.{ .text = s });
         }
@@ -250,7 +203,7 @@ fn handle(st: *State, obj: std.json.ObjectMap) !void {
     if (std.mem.eql(u8, event_type, "response.reasoning_summary_text.delta") or
         std.mem.eql(u8, event_type, "response.reasoning_text.delta"))
     {
-        if (stringField(obj, "delta")) |s| {
+        if (api.stringField(obj, "delta")) |s| {
             try st.reasoning.appendSlice(st.req.pers, s);
             st.sink.emit(.{ .reasoning = s });
         }
@@ -260,7 +213,7 @@ fn handle(st: *State, obj: std.json.ObjectMap) !void {
     if (std.mem.eql(u8, event_type, "response.function_call_arguments.delta")) {
         const index = streamIndex(obj, st.calls.items.len);
         if (index < st.calls.items.len) {
-            if (stringField(obj, "delta")) |s| try st.calls.items[index].args.appendSlice(st.req.pers, s);
+            if (api.stringField(obj, "delta")) |s| try st.calls.items[index].args.appendSlice(st.req.pers, s);
         }
         return;
     }
@@ -268,7 +221,7 @@ fn handle(st: *State, obj: std.json.ObjectMap) !void {
     if (std.mem.eql(u8, event_type, "response.function_call_arguments.done")) {
         const index = streamIndex(obj, st.calls.items.len);
         if (index < st.calls.items.len) {
-            if (stringField(obj, "arguments")) |s| {
+            if (api.stringField(obj, "arguments")) |s| {
                 st.calls.items[index].args.clearRetainingCapacity();
                 try st.calls.items[index].args.appendSlice(st.req.pers, s);
             }
@@ -279,18 +232,18 @@ fn handle(st: *State, obj: std.json.ObjectMap) !void {
     if (std.mem.eql(u8, event_type, "response.output_item.done")) {
         const item = obj.get("item") orelse return;
         if (item != .object) return;
-        if (!std.mem.eql(u8, stringField(item.object, "type") orelse "", "function_call")) return;
+        if (!std.mem.eql(u8, api.stringField(item.object, "type") orelse "", "function_call")) return;
         const index = streamIndex(obj, st.calls.items.len);
         if (index >= st.calls.items.len) return;
         const call = &st.calls.items[index];
-        if (stringField(item.object, "call_id")) |id| call.id = try st.req.pers.dupe(u8, id);
-        if (stringField(item.object, "name")) |name| call.name = try st.req.pers.dupe(u8, name);
+        if (api.stringField(item.object, "call_id")) |id| call.id = try st.req.pers.dupe(u8, id);
+        if (api.stringField(item.object, "name")) |name| call.name = try st.req.pers.dupe(u8, name);
         if (!call.started and call.name.len > 0) {
             call.started = true;
             st.sink.emit(.{ .tool_start = call.name });
         }
         if (call.args.items.len == 0) {
-            if (stringField(item.object, "arguments")) |s| try call.args.appendSlice(st.req.pers, s);
+            if (api.stringField(item.object, "arguments")) |s| try call.args.appendSlice(st.req.pers, s);
         }
         return;
     }
@@ -300,19 +253,19 @@ fn handle(st: *State, obj: std.json.ObjectMap) !void {
     {
         const resp = obj.get("response") orelse return;
         if (resp != .object) return;
-        if (stringField(resp.object, "status")) |s| st.status = try st.req.pers.dupe(u8, s);
+        if (api.stringField(resp.object, "status")) |s| st.status = try st.req.pers.dupe(u8, s);
         if (resp.object.get("incomplete_details")) |details| {
             if (details == .object) {
-                if (stringField(details.object, "reason")) |r| st.incomplete = try st.req.pers.dupe(u8, r);
+                if (api.stringField(details.object, "reason")) |r| st.incomplete = try st.req.pers.dupe(u8, r);
             }
         }
         if (resp.object.get("usage")) |usage| {
             if (usage == .object) {
-                st.tokens_in = numField(usage.object, "input_tokens");
-                st.tokens_out = numField(usage.object, "output_tokens");
-                st.tokens_total = numField(usage.object, "total_tokens");
+                st.tokens_in = api.numField(usage.object, "input_tokens");
+                st.tokens_out = api.numField(usage.object, "output_tokens");
+                st.tokens_total = api.numField(usage.object, "total_tokens");
                 if (usage.object.get("input_tokens_details")) |d| {
-                    if (d == .object) st.cache_read = numField(d.object, "cached_tokens");
+                    if (d == .object) st.cache_read = api.numField(d.object, "cached_tokens");
                 }
             }
         }
@@ -324,7 +277,7 @@ fn handle(st: *State, obj: std.json.ObjectMap) !void {
         if (resp != .object) return;
         const err = resp.object.get("error") orelse return;
         const message = switch (err) {
-            .object => |o| stringField(o, "message") orelse "response failed",
+            .object => |o| api.stringField(o, "message") orelse "response failed",
             else => "response failed",
         };
         if (st.stream_error == null) st.stream_error = try st.req.pers.dupe(u8, message);
@@ -374,7 +327,7 @@ fn finalize(st: *State) !void {
     usage.output = st.tokens_out;
     usage.cache_read = st.cache_read;
     usage.total_tokens = if (st.tokens_total > 0) st.tokens_total else st.tokens_in + st.tokens_out;
-    applyCost(st.req.model, &usage);
+    api.applyCost(st.req.model, &usage);
     st.msg.usage = usage;
 
     if (st.status) |status| {
@@ -416,28 +369,9 @@ pub fn stream(req: api.Request, sink: api.Sink) std.mem.Allocator.Error!types.As
     const hdrs = headers(req.scratch, req, auth) catch return error.OutOfMemory;
 
     var st = State{ .req = req, .sink = sink, .arena = &arena, .msg = &msg };
-    var err_body: ?[]const u8 = null;
 
-    http.postSse(req.scratch, url, hdrs, body, .{ .ctx = &st, .onEvent = onData }, req.cancel, &err_body) catch |e| {
-        if (e == error.OutOfMemory) return error.OutOfMemory;
-        if (e == error.Aborted or req.cancel.load(.acquire)) {
-            msg.stop_reason = .aborted;
-        } else {
-            msg.stop_reason = .err;
-            const message = switch (e) {
-                error.HttpStatus => err_body orelse "provider returned an error status",
-                error.ReadFailed => "stream read failed",
-                else => "request failed",
-            };
-            msg.error_message = try req.pers.dupe(u8, message);
-        }
-        return msg;
-    };
+    if (!try api.post(req, url, hdrs, body, .{ .ctx = &st, .onEvent = onData }, &msg)) return msg;
 
-    if (req.cancel.load(.acquire)) {
-        msg.stop_reason = .aborted;
-        return msg;
-    }
     if (st.stream_error) |message| {
         msg.stop_reason = .err;
         msg.error_message = try req.pers.dupe(u8, message);

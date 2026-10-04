@@ -31,28 +31,45 @@ pub const NORMAL_BG = PALETTE.bg;
 pub const DIFF_ADD = "#243e4a";
 pub const DIFF_DELETE = "#4a272f";
 
-/// `r;g;b` for one `#rrggbb`.
-fn channels(a: std.mem.Allocator, hex: []const u8) []const u8 {
-    const r = std.fmt.parseInt(u8, hex[1..3], 16) catch 0;
-    const g = std.fmt.parseInt(u8, hex[3..5], 16) catch 0;
-    const b = std.fmt.parseInt(u8, hex[5..7], 16) catch 0;
-    return std.fmt.allocPrint(a, "{d};{d};{d}", .{ r, g, b }) catch "0;0;0";
+/// The three channels of one `#rrggbb`.
+fn rgb(hex: []const u8) [3]u8 {
+    return .{
+        std.fmt.parseInt(u8, hex[1..3], 16) catch 0,
+        std.fmt.parseInt(u8, hex[3..5], 16) catch 0,
+        std.fmt.parseInt(u8, hex[5..7], 16) catch 0,
+    };
+}
+
+/// A compile-time SGR sequence for one fixed `#rrggbb`.
+pub fn sgrConst(comptime code: []const u8, comptime hex: []const u8) []const u8 {
+    const c = comptime rgb(hex);
+    return std.fmt.comptimePrint("\x1b[{s}{d};{d};{d}m", .{ code, c[0], c[1], c[2] });
 }
 
 /// Explicit colour, never a reset: a `39`/`49` or a `0` would hand the rest of
 /// the row back to the host terminal, which is the leak this palette closes.
 pub fn sgrFg(a: std.mem.Allocator, hex: []const u8) []const u8 {
-    return std.fmt.allocPrint(a, "\x1b[38;2;{s}m", .{channels(a, hex)}) catch "";
+    const c = rgb(hex);
+    return std.fmt.allocPrint(a, "\x1b[38;2;{d};{d};{d}m", .{ c[0], c[1], c[2] }) catch "";
 }
 
 pub fn sgrBg(a: std.mem.Allocator, hex: []const u8) []const u8 {
-    return std.fmt.allocPrint(a, "\x1b[48;2;{s}m", .{channels(a, hex)}) catch "";
+    const c = rgb(hex);
+    return std.fmt.allocPrint(a, "\x1b[48;2;{d};{d};{d}m", .{ c[0], c[1], c[2] }) catch "";
 }
 
 /// Attributes off, then `Normal`. The state a row starts and ends in.
-pub fn sgrPlain(a: std.mem.Allocator) []const u8 {
-    return std.fmt.allocPrint(a, "\x1b[22;23;24;38;2;{s};48;2;{s}m", .{ channels(a, NORMAL_FG), channels(a, NORMAL_BG) }) catch "";
-}
+pub const SGR_PLAIN = blk: {
+    const f = rgb(NORMAL_FG);
+    const b = rgb(NORMAL_BG);
+    break :blk std.fmt.comptimePrint("\x1b[22;23;24;38;2;{d};{d};{d};48;2;{d};{d};{d}m", .{ f[0], f[1], f[2], b[0], b[1], b[2] });
+};
+
+/// `Normal`'s foreground, restored after a span so no cell inherits a colour.
+pub const SGR_NORMAL_FG = sgrConst("38;2;", NORMAL_FG);
+
+/// `Normal`'s row background, the tint every plain row is painted with.
+pub const SGR_NORMAL_BG = sgrConst("48;2;", NORMAL_BG);
 
 pub const Style = struct {
     fg: ?[]const u8 = null,
@@ -66,16 +83,19 @@ pub const Style = struct {
 /// no colour must not inherit the colour of the span or token before it, and
 /// the fallback is the palette's `Normal`, never the terminal's own pair.
 pub fn sgr(a: std.mem.Allocator, style: Style) []const u8 {
-    var out: std.ArrayList(u8) = .empty;
-    out.appendSlice(a, "\x1b[") catch {};
-    if (style.bold) out.appendSlice(a, "1;") catch {};
-    if (style.italic) out.appendSlice(a, "3;") catch {};
-    if (style.underline) out.appendSlice(a, "4;") catch {};
-    out.appendSlice(a, std.fmt.allocPrint(a, "38;2;{s};48;2;{s}m", .{
-        channels(a, style.fg orelse NORMAL_FG),
-        channels(a, style.bg orelse NORMAL_BG),
-    }) catch "") catch {};
-    return out.items;
+    const f = rgb(style.fg orelse NORMAL_FG);
+    const b = rgb(style.bg orelse NORMAL_BG);
+    return std.fmt.allocPrint(a, "\x1b[{s}{s}{s}38;2;{d};{d};{d};48;2;{d};{d};{d}m", .{
+        if (style.bold) "1;" else "",
+        if (style.italic) "3;" else "",
+        if (style.underline) "4;" else "",
+        f[0],
+        f[1],
+        f[2],
+        b[0],
+        b[1],
+        b[2],
+    }) catch "";
 }
 
 /// Capture name to colour, mapped the way `folke/tokyonight.nvim` maps capture

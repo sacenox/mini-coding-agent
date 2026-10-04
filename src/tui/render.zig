@@ -77,6 +77,17 @@ fn isSgrAt(text: []const u8, i: usize) ?usize {
 /// decoded by code point, so a UTF-8 continuation byte in 0x80-0x9f — the range
 /// C1 controls also occupy — survives.
 pub fn sanitize(a: std.mem.Allocator, text: []const u8) []const u8 {
+    // Fast path: plain printable ASCII (tab and newline included) has nothing
+    // to drop, which is the common case for tool output.
+    var clean = true;
+    for (text) |c| {
+        if (c >= 0x80 or c == 0x1b or c == 0x7f or (c < 0x20 and c != 0x09 and c != 0x0a)) {
+            clean = false;
+            break;
+        }
+    }
+    if (clean) return text;
+
     var out: std.ArrayList(u8) = .empty;
     var i: usize = 0;
     while (i < text.len) {
