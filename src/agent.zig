@@ -82,8 +82,15 @@ pub const Options = struct {
     cancel: *const std.atomic.Value(bool),
 };
 
+const StreamCtx = struct { listener: Listener, started: bool = false };
+
 fn onApiEvent(ctx: *anyopaque, event: api.Event) void {
-    const listener: *Listener = @ptrCast(@alignCast(ctx));
+    const stream_ctx: *StreamCtx = @ptrCast(@alignCast(ctx));
+    const listener = stream_ctx.listener;
+    if (!stream_ctx.started) {
+        stream_ctx.started = true;
+        listener.emit(.{ .phase = .{ .phase = .streaming } });
+    }
     switch (event) {
         .text => |d| listener.emit(.{ .text = d }),
         .reasoning => |d| listener.emit(.{ .reasoning = d }),
@@ -169,12 +176,11 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
         };
 
         listener.emit(.{ .phase = .{ .phase = .waiting_model } });
-        var api_listener = listener;
+        var stream_ctx = StreamCtx{ .listener = listener };
         const assistant = opts.a.create(types.AssistantMessage) catch {
             listener.emit(.{ .err = "out of memory" });
             return;
         };
-        listener.emit(.{ .phase = .{ .phase = .streaming } });
         assistant.* = api.stream(.{
             .pers = opts.a,
             .scratch = scratch,
@@ -185,7 +191,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
             .effort = model.effort,
             .session_id = opts.session.id,
             .cancel = opts.cancel,
-        }, .{ .ctx = &api_listener, .on_event = onApiEvent }) catch |e| {
+        }, .{ .ctx = &stream_ctx, .on_event = onApiEvent }) catch |e| {
             listener.emit(.{ .err = @errorName(e) });
             return;
         };
@@ -240,7 +246,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
             const result = tools.execute(opts.a, scratch, call.name, call.arguments, .{
                 .cancel = opts.cancel,
                 .supports_images = opts.supports_images,
-                .on_output = .{ .ctx = &api_listener, .on_chunk = onToolOutput },
+                .on_output = .{ .ctx = &stream_ctx.listener, .on_chunk = onToolOutput },
             });
 
             const tool_message = types.Message{ .tool_result = .{
