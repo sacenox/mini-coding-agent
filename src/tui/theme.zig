@@ -101,6 +101,8 @@ pub fn sgr(a: std.mem.Allocator, style: Style) []const u8 {
 /// Capture name to colour, mapped the way `folke/tokyonight.nvim` maps capture
 /// names to highlight groups. A dotted name falls back to its parent.
 const STYLES = [_]struct { name: []const u8, style: Style }{
+    .{ .name = "boolean", .style = .{ .fg = PALETTE.orange } },
+    .{ .name = "character", .style = .{ .fg = PALETTE.green } },
     .{ .name = "comment", .style = .{ .fg = PALETTE.comment } },
     .{ .name = "constant", .style = .{ .fg = PALETTE.orange } },
     .{ .name = "constant.builtin", .style = .{ .fg = PALETTE.blue1 } },
@@ -109,6 +111,10 @@ const STYLES = [_]struct { name: []const u8, style: Style }{
     .{ .name = "function", .style = .{ .fg = PALETTE.blue } },
     .{ .name = "function.builtin", .style = .{ .fg = PALETTE.blue1 } },
     .{ .name = "keyword", .style = .{ .fg = PALETTE.purple } },
+    .{ .name = "label", .style = .{ .fg = PALETTE.blue } },
+    // `@module` is TokyoNight's `Include`, which is undefined there and falls
+    // through to `PreProc`, a cyan the palette does not carry.
+    .{ .name = "module", .style = .{ .fg = PALETTE.blue1 } },
     .{ .name = "number", .style = .{ .fg = PALETTE.orange } },
     .{ .name = "operator", .style = .{ .fg = PALETTE.blue5 } },
     .{ .name = "property", .style = .{ .fg = PALETTE.green1 } },
@@ -126,6 +132,7 @@ const STYLES = [_]struct { name: []const u8, style: Style }{
     .{ .name = "text.emphasis", .style = .{ .italic = true } },
     .{ .name = "text.strong", .style = .{ .bold = true } },
     .{ .name = "text.literal", .style = .{ .fg = PALETTE.green } },
+    .{ .name = "text.title", .style = .{ .fg = PALETTE.blue, .bold = true } },
     .{ .name = "text.uri", .style = .{ .underline = true } },
     .{ .name = "text.reference", .style = .{ .fg = PALETTE.blue1 } },
 };

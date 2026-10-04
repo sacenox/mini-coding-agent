@@ -101,7 +101,7 @@ pub const MarkdownStream = struct {
             joined.appendSlice(self.a, l) catch {};
         }
         joined.append(self.a, '\n') catch {};
-        emitHighlighted(self.a, highlight.highlightMarkdown(self.a, joined.items), out);
+        emitHighlighted(self.a, highlight.highlightMarkdown(self.a, highlight.formatTables(self.a, joined.items)), out);
     }
 
     fn releaseFence(self: *MarkdownStream, closing: ?[]const u8, out: *std.ArrayList(BodyLine)) void {

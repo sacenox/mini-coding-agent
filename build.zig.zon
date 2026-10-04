@@ -20,6 +20,21 @@
             .url = "git+https://github.com/tree-sitter-grammars/tree-sitter-markdown?ref=v0.3.2#1c8dea73bc0c996d92dd9ebc30dd388716b1c5db",
             .hash = "N-V-__8AAJvIUgBKgesFyAgIRoY2KiG9_M2zWZQ4FBvnlPmz",
         },
+        .tree_sitter_python = .{
+            .url = "git+https://github.com/tree-sitter/tree-sitter-python?ref=v0.25.0#d326e4cad262cf681656e130960e49dfc04c03ea",
+            .hash = "N-V-__8AAOiqPgC9tH5tYSAYNsMWLoPiSxcmkHvIhMnezomx",
+        },
+        .tree_sitter_go = .{
+            .url = "git+https://github.com/tree-sitter/tree-sitter-go?ref=v0.25.0#6048bfc6e5238eaf062c2221bd934489c39fbb61",
+            .hash = "N-V-__8AAM9cIgDttbrvbwLWFB0JPplu_2KtCWu7__79EjIT",
+        },
+        // The v1.1.2 tag predates the repo's `build.zig.zon`, and Zig resolves
+        // a `?ref=` tag against the default branch when the tag has none, whose
+        // manifest lacks a `fingerprint`. The commit is pinned instead.
+        .tree_sitter_zig = .{
+            .url = "git+https://github.com/tree-sitter-grammars/tree-sitter-zig#b670c8df85a1568f498aa5c8cae42f51a90473c0",
+            .hash = "N-V-__8AAN6NXgCZxLUnqe4620P_FqHrEY8PHTA1-VlOn4yX",
+        },
     },
     .paths = .{
         "build.zig",

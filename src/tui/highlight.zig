@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const ts = @import("tree-sitter");
+const render = @import("render.zig");
 const theme = @import("theme.zig");
 
 extern fn tree_sitter_javascript() callconv(.c) *const ts.Language;
@@ -12,11 +13,18 @@ extern fn tree_sitter_typescript() callconv(.c) *const ts.Language;
 extern fn tree_sitter_tsx() callconv(.c) *const ts.Language;
 extern fn tree_sitter_markdown() callconv(.c) *const ts.Language;
 extern fn tree_sitter_markdown_inline() callconv(.c) *const ts.Language;
+extern fn tree_sitter_python() callconv(.c) *const ts.Language;
+extern fn tree_sitter_go() callconv(.c) *const ts.Language;
+extern fn tree_sitter_zig() callconv(.c) *const ts.Language;
 
 const JS_QUERIES = @embedFile("js_highlights");
 const TS_QUERIES = @embedFile("ts_highlights");
 const MD_QUERIES = @embedFile("md_highlights");
+const MD_TABLES = @embedFile("md_tables");
 const MD_INLINE_QUERIES = @embedFile("md_inline_highlights");
+const PY_QUERIES = @embedFile("py_highlights");
+const GO_QUERIES = @embedFile("go_highlights");
+const ZIG_QUERIES = @embedFile("zig_highlights");
 
 const Syntax = struct {
     parser: *ts.Parser,
@@ -50,6 +58,9 @@ const Grammars = struct {
     tsx: Syntax,
     markdown: Syntax,
     markdown_inline: Syntax,
+    python: Syntax,
+    go: Syntax,
+    zig: Syntax,
 
     fn init(a: std.mem.Allocator) Grammars {
         const js = tree_sitter_javascript();
@@ -57,12 +68,18 @@ const Grammars = struct {
         const tsx_lang = tree_sitter_tsx();
         const md = tree_sitter_markdown();
         const md_inline = tree_sitter_markdown_inline();
+        const py = tree_sitter_python();
+        const go_lang = tree_sitter_go();
+        const zig_lang = tree_sitter_zig();
         return .{
             .javascript = syntax(a, js, &.{JS_QUERIES}) orelse unreachable,
             .typescript = syntax(a, ts_lang, &.{ JS_QUERIES, TS_QUERIES }) orelse unreachable,
             .tsx = syntax(a, tsx_lang, &.{ JS_QUERIES, TS_QUERIES }) orelse unreachable,
-            .markdown = syntax(a, md, &.{MD_QUERIES}) orelse unreachable,
+            .markdown = syntax(a, md, &.{ MD_QUERIES, MD_TABLES }) orelse unreachable,
             .markdown_inline = syntax(a, md_inline, &.{MD_INLINE_QUERIES}) orelse unreachable,
+            .python = syntax(a, py, &.{PY_QUERIES}) orelse unreachable,
+            .go = syntax(a, go_lang, &.{GO_QUERIES}) orelse unreachable,
+            .zig = syntax(a, zig_lang, &.{ZIG_QUERIES}) orelse unreachable,
         };
     }
 };
@@ -302,7 +319,9 @@ pub fn highlightMarkdown(a: std.mem.Allocator, text: []const u8) []const u8 {
     spans.appendSlice(a, spansOf(a, &g.markdown, root.rootNode(), u, text, 0)) catch {};
 
     var inline_nodes: std.ArrayList(ts.Node) = .empty;
-    collectByKind(a, root.rootNode(), &.{"inline"}, &inline_nodes);
+    // Table cells hold inline markup too, and the block grammar leaves it
+    // unparsed: the inline grammar runs over the cell text the same way.
+    collectByKind(a, root.rootNode(), &.{ "inline", "pipe_table_cell" }, &inline_nodes);
     for (inline_nodes.items) |node| {
         const start = byteOf(u, node.startByte() / 2);
         const inline_text = text[start..byteOf(u, node.endByte() / 2)];
@@ -342,6 +361,129 @@ pub fn highlightMarkdown(a: std.mem.Allocator, text: []const u8) []const u8 {
         spans = std.ArrayList(Span).fromOwnedSlice(recolor(a, spans.items, byteOf(u, heading.startByte() / 2), byteOf(u, heading.endByte() / 2), theme.HEADINGS[idx]));
     }
     return paint(a, text, spans.items);
+}
+
+const Align = enum { none, left, center, right };
+
+/// A delimiter cell's alignment, read off its own text: `:--`, `:-:`, `--:`.
+fn alignOf(cell: []const u8) Align {
+    const left = cell.len > 0 and cell[0] == ':';
+    const right = cell.len > 1 and cell[cell.len - 1] == ':';
+    if (left and right) return .center;
+    if (left) return .left;
+    if (right) return .right;
+    return .none;
+}
+
+const Row = struct { cells: []const []const u8, delimiter: bool };
+
+/// One table, printed the way prettier prints one: every column is as wide as
+/// its widest cell, three characters at least, and each cell is padded to that
+/// width under the alignment its delimiter cell declares. Cells come from the
+/// grammar's own nodes, never from a split on `|`, so an escaped pipe and a
+/// code span holding one each stay inside one cell. Null when the header names
+/// no column.
+fn formatTable(a: std.mem.Allocator, text: []const u8, u: Utf16, table: ts.Node) ?[]const u8 {
+    var rows: std.ArrayList(Row) = .empty;
+    // GFM reads the column count off the header row: a row with more cells than
+    // the header has drops the extras, and the delimiter row is capped by it.
+    var named: usize = 0;
+    var i: u32 = 0;
+    while (i < table.childCount()) : (i += 1) {
+        const child = table.child(i) orelse continue;
+        const kind = child.kind();
+        const delimiter = std.mem.eql(u8, kind, "pipe_table_delimiter_row");
+        const header = std.mem.eql(u8, kind, "pipe_table_header");
+        if (!delimiter and !header and !std.mem.eql(u8, kind, "pipe_table_row")) continue;
+        var cells: std.ArrayList([]const u8) = .empty;
+        var j: u32 = 0;
+        while (j < child.childCount()) : (j += 1) {
+            const cell = child.child(j) orelse continue;
+            const cell_kind = cell.kind();
+            if (!std.mem.eql(u8, cell_kind, "pipe_table_cell") and !std.mem.eql(u8, cell_kind, "pipe_table_delimiter_cell")) continue;
+            const span = text[byteOf(u, cell.startByte() / 2)..byteOf(u, cell.endByte() / 2)];
+            cells.append(a, std.mem.trim(u8, span, " \t")) catch {};
+        }
+        if (header) named = cells.items.len;
+        rows.append(a, .{ .cells = cells.items, .delimiter = delimiter }) catch {};
+    }
+    if (rows.items.len == 0 or named == 0) return null;
+
+    // The delimiter row is the only row whose alignment counts; a row that
+    // leaves a column out pads it empty under the same alignment.
+    const aligns = a.alloc(Align, named) catch return null;
+    const widths = a.alloc(usize, named) catch return null;
+    @memset(aligns, .none);
+    @memset(widths, 3);
+    for (rows.items) |row| {
+        for (row.cells, 0..) |cell, k| {
+            if (k >= named) break;
+            if (row.delimiter) aligns[k] = alignOf(cell) else widths[k] = @max(widths[k], render.displayWidth(cell));
+        }
+    }
+
+    // The table node's range includes the newline that ends its last row, and
+    // an element still streaming has none: write back exactly what was there.
+    const end = byteOf(u, table.endByte() / 2);
+    const trailing = end > 0 and end <= text.len and text[end - 1] == '\n';
+
+    var block: std.ArrayList(u8) = .empty;
+    for (rows.items, 0..) |row, r| {
+        if (r > 0) block.append(a, '\n') catch {};
+        block.append(a, '|') catch {};
+        for (0..named) |k| {
+            const cell = if (k < row.cells.len) row.cells[k] else "";
+            const alignment = aligns[k];
+            block.append(a, ' ') catch {};
+            if (row.delimiter) {
+                block.append(a, if (alignment == .left or alignment == .center) ':' else '-') catch {};
+                block.appendNTimes(a, '-', widths[k] - 2) catch {};
+                block.append(a, if (alignment == .right or alignment == .center) ':' else '-') catch {};
+            } else {
+                const pad = widths[k] - render.displayWidth(cell);
+                const before: usize = switch (alignment) {
+                    .right => pad,
+                    .center => pad / 2,
+                    else => 0,
+                };
+                block.appendNTimes(a, ' ', before) catch {};
+                block.appendSlice(a, cell) catch {};
+                block.appendNTimes(a, ' ', pad - before) catch {};
+            }
+            block.appendSlice(a, " |") catch {};
+        }
+    }
+    if (trailing) block.append(a, '\n') catch {};
+    return block.items;
+}
+
+/// Prints every top-level table of a committed block under aligned columns.
+/// A table inside a quote or a list is left alone: its rows carry a prefix that
+/// is no part of any cell, so rebuilding a row from its cells would drop it.
+pub fn formatTables(a: std.mem.Allocator, text: []const u8) []const u8 {
+    const u = utf16(a, text) orelse return text;
+    const root = parse(getGrammars(a).markdown.parser, u) orelse return text;
+    defer root.destroy();
+    var tables: std.ArrayList(ts.Node) = .empty;
+    collectByKind(a, root.rootNode(), &.{"pipe_table"}, &tables);
+
+    var out: std.ArrayList(u8) = .empty;
+    var at: u32 = 0;
+    var found = false;
+    for (tables.items) |table| {
+        const parent = table.parent() orelse continue;
+        if (!std.mem.eql(u8, parent.kind(), "section")) continue;
+        const start = byteOf(u, table.startByte() / 2);
+        const end = byteOf(u, table.endByte() / 2);
+        const block = formatTable(a, text, u, table) orelse continue;
+        out.appendSlice(a, text[at..start]) catch {};
+        out.appendSlice(a, block) catch {};
+        at = end;
+        found = true;
+    }
+    if (!found) return text;
+    out.appendSlice(a, text[at..]) catch {};
+    return out.items;
 }
 
 /// The reference binding feeds every grammar UTF16LE and reports offsets in
@@ -392,14 +534,14 @@ pub fn highlightCode(a: std.mem.Allocator, info: []const u8, text: []const u8) [
     const lang = std.ascii.allocLowerString(a, trimmed[0..end]) catch trimmed[0..end];
     const g = getGrammars(a);
     const u = utf16(a, text) orelse return text;
-    const syn: ?*Syntax = if (std.mem.eql(u8, lang, "js") or std.mem.eql(u8, lang, "javascript") or std.mem.eql(u8, lang, "jsx"))
-        &g.javascript
-    else if (std.mem.eql(u8, lang, "ts") or std.mem.eql(u8, lang, "typescript"))
-        &g.typescript
-    else if (std.mem.eql(u8, lang, "tsx"))
-        &g.tsx
-    else
-        null;
+    const syn: ?*Syntax =
+        if (std.mem.eql(u8, lang, "js") or std.mem.eql(u8, lang, "javascript") or std.mem.eql(u8, lang, "jsx")) &g.javascript
+        else if (std.mem.eql(u8, lang, "ts") or std.mem.eql(u8, lang, "typescript")) &g.typescript
+        else if (std.mem.eql(u8, lang, "tsx")) &g.tsx
+        else if (std.mem.eql(u8, lang, "py") or std.mem.eql(u8, lang, "python")) &g.python
+        else if (std.mem.eql(u8, lang, "go") or std.mem.eql(u8, lang, "golang")) &g.go
+        else if (std.mem.eql(u8, lang, "zig")) &g.zig
+        else null;
     const s = syn orelse return text;
     const root = parse(s.parser, u) orelse return text;
     defer root.destroy();
