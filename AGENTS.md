@@ -1,4 +1,4 @@
-# mini-z-agent (`mza` for short)
+# mini-coding-agent (`mini` for short)
 
 A fast, transparent, config-first terminal coding agent for one user at a time.
 A careful Zig port of mini-coder.
@@ -68,8 +68,9 @@ Hard constraints. Do not cross these without explicit direction:
 - **No loop limits.** No max turns, tool calls, token budgets, or agent-imposed
   timeouts. The user's ability to interrupt is the limit.
 - **Config-first.** Every user-facing behavior that can vary comes from config
-  with a sane default. Global config only — no project-local config, no
-  config-override flags — and never duplicate a provider's catalog or env vars.
+  with a sane default. Global config only — no project-local config; a
+  `-c`/`--config` file overrides the global one for a run — and never duplicate
+  a provider's catalog or env vars.
 - **Minimal context.** The model sees the configured system prompt plus
   explicitly opted-in resource files — never reminders, hidden blocks, or
   harness meta-text.
@@ -121,7 +122,7 @@ largest fragility. Do not reintroduce it.
 Verify against the real provider. Do not stand up mock servers, fixture
 endpoints, or replay files; they stall and prove nothing. Use the
 `OPENCODE_API_KEY` environment variable and a scratch `XDG_CONFIG_HOME` with a
-`mini-coder/config.json` that declares the provider under test.
+`mini-coding-agent/config.json` that declares the provider under test.
 
 OpenCode Zen serves all four wire protocols. Base URLs and the working models:
 
@@ -146,12 +147,12 @@ window over remote control on a private socket, one window per run: it launches
 the app in a scratch cwd, waits for the banner, types the prompt, and
 screenshots the window at 15fps until the capture window ends or the app exits.
 
-    tools/stress.sh -C <scratch cwd> -o /tmp/mz-runs/<name> -d 300 -p '<prompt>'
+    tools/stress.sh -C <scratch cwd> -o /tmp/mini-runs/<name> -d 300 -p '<prompt>'
 
 Frames land in `frame-NNNNN.png`. At the end of a run the pane is written with
 its truecolor SGR to `final.txt` (scrollback) and `final-screen.txt` (live
 screen). The last line reports frames, wall time, and achieved fps; an
-`ended early: MZA-EXIT <n>` line means the app died, and `final.txt` holds the
+`ended early: MINI-EXIT <n>` line means the app died, and `final.txt` holds the
 dump. Read the pane text and the frames, not pixels.
 
 ## Working agreement

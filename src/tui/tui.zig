@@ -7,6 +7,7 @@ const std = @import("std");
 const platform = @import("../platform.zig");
 const util = @import("../util.zig");
 const config = @import("../config.zig");
+const session_mod = @import("../session.zig");
 const types = @import("../types.zig");
 const agent = @import("../agent.zig");
 const models_mod = @import("../models.zig");
@@ -461,9 +462,12 @@ const Tui = struct {
         self.separator = true;
         const model = self.opts.model;
         self.push(if (model) |m|
-            std.fmt.allocPrint(self.s, "mini-z-agent · {s}/{s} · {s}", .{ m.provider, m.id, m.effort }) catch "mini-z-agent"
+            if (m.effort.len == 0)
+                std.fmt.allocPrint(self.s, "mini · {s}/{s}", .{ m.provider, m.id }) catch "mini"
+            else
+                std.fmt.allocPrint(self.s, "mini · {s}/{s} · {s}", .{ m.provider, m.id, m.effort }) catch "mini"
         else
-            "mini-z-agent · no model configured");
+            "mini · no model configured");
         self.separator = true;
     }
 
@@ -748,6 +752,7 @@ const Tui = struct {
         if (std.mem.eql(u8, found.name, "help")) {
             const commands = [_][2][]const u8{
                 .{ "/help", "list commands and keybindings" },
+                .{ "/new", "start a new session" },
                 .{ "/provider", "choose the provider and model" },
                 .{ "/model", "choose a model for the current provider" },
                 .{ "/thinking", "set the thinking level" },
@@ -769,6 +774,12 @@ const Tui = struct {
             self.push("");
             self.push("keybindings");
             for (keys) |row| self.push(helpRow(self.s, row[0], row[1], width));
+            self.separator = true;
+            return;
+        }
+        if (std.mem.eql(u8, found.name, "new")) {
+            self.newSession();
+            self.push("new session");
             self.separator = true;
             return;
         }
@@ -798,6 +809,16 @@ const Tui = struct {
             self.pending_command = .thinking;
             return;
         }
+    }
+
+    /// Starts a fresh session: the current log is closed, a new one is opened
+    /// in the same directory, and the transcript is dropped.
+    fn newSession(self: *Tui) void {
+        self.opts.session.close();
+        const cwd = std.process.currentPathAlloc(platform.io, self.a) catch ".";
+        self.opts.session.* = session_mod.Session.init(self.a, self.cfg.sessions_dir, cwd);
+        self.messages.clearRetainingCapacity();
+        self.dirty = true;
     }
 
     fn startProviderSelect(self: *Tui) void {
@@ -887,7 +908,7 @@ const Tui = struct {
             };
             ptr.* = m;
             self.select(ptr);
-            config.save(self.a, .{ .provider = provider_id, .model = model_id }) catch {};
+            config.save(self.a, self.cfg, .{ .provider = provider_id, .model = model_id }) catch {};
             self.command_active = false;
             return;
         }
@@ -908,7 +929,7 @@ const Tui = struct {
             updated.* = m.*;
             updated.effort = clamped;
             self.opts.model = updated;
-            config.save(self.a, .{ .thinking_effort = level }) catch {};
+            config.save(self.a, self.cfg, .{ .thinking_effort = level }) catch {};
             self.pushBanner();
             self.command_active = false;
             return;
@@ -996,7 +1017,7 @@ fn findCommand(text: []const u8) ?Command {
     var i: usize = 1;
     while (i < text.len and text[i] != ' ' and text[i] != '\t' and text[i] != '\n') i += 1;
     const name = text[1..i];
-    const known = [_][]const u8{ "help", "provider", "model", "thinking" };
+    const known = [_][]const u8{ "help", "new", "provider", "model", "thinking" };
     for (known) |k| {
         if (std.mem.eql(u8, k, name)) return .{ .name = k };
     }
@@ -1009,7 +1030,7 @@ fn completeCommand(draft: []const u8) ?[]const u8 {
         if (c == ' ' or c == '\t' or c == '\n') return null;
     }
     const typed = draft[1..];
-    const names = [_][]const u8{ "help", "provider", "model", "thinking" };
+    const names = [_][]const u8{ "help", "new", "provider", "model", "thinking" };
     var matches: std.ArrayList([]const u8) = .empty;
     for (names) |n| {
         if (std.mem.startsWith(u8, n, typed)) matches.append(platform.gpa, n) catch {};

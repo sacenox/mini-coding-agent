@@ -16,7 +16,7 @@ PROVIDERS = ["opencode", "opencode-go"]
 
 def fetch(src):
     if src.startswith(("http://", "https://")):
-        req = urllib.request.Request(src, headers={"User-Agent": "mza-catalog/1"})
+        req = urllib.request.Request(src, headers={"User-Agent": "mini-catalog/1"})
         with urllib.request.urlopen(req) as r:
             return json.load(r)
     with open(src) as f:

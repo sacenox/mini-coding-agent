@@ -1,4 +1,4 @@
-//! mza: a fast, transparent, config-first terminal coding agent.
+//! mini: a fast, transparent, config-first terminal coding agent.
 
 const std = @import("std");
 const platform = @import("platform.zig");
@@ -18,25 +18,29 @@ fn onSignal(_: std.posix.SIG) callconv(.c) void {
     cancel.store(true, .release);
 }
 
-const ParsedArgs = struct { print: ?[]const u8 = null };
+const ParsedArgs = struct { print: ?[]const u8 = null, config: ?[]const u8 = null };
 
 fn parseArgs(a: std.mem.Allocator) !ParsedArgs {
     var it = std.process.Args.Iterator.init(platform.args);
     _ = it.next();
     var result = ParsedArgs{};
     while (it.next()) |arg| {
-        var value: ?[]const u8 = null;
         if (std.mem.startsWith(u8, arg, "--print=")) {
-            value = arg["--print=".len..];
+            result.print = try a.dupe(u8, arg["--print=".len..]);
         } else if (std.mem.startsWith(u8, arg, "-p=")) {
-            value = arg["-p=".len..];
+            result.print = try a.dupe(u8, arg["-p=".len..]);
         } else if (std.mem.eql(u8, arg, "-p") or std.mem.eql(u8, arg, "--print")) {
-            value = it.next() orelse return error.MissingPrompt;
+            const value = it.next() orelse return error.MissingPrompt;
+            result.print = try a.dupe(u8, value);
+        } else if (std.mem.startsWith(u8, arg, "--config=")) {
+            result.config = try a.dupe(u8, arg["--config=".len..]);
+        } else if (std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--config")) {
+            const value = it.next() orelse return error.MissingConfig;
+            result.config = try a.dupe(u8, value);
         } else {
             platform.printErr("unknown argument: {s}\n", .{arg});
             return error.UnknownArg;
         }
-        result.print = try a.dupe(u8, value.?);
     }
     return result;
 }
@@ -124,11 +128,15 @@ fn run() !u8 {
     const a = platform.gpa;
 
     const args = parseArgs(a) catch |e| {
-        if (e == error.MissingPrompt) platform.printErr("a prompt is required\n", .{});
+        switch (e) {
+            error.MissingPrompt => platform.printErr("a prompt is required\n", .{}),
+            error.MissingConfig => platform.printErr("a config path is required\n", .{}),
+            else => {},
+        }
         return 1;
     };
 
-    const cfg = config.load(a) catch return 1;
+    const cfg = config.load(a, args.config) catch return 1;
 
     var resolve_err: ?[]const u8 = null;
     const model = models.resolve(a, &cfg, &resolve_err);

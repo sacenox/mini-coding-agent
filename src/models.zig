@@ -47,22 +47,25 @@ fn normalizeEffort(value: []const u8) []const u8 {
 }
 
 /// Clamps a desired effort to what the model accepts, preferring the next
-/// higher level, then the next lower. A non-reasoning model runs "off".
-fn clampEffort(info: *const catalog.ModelInfo, desired: []const u8) []const u8 {
+/// higher level, then the next lower. An unset desire means no reasoning
+/// parameter is sent, so the provider decides. A non-reasoning model runs
+/// "off".
+fn clampEffort(info: *const catalog.ModelInfo, desired: ?[]const u8) []const u8 {
+    const want = desired orelse return "";
     if (!info.reasoning) return "off";
-    if (info.effort.len == 0) return desired;
+    if (info.effort.len == 0) return want;
     for (info.effort) |accepted| {
-        if (std.mem.eql(u8, normalizeEffort(accepted), desired)) return normalizeEffort(accepted);
+        if (std.mem.eql(u8, normalizeEffort(accepted), want)) return normalizeEffort(accepted);
     }
-    const want = rank(desired);
-    if (want < 0) return normalizeEffort(info.effort[0]);
-    var r: i32 = want;
+    const r0 = rank(want);
+    if (r0 < 0) return normalizeEffort(info.effort[0]);
+    var r: i32 = r0;
     while (r <= 6) : (r += 1) {
         for (info.effort) |accepted| {
             if (rank(normalizeEffort(accepted)) == r) return normalizeEffort(accepted);
         }
     }
-    r = want - 1;
+    r = r0 - 1;
     while (r >= 0) : (r -= 1) {
         for (info.effort) |accepted| {
             if (rank(normalizeEffort(accepted)) == r) return normalizeEffort(accepted);
@@ -101,7 +104,7 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
             .provider = provider_id,
             .base_url = b.base_url,
             .api_key = firstEnv(b.env_keys),
-            .effort = if (info) |i| clampEffort(i, cfg.thinking_effort) else cfg.thinking_effort,
+            .effort = if (info) |i| clampEffort(i, cfg.thinking_effort) else cfg.thinking_effort orelse "",
             .supports_images = if (info) |i| i.images else true,
             .context_window = if (info) |i| i.context else 0,
             .max_tokens = if (info) |i| i.max_output else 0,
@@ -129,7 +132,7 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
             .provider = provider_id,
             .base_url = p.base_url,
             .api_key = firstEnv(p.env_keys),
-            .effort = cfg.thinking_effort,
+            .effort = cfg.thinking_effort orelse "",
             // Custom providers are uncatalogued; assume image input. A model
             // that rejects images surfaces the provider error as-is.
             .supports_images = true,

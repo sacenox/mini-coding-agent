@@ -6,7 +6,7 @@
 # <outdir>/frame-NNNNN.png, the final pane text in <outdir>/final.txt.
 #
 #   tools/stress.sh [-d seconds] [-r fps] [-o outdir] [-C cwd]
-#                   [-b mza] [-n name] [-p prompt]
+#                   [-b mini] [-n name] [-p prompt]
 
 set -euo pipefail
 
@@ -14,7 +14,7 @@ fps=15
 seconds=300
 name="stress-$$"
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-bin=$here/../zig-out/bin/mza
+bin=$here/../zig-out/bin/mini
 cwd=$PWD
 out=
 prompt="Research this repo then create /tmp/my-review.html"
@@ -24,9 +24,9 @@ usage() {
 usage: stress.sh [options]
   -d seconds  how long to capture (default 300)
   -r fps      capture rate (default 15)
-  -o outdir   where frames go (default /tmp/mz-stress-<stamp>)
-  -C cwd      working directory mza runs in (default $PWD)
-  -b path     mza binary (default ../zig-out/bin/mza)
+  -o outdir   where frames go (default /tmp/mini-stress-<stamp>)
+  -C cwd      working directory mini runs in (default $PWD)
+  -b path     mini binary (default ../zig-out/bin/mini)
   -n name     kitty session name (default stress-$$)
   -p prompt   what to type (default: review this repo into /tmp/my-review.html)
 EOF
@@ -56,10 +56,10 @@ if [[ ! -x $bin ]]; then
 fi
 bin=$(readlink -f -- "$bin")
 cwd=$(cd -- "$cwd" && pwd)
-out=${out:-/tmp/mz-stress-$(date +%Y%m%d-%H%M%S)}
+out=${out:-/tmp/mini-stress-$(date +%Y%m%d-%H%M%S)}
 mkdir -p -- "$out"
 out=$(readlink -f -- "$out")
-socket=/tmp/mz-$name.sock
+socket=/tmp/mini-$name.sock
 
 now_us() {
     local t=${EPOCHREALTIME/,/.}
@@ -79,15 +79,15 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 1' INT TERM
 
-# The shell stays alive after mza exits so the window holds the crash for
+# The shell stays alive after mini exits so the window holds the crash for
 # inspection, and so the exit status can be read back off the pane.
-printf -v launch 'cd %q; %q; printf "\nMZA-EXIT %%d\n" $?; exec sleep 86400' "$cwd" "$bin"
+printf -v launch 'cd %q; %q; printf "\nMINI-EXIT %%d\n" $?; exec sleep 86400' "$cwd" "$bin"
 
 rm -f -- "$socket"
 kitty --detach --listen-on "unix:$socket" \
     -o allow_remote_control=yes -o remember_window_size=no \
     -o initial_window_width=100c -o initial_window_height=30c \
-    --title "mz-$name" \
+    --title "mini-$name" \
     bash --norc --noprofile -c "$launch"
 
 for _ in $(seq 100); do
@@ -102,11 +102,11 @@ fi
 
 # The banner lands in scrollback, not the live region, so wait on all of it.
 for _ in $(seq 300); do
-    pane all | grep -q 'mini-z-agent' && break
+    pane all | grep -q 'mini ·' && break
     sleep 0.1
 done
-if ! pane all | grep -q 'mini-z-agent'; then
-    echo "stress: mza did not start; pane says:" >&2
+if ! pane all | grep -q 'mini ·'; then
+    echo "stress: mini did not start; pane says:" >&2
     pane all >&2
     exit 1
 fi
@@ -133,8 +133,8 @@ while :; do
     now=$(now_us)
     if (( now - checked >= 1000000 )); then
         checked=$now
-        if pane screen | grep -q 'MZA-EXIT'; then
-            end_reason=$(pane screen | grep -o 'MZA-EXIT -\?[0-9]*' | tail -n1)
+        if pane screen | grep -q 'MINI-EXIT'; then
+            end_reason=$(pane screen | grep -o 'MINI-EXIT -\?[0-9]*' | tail -n1)
             break
         fi
     fi
@@ -152,5 +152,5 @@ pane screen > "$out/final-screen.txt" || true
 echo "stress: $frames frames in $(( elapsed / 1000000 ))s (target ${fps}fps, got $(awk "BEGIN { printf \"%.1f\", $frames * 1000000 / $elapsed }")fps)"
 if [[ -n $end_reason ]]; then
     echo "stress: ended early: $end_reason"
-    [[ $end_reason == 'MZA-EXIT 0' ]] || exit 1
+    [[ $end_reason == 'MINI-EXIT 0' ]] || exit 1
 fi

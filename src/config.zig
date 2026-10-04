@@ -1,6 +1,7 @@
-//! Global config: `$XDG_CONFIG_HOME/mini-coder/config.json` (or the equivalent
+//! Config: `$XDG_CONFIG_HOME/mini-coding-agent/config.json` (or the equivalent
 //! under `$HOME`). Every user-facing behavior that can vary comes from here,
-//! with a sane default. There is no project-local config.
+//! with a sane default. There is no project-local config. A `-c`/`--config`
+//! file is read after the global one and overrides its keys.
 
 const std = @import("std");
 const platform = @import("platform.zig");
@@ -27,34 +28,48 @@ pub const CustomProvider = struct {
 };
 
 pub const Config = struct {
+    /// The file `save` writes back to: the global config, or the override when
+    /// one was given on the command line.
+    path: []const u8,
     sessions_dir: []const u8,
-    auth_file: []const u8,
     system_prompt: []const u8,
     discover_agent_files: bool,
     skills_dirs: []const []const u8,
     tools: []const ToolName,
     provider: ?[]const u8,
     model: ?[]const u8,
-    thinking_effort: []const u8,
+    /// Null when unset: no reasoning parameter is sent, so the provider picks.
+    thinking_effort: ?[]const u8,
     custom_providers: []const CustomProvider,
 };
 
 const valid_efforts = [_][]const u8{ "off", "minimal", "low", "medium", "high", "xhigh", "max" };
 const valid_apis = [_][]const u8{ "openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai" };
 const known_keys = [_][]const u8{
-    "sessionsDir",    "authFile",        "systemPrompt", "discoverAgentFiles",
-    "skillsDirs",     "tools",           "provider",     "model",
-    "thinkingEffort", "customProviders",
+    "sessionsDir", "systemPrompt",   "discoverAgentFiles",
+    "skillsDirs",  "tools",          "provider",
+    "model",       "thinkingEffort", "customProviders",
 };
 
 fn configDir(a: std.mem.Allocator) []const u8 {
     const base = platform.getEnv("XDG_CONFIG_HOME") orelse
         util.join(a, &.{ platform.home() orelse "", ".config" }) catch "";
-    return util.join(a, &.{ base, "mini-coder" }) catch "mini-coder";
+    return util.join(a, &.{ base, "mini-coding-agent" }) catch "mini-coding-agent";
 }
 
 pub fn configPath(a: std.mem.Allocator) []const u8 {
     return util.join(a, &.{ configDir(a), "config.json" }) catch "config.json";
+}
+
+/// `$XDG_STATE_HOME/mini-coding-agent/sessions`, else
+/// `$HOME/.local/state/mini-coding-agent/sessions`, else the relative
+/// `sessions`. Paths are not mini-coder's cwd-relative default.
+fn sessionsDir(a: std.mem.Allocator) []const u8 {
+    const state = platform.getEnv("XDG_STATE_HOME") orelse blk: {
+        const home = platform.home() orelse return "sessions";
+        break :blk util.join(a, &.{ home, ".local/state" }) catch return "sessions";
+    };
+    return util.join(a, &.{ state, "mini-coding-agent/sessions" }) catch "sessions";
 }
 
 fn fail(a: std.mem.Allocator, path: []const u8, comptime fmt: []const u8, args: anytype) error{InvalidConfig} {
@@ -127,8 +142,10 @@ fn parseCustomProviders(a: std.mem.Allocator, obj: std.json.ObjectMap, path: []c
         const p = item.object;
         const id = (try strField(a, p, "id", path)) orelse
             return fail(a, path, "\"customProviders[{d}].id\" is required", .{i});
+        if (id.len == 0) return fail(a, path, "\"customProviders[{d}].id\" must not be empty", .{i});
         const base_url = (try strField(a, p, "baseUrl", path)) orelse
             return fail(a, path, "\"customProviders[{d}].baseUrl\" is required", .{i});
+        if (base_url.len == 0) return fail(a, path, "\"customProviders[{d}].baseUrl\" must not be empty", .{i});
         const api = (try strField(a, p, "api", path)) orelse
             return fail(a, path, "\"customProviders[{d}].api\" is required", .{i});
         var api_ok = false;
@@ -154,13 +171,29 @@ fn parseCustomProviders(a: std.mem.Allocator, obj: std.json.ObjectMap, path: []c
     return out.toOwnedSlice(a) catch error.OutOfMemory;
 }
 
-/// Loads the global config. A missing file yields every default. Any other
-/// read, parse, or validation failure is reported on stderr and returned.
-/// The result is allocated from `a` and lives for the process.
-pub fn load(a: std.mem.Allocator) !Config {
-    const path = configPath(a);
+/// Loads the config. The global file is always read; when `override` is given
+/// it is read after and its keys win. A missing global file means every
+/// default, but a missing override is an error. Any read, parse, or validation
+/// failure is reported on stderr and returned. The result is allocated from
+/// `a` and lives for the process.
+pub fn load(a: std.mem.Allocator, override: ?[]const u8) !Config {
+    var cfg = try defaults(a);
+    try readInto(a, configPath(a), false, &cfg);
+
+    if (override) |path| {
+        cfg.path = path;
+        try readInto(a, path, true, &cfg);
+    }
+    return cfg;
+}
+
+fn readInto(a: std.mem.Allocator, path: []const u8, required: bool, cfg: *Config) !void {
     const text = util.readFileAlloc(a, path, 1 << 20) catch |e| switch (e) {
-        error.FileNotFound => return defaults(a),
+        error.FileNotFound => {
+            if (!required) return;
+            platform.printErr("config {s}: no such file\n", .{path});
+            return error.InvalidConfig;
+        },
         else => {
             platform.printErr("config {s}: {s}\n", .{ path, @errorName(e) });
             return error.InvalidConfig;
@@ -182,9 +215,7 @@ pub fn load(a: std.mem.Allocator) !Config {
         if (!known) return fail(a, path, "unknown key \"{s}\"", .{entry.key_ptr.*});
     }
 
-    var cfg = try defaults(a);
     if (try strField(a, obj, "sessionsDir", path)) |v| cfg.sessions_dir = v;
-    if (try strField(a, obj, "authFile", path)) |v| cfg.auth_file = v;
     if (try strField(a, obj, "systemPrompt", path)) |v| cfg.system_prompt = v;
     if (try strField(a, obj, "provider", path)) |v| cfg.provider = v;
     if (try strField(a, obj, "model", path)) |v| cfg.model = v;
@@ -200,7 +231,6 @@ pub fn load(a: std.mem.Allocator) !Config {
         if (!ok) return fail(a, path, "unknown thinkingEffort \"{s}\"", .{v});
         cfg.thinking_effort = v;
     }
-    return cfg;
 }
 
 /// The subset of config a TUI command persists. `null` leaves a key alone.
@@ -211,14 +241,14 @@ pub const Update = struct {
 };
 
 /// Merges `update` into the on-disk config, preserving every other key. The
-/// merge is textual: the existing file is parsed, the changed keys replaced,
-/// and the whole object written back to `config.json`.
-pub fn save(a: std.mem.Allocator, update: Update) !void {
+/// merge is textual: the file at `cfg.path` is parsed, the changed keys
+/// replaced, and the whole object written back.
+pub fn save(a: std.mem.Allocator, cfg: *const Config, update: Update) !void {
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
     const tmp = arena.allocator();
 
-    const path = configPath(a);
+    const path = cfg.path;
     var root: std.json.Value = .{ .object = std.json.ObjectMap.empty };
     if (util.readFileAlloc(tmp, path, 1 << 20)) |text| {
         const parsed = std.json.parseFromSliceLeaky(std.json.Value, tmp, text, .{}) catch
@@ -242,17 +272,16 @@ pub fn save(a: std.mem.Allocator, update: Update) !void {
 }
 
 fn defaults(a: std.mem.Allocator) !Config {
-    const cwd = try std.process.currentPathAlloc(platform.io, a);
     return .{
-        .sessions_dir = try util.join(a, &.{ cwd, "sessions" }),
-        .auth_file = try util.join(a, &.{ configDir(a), "auth.json" }),
+        .path = configPath(a),
+        .sessions_dir = sessionsDir(a),
         .system_prompt = "",
         .discover_agent_files = true,
         .skills_dirs = &.{},
         .tools = &.{ .edit, .read, .bash },
         .provider = null,
         .model = null,
-        .thinking_effort = "medium",
+        .thinking_effort = null,
         .custom_providers = &.{},
     };
 }

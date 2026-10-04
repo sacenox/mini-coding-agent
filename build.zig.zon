@@ -1,7 +1,7 @@
 .{
-    .name = .mza,
+    .name = .mini_coding_agent,
     .version = "0.1.0",
-    .fingerprint = 0x502b41d3b0515574,
+    .fingerprint = 0xcd9f17f042740125,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .tree_sitter = .{
