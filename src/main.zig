@@ -11,6 +11,26 @@ const types = @import("types.zig");
 const agent = @import("agent.zig");
 const tools = @import("tools/index.zig");
 const tui = @import("tui/tui.zig");
+const term = @import("tui/term.zig");
+
+/// The terminal is process-wide state, so its reset is too: a panic or a
+/// segfault must hand the tty back before the process dies, exactly as the
+/// signal and exit paths do. Both handlers below are allocation-free.
+pub const panic = std.debug.FullPanic(panicRestore);
+
+fn panicRestore(msg: []const u8, ra: ?usize) noreturn {
+    term.restore();
+    std.debug.defaultPanic(msg, ra);
+}
+
+/// `std.debug` routes SEGV/ILL/BUS/FPE here when the root file declares it, so
+/// a crash in the allocator or a bad pointer cannot leave the tty raw either.
+pub const debug = struct {
+    pub fn handleSegfault(addr: ?usize, name: []const u8, ctx: ?std.debug.CpuContextPtr) noreturn {
+        term.restore();
+        std.debug.defaultHandleSegfault(addr, name, ctx);
+    }
+};
 
 var cancel = std.atomic.Value(bool).init(false);
 

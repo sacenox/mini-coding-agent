@@ -1,6 +1,11 @@
 const std = @import("std");
 const platform = @import("../platform.zig");
 
+/// Emitted when the terminal is handed back: kitty keyboard protocol off inside
+/// its push/pop stack, then bracketed paste off.
+const EXIT_SEQUENCE = "\x1b[<u\x1b[?2004l";
+const ENTER_SEQUENCE = "\x1b[?2004h\x1b[>1u\x1b[?u";
+
 pub const Key = union(enum) {
     text: []const u8,
     submit,
@@ -266,9 +271,33 @@ fn normalizePaste(a: std.mem.Allocator, text: []const u8) []const u8 {
     return out.items;
 }
 
+/// The mode the tty was in before we took it, reachable without a `Terminal`
+/// instance: the exit-signal handler and the panic handler must be able to
+/// restore it while the `Tui` that owns the terminal is out of reach, and
+/// neither of them may allocate.
+var saved: std.posix.termios = undefined;
+/// Set once the mode has been switched, cleared by the restore itself, so a
+/// signal and the exit path cannot both put the mode back.
+var raw_mode = std.atomic.Value(bool).init(false);
+/// Set once the enter sequences have been written, cleared by the restore.
+var entered = std.atomic.Value(bool).init(false);
+
+/// Writes bytes straight to the tty. The `Io` machinery is not safe to use from
+/// a signal handler; `write` is.
+fn writeRaw(bytes: []const u8) void {
+    _ = std.posix.system.write(std.posix.STDOUT_FILENO, bytes.ptr, bytes.len);
+}
+
+/// Puts the terminal back the way it was found: mode first, then the exit
+/// sequences. Idempotent, allocation-free, and safe to call from a signal
+/// handler or a panic handler; whichever of the two gets there first does the
+/// work, and the exit path's later call is a no-op.
+pub fn restore() void {
+    if (raw_mode.swap(false, .seq_cst)) std.posix.tcsetattr(std.posix.STDIN_FILENO, .NOW, saved) catch {};
+    if (entered.swap(false, .seq_cst)) writeRaw(EXIT_SEQUENCE);
+}
+
 pub const Terminal = struct {
-    original: std.posix.termios = undefined,
-    raw: bool = false,
     started: bool = false,
     winsize: [2]usize = .{ 80, 24 },
 
@@ -300,8 +329,8 @@ pub const Terminal = struct {
         self.started = true;
         self.refreshSize();
         if (std.Io.File.stdin().isTty(platform.io) catch false) {
-            self.original = std.posix.tcgetattr(std.posix.STDIN_FILENO) catch return;
-            var raw = self.original;
+            const original = std.posix.tcgetattr(std.posix.STDIN_FILENO) catch return;
+            var raw = original;
             raw.lflag.ICANON = false;
             raw.lflag.ECHO = false;
             raw.lflag.ISIG = false;
@@ -311,20 +340,25 @@ pub const Terminal = struct {
             raw.oflag.OPOST = false;
             raw.cc[@intFromEnum(std.posix.V.MIN)] = 1;
             raw.cc[@intFromEnum(std.posix.V.TIME)] = 0;
-            std.posix.tcsetattr(std.posix.STDIN_FILENO, .NOW, raw) catch {};
-            self.raw = true;
+            // The saved mode is published before the switch, so a signal that
+            // arrives mid-`tcsetattr` can still undo it.
+            saved = original;
+            raw_mode.store(true, .seq_cst);
+            std.posix.tcsetattr(std.posix.STDIN_FILENO, .NOW, raw) catch {
+                raw_mode.store(false, .seq_cst);
+                return;
+            };
         }
-        platform.writeOut("\x1b[?2004h\x1b[>1u\x1b[?u");
+        // Published before the write: a signal between the two must not skip
+        // the exit sequences.
+        entered.store(true, .seq_cst);
+        platform.writeOut(ENTER_SEQUENCE);
     }
 
     pub fn stop(self: *Terminal) void {
         if (!self.started) return;
         self.started = false;
-        platform.writeOut("\x1b[<u\x1b[?2004l");
-        if (self.raw) {
-            std.posix.tcsetattr(std.posix.STDIN_FILENO, .NOW, self.original) catch {};
-            self.raw = false;
-        }
+        restore();
     }
 
     pub fn write(self: *Terminal, text: []const u8) void {

@@ -27,6 +27,10 @@ const SPINNER_MS = 120;
 const BODY_PREFIX = " | ";
 const ERROR_PREFIX = " ! ";
 
+/// Lines of scrollback kept in memory so a resize can re-wrap them. Rows are
+/// rebuilt from these, so the value bounds the memory a session can hold.
+const HISTORY_LINES = 1000;
+
 /// Display-only elision for tool bodies; `edit` diffs are always shown in full.
 const MAX_BODY_ROWS = 12;
 const ELIDED_HEAD = 4;
@@ -316,7 +320,10 @@ fn onWinch(_: std.posix.SIG) callconv(.c) void {
 }
 
 /// A signal that must restore the terminal before the process ends.
+/// The restore happens here, not in the event loop: a signal that arrives while
+/// the loop is blocked on a prompt or a lock must not leave the tty raw.
 fn onExitSignal(_: std.posix.SIG) callconv(.c) void {
+    term.restore();
     exit_flag.store(true, .seq_cst);
 }
 
@@ -365,6 +372,7 @@ const Tui = struct {
     abort: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     scroll: std.ArrayList(u8) = .empty,
+    history: std.ArrayList([]const u8) = .empty,
     wrote: bool = false,
     last_blank: bool = false,
     separator: bool = false,
@@ -435,15 +443,53 @@ const Tui = struct {
         const blank = clean.len == 0 or (self.separator and self.wrote);
         self.separator = false;
         if (blank and self.wrote and !self.last_blank) {
+            self.history.append(platform.gpa, "") catch {};
+            self.capHistory();
             self.scroll.appendSlice(self.a, paintRow(self.sa, "")) catch {};
             self.scroll.appendSlice(self.a, "\r\n") catch {};
             self.last_blank = true;
         }
         if (clean.len != 0) {
+            // `clean` may point at scratch or at the agent's event buffer, both
+            // of which are reset before a resize can read this line back, so
+            // the history keeps a copy or drops the line.
+            if (platform.gpa.dupe(u8, clean)) |owned| {
+                if (self.history.append(platform.gpa, owned)) |_| self.capHistory() else |_| platform.gpa.free(owned);
+            } else |_| {}
             self.scroll.appendSlice(self.a, paintRow(self.sa, clean)) catch {};
             self.scroll.appendSlice(self.a, "\r\n") catch {};
             self.wrote = true;
             self.last_blank = false;
+        }
+        self.dirty = true;
+    }
+
+    /// Drops the oldest history line past the cap. Both the list and its
+    /// strings use the process allocator, not a session arena, so an evicted
+    /// line's memory comes back and a long session stays bounded.
+    fn capHistory(self: *Tui) void {
+        while (self.history.items.len > HISTORY_LINES) {
+            const old = self.history.orderedRemove(0);
+            if (old.len > 0) platform.gpa.free(old);
+        }
+    }
+
+    /// Rebuilds the whole scrollback at the current width. The terminal cannot
+    /// reflow rows it has already been given, so the history is re-wrapped and
+    /// the screen is rewritten from scratch; the terminal's own scrollback is
+    /// dropped too, since it holds the old, narrow rendering.
+    fn reflow(self: *Tui) void {
+        self.term.refreshSize();
+        self.live.rows = 0;
+        self.live.cursor_up = 0;
+        self.scroll.clearRetainingCapacity();
+        self.term.write("\x1b[2J\x1b[3J\x1b[H");
+        const width = @max(self.term.width(), 1);
+        for (self.history.items) |line| {
+            for (render.wrapLine(self.s, line, width)) |row| {
+                self.scroll.appendSlice(self.a, paintRow(self.sa, row)) catch {};
+                self.scroll.appendSlice(self.a, "\r\n") catch {};
+            }
         }
         self.dirty = true;
     }
@@ -1149,6 +1195,7 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
     self.bindAllocators();
 
     self.term.start();
+    defer self.term.stop();
     const act = std.posix.Sigaction{
         .handler = .{ .handler = onWinch },
         .mask = std.posix.sigemptyset(),
@@ -1162,6 +1209,8 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
     };
     std.posix.sigaction(std.posix.SIG.TERM, &term_act, null);
     std.posix.sigaction(std.posix.SIG.INT, &term_act, null);
+    std.posix.sigaction(std.posix.SIG.HUP, &term_act, null);
+    std.posix.sigaction(std.posix.SIG.QUIT, &term_act, null);
 
     self.pushBanner();
     self.draw();
@@ -1216,10 +1265,7 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
             self.dirty = true;
         }
 
-        if (resize_flag.swap(false, .seq_cst)) {
-            self.term.refreshSize();
-            self.dirty = true;
-        }
+        if (resize_flag.swap(false, .seq_cst)) self.reflow();
         if (exit_flag.swap(false, .seq_cst)) self.exit();
 
         const now = util.nowMs();
