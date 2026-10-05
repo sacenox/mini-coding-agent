@@ -1,14 +1,8 @@
-//! Anthropic Messages API streaming adapter. The wire format behind every
-//! customProvider with api "anthropic-messages".
-
 const std = @import("std");
 const api = @import("../api.zig");
 const types = @import("../types.zig");
 
 const anthropic_version = "2023-06-01";
-
-// ---- request building -----------------------------------------------------
-
 
 const ImageSource = struct {
     @"type": []const u8 = "base64",
@@ -36,7 +30,6 @@ const ToolUseBlock = struct {
     input: api.Raw,
 };
 
-/// One block of a tool_result's content: text or an image.
 const ResultContent = union(enum) {
     text: TextBlock,
     image: ImageBlock,
@@ -48,8 +41,6 @@ const ResultContent = union(enum) {
     }
 };
 
-/// A tool result as one block of a user message. Its content is a string when
-/// there is only text, and an array when images must ride along.
 const ToolResultBlock = struct {
     @"type": []const u8 = "tool_result",
     @"tool_use_id": []const u8,
@@ -68,9 +59,6 @@ const ToolResultBlock = struct {
     };
 };
 
-/// A content block of an assistant turn. A thinking block carries its
-/// signature back so the provider's continuation data survives the round trip;
-/// a thinking block without one becomes plain text.
 const AssistantBlock = union(enum) {
     text: TextBlock,
     thinking: ThinkingBlock,
@@ -94,8 +82,6 @@ const AssistantMessage = struct {
     content: []const AssistantBlock,
 };
 
-/// One entry of the `messages` array: a user turn (with tool results) or an
-/// assistant turn.
 const Message = union(enum) {
     user_text: struct { role: []const u8 = "user", content: []const TextBlock },
     user_results: struct { role: []const u8 = "user", content: []const ToolResultBlock },
@@ -120,8 +106,6 @@ const Body = struct {
     tools: ?api.Tools = null,
 };
 
-/// Anthropic thinking budget per effort. Anthropic requires max_tokens to
-/// exceed the budget, so the caller raises max_tokens when it does not.
 fn budgetFor(effort: []const u8) u64 {
     const map = .{
         .{ "minimal", 1024 },
@@ -174,7 +158,6 @@ fn buildMessages(a: std.mem.Allocator, req: api.Request) ![]const Message {
     var i: usize = 0;
     while (i < req.messages.len) {
         if (req.messages[i] == .tool_result) {
-            // Every result of one assistant turn shares a single user message.
             var blocks: std.ArrayList(ToolResultBlock) = .empty;
             while (i < req.messages.len and req.messages[i] == .tool_result) : (i += 1) {
                 const t = req.messages[i].tool_result;
@@ -225,15 +208,12 @@ fn buildBody(req: api.Request) ![]u8 {
     return std.json.Stringify.valueAlloc(a, body, .{ .emit_null_optional_fields = false });
 }
 
-// ---- streaming state ------------------------------------------------------
-
 const BlockKind = enum { text, thinking, tool };
 
 const Block = struct {
     kind: BlockKind = .text,
     text: std.ArrayList(u8) = .empty,
     signature: std.ArrayList(u8) = .empty,
-    /// The call this block's arguments belong to, when `kind` is `.tool`.
     call: usize = 0,
 };
 
@@ -286,7 +266,6 @@ const State = struct {
     usage: types.Usage = .{},
     stop_reason: ?[]const u8 = null,
     stream_error: ?[]const u8 = null,
-    /// Set by `run` when the stream did not run to completion.
     failed: bool = false,
 
     pub fn handle(st: *State, chunk: Chunk) !void {
@@ -383,8 +362,6 @@ const State = struct {
     }
 };
 
-/// A stream that produced finished calls is a tool turn, not a stop. A broken
-/// stream reports none, and `run` restores the transport's own reason.
 fn mapStopReason(st: *State, has_calls: bool) void {
     if (has_calls) {
         st.msg.stop_reason = .tool_use;

@@ -88,8 +88,6 @@ pub const MarkdownStream = struct {
         self.prose.append(self.a, line) catch {};
     }
 
-    /// Emits the held prose as one text so the grammar sees whole blocks, then
-    /// hands back the lines. `tail` is the still incomplete line closing it.
     fn releaseProse(self: *MarkdownStream, tail: []const u8, out: *std.ArrayList(BodyLine)) void {
         var prose = self.prose;
         self.prose = .empty;
@@ -147,8 +145,6 @@ pub const MarkdownStream = struct {
     }
 };
 
-/// Splits highlighted text into lines, moving the trailing close back onto the
-/// last line so the block ends plain without emitting an empty row.
 fn emitHighlighted(a: std.mem.Allocator, text: []const u8, out: *std.ArrayList(BodyLine)) void {
     const nl = std.mem.lastIndexOfScalar(u8, text, '\n') orelse {
         out.append(a, .{ .text = text }) catch {};

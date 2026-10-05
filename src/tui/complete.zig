@@ -8,7 +8,6 @@ fn pathLike(word: []const u8) bool {
     if (std.mem.startsWith(u8, word, "./") or std.mem.startsWith(u8, word, "../")) return true;
     if (std.mem.eql(u8, word, ".") or std.mem.eql(u8, word, "..")) return true;
     if (std.mem.indexOfScalar(u8, word, '/')) |slash| {
-        // a segment followed by a slash somewhere
         return slash > 0;
     }
     return false;
@@ -20,7 +19,6 @@ pub fn commonPrefix(a: []const u8, b: []const u8) []const u8 {
     return a[0..i];
 }
 
-/// Completes `word` as a file path. Returns the whole completed word, or null.
 pub fn completePath(word: []const u8) ?[]const u8 {
     if (!pathLike(word)) return null;
     const a = platform.gpa;

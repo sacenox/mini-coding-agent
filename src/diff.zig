@@ -1,6 +1,3 @@
-//! Unified diffs: an `Index:` line and a `---`/`+++` header pair, then hunks
-//! with three lines of context. Display-only.
-
 const std = @import("std");
 
 const context = 3;
@@ -8,7 +5,6 @@ const max_trace_bytes = 64 << 20;
 
 const Line = struct {
     p: []const u8,
-    /// The line ended with a newline.
     nl: bool,
 };
 
@@ -27,13 +23,10 @@ fn splitLines(a: std.mem.Allocator, text: []const u8) ![]Line {
     return out.toOwnedSlice(a);
 }
 
-/// A line is its text plus whether it ended with a newline: a final line
-/// without one is a different line from the same text with one.
 fn lineEq(x: Line, y: Line) bool {
     return x.nl == y.nl and x.p.len == y.p.len and std.mem.eql(u8, x.p, y.p);
 }
 
-/// Myers O(ND) diff over line arrays, producing an in-order edit script.
 fn myers(a: std.mem.Allocator, la: []const Line, lb: []const Line) ![]Op {
     const n = la.len;
     const m = lb.len;
@@ -92,7 +85,6 @@ fn myers(a: std.mem.Allocator, la: []const Line, lb: []const Line) ![]Op {
     }
 
     if (found_d == null) {
-        // Trace budget exceeded: fall back to a coarse replacement.
         for (la) |l| try ops.append(a, .{ .kind = .del, .line = l });
         for (lb) |l| try ops.append(a, .{ .kind = .ins, .line = l });
         return ops.toOwnedSlice(a);
@@ -137,8 +129,6 @@ fn addRange(w: *std.Io.Writer, start: usize, count: usize) !void {
     }
 }
 
-/// A unified diff of two in-memory texts with the header a working-tree patch
-/// carries. The result is allocated from `a`.
 pub fn unified(a: std.mem.Allocator, path: []const u8, before: []const u8, after: []const u8) ![]u8 {
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();

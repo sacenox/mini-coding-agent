@@ -1,14 +1,7 @@
-//! Google Generative AI (Gemini) streaming adapter. The wire format behind
-//! every customProvider with api "google-generative-ai".
-
 const std = @import("std");
 const api = @import("../api.zig");
 const types = @import("../types.zig");
 
-// ---- request building -----------------------------------------------------
-
-/// A part of a content object. Exactly one member is set; the rest are null
-/// and are left out.
 const Part = struct {
     text: ?[]const u8 = null,
     @"inlineData": ?struct { @"mimeType": []const u8, data: []const u8 } = null,
@@ -67,8 +60,6 @@ fn contentParts(a: std.mem.Allocator, msg: types.Message) ![]const Part {
     }
 }
 
-/// A run of tool results becomes one user turn of functionResponse parts. The
-/// response key is "error" when the tool failed and "output" otherwise.
 fn toolResultContent(a: std.mem.Allocator, run: []const types.Message) !Content {
     const parts = try a.alloc(Part, run.len);
     for (run, parts) |msg, *part| {
@@ -101,7 +92,6 @@ fn buildContents(a: std.mem.Allocator, req: api.Request) ![]const Content {
     return out.items;
 }
 
-/// Thinking budget per effort. `off` disables thinking entirely.
 fn budgetFor(effort: []const u8) ?u64 {
     const map = .{
         .{ "off", 0 },
@@ -145,9 +135,6 @@ fn buildBody(req: api.Request) ![]u8 {
     return std.json.Stringify.valueAlloc(a, body, .{ .emit_null_optional_fields = false });
 }
 
-/// Google addresses a model by path, not by a query parameter, and streams
-/// through `:streamGenerateContent`. A model id that already names its path is
-/// not prefixed twice.
 fn buildUrl(a: std.mem.Allocator, req: api.Request) ![]u8 {
     const model = if (std.mem.startsWith(u8, req.model.id, "models/"))
         req.model.id
@@ -158,8 +145,6 @@ fn buildUrl(a: std.mem.Allocator, req: api.Request) ![]u8 {
         model,
     });
 }
-
-// ---- streaming state ------------------------------------------------------
 
 const Chunk = struct {
     @"error": ?api.ErrField = null,
@@ -198,7 +183,6 @@ const State = struct {
     usage: types.Usage = .{},
     finish: ?[]const u8 = null,
     stream_error: ?[]const u8 = null,
-    /// Set by `run` when the stream did not run to completion.
     failed: bool = false,
 
     pub fn handle(st: *State, chunk: Chunk) !void {
@@ -240,8 +224,6 @@ const State = struct {
     }
 };
 
-/// Google sends a whole call in one part, so a call is appended, not grown in
-/// place. The id is derived from the name and order because Google omits one.
 fn addCall(st: *State, part: Chunk.Piece) !void {
     const fc = part.@"functionCall" orelse return;
     const call = try st.calls.addOne(st.req.pers);

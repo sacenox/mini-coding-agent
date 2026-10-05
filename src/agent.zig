@@ -1,7 +1,3 @@
-//! The agent loop: one turn, no compaction, no retries, no meta-messages.
-//! Provider errors surface as-is. Every event reaches a listener; the headless
-//! projection and the TUI are both listeners and own no agent semantics.
-
 const std = @import("std");
 const types = @import("types.zig");
 const api = @import("api.zig");
@@ -36,9 +32,6 @@ pub const Listener = struct {
     }
 };
 
-/// How the agent reaches the projection while a turn is in flight. Headless
-/// passes `null`; the TUI supplies its own. `request_steering` blocks the turn
-/// thread until the user submits a line or the turn is cancelled.
 pub const Interaction = struct {
     ctx: *anyopaque,
     is_pause_requested: *const fn (ctx: *anyopaque) bool,
@@ -57,11 +50,9 @@ pub const Interaction = struct {
 };
 
 pub const Options = struct {
-    /// Long-lived allocator for the transcript and its messages.
     a: std.mem.Allocator,
     model: ?*const types.Model,
     system_prompt: []const u8,
-    /// Counts of the discovered files in the system prompt.
     loaded: struct { agent_files: usize = 0, skills: usize = 0 } = .{},
     tools_json: []const u8,
     supports_images: bool,
@@ -91,8 +82,6 @@ fn onToolOutput(ctx: *anyopaque, chunk: []const u8) void {
     listener.emit(.{ .tool_output = chunk });
 }
 
-/// Appends a user message the model reads at the next step boundary. A
-/// persistence failure is returned so the caller can surface it and stop.
 fn steer(opts: Options, messages: *std.ArrayList(types.Message), content: []const u8) !void {
     if (content.len == 0) return;
     const message = types.Message{ .user = .{ .content = content, .timestamp = util.nowMs() } };
@@ -100,8 +89,6 @@ fn steer(opts: Options, messages: *std.ArrayList(types.Message), content: []cons
     try opts.session.appendMessage(opts.a, message);
 }
 
-/// Returns the steering typed while paused, or "" when there was no pause;
-/// null once the turn has been cancelled.
 fn pauseStep(run: Run) ?[]const u8 {
     if (run.opts.cancel.load(.acquire)) return null;
     const interaction = run.interaction orelse return "";
@@ -121,9 +108,6 @@ const Run = struct {
     listener: Listener,
 };
 
-/// Runs one turn to completion, appending to `messages`. Returns after the
-/// model stops without tool calls, after a cancellation, or after an error;
-/// every outcome is reported through the listener.
 pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interaction: ?Interaction, listener: Listener) void {
     const run = Run{ .opts = opts, .messages = messages, .interaction = interaction, .listener = listener };
 
@@ -139,8 +123,6 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
         _ = arena.reset(.retain_capacity);
         const scratch = arena.allocator();
 
-        // Cancellation and steering land at the step boundary, never between an
-        // assistant turn and its tool results.
         const steering = pauseStep(run) orelse {
             listener.emit(.cancelled);
             return;
@@ -211,9 +193,6 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
             return;
         }
 
-        // Steering is held until every result of this assistant turn has
-        // landed: the provider rejects a user message between an assistant
-        // turn and its tool results.
         var held: std.ArrayList([]const u8) = .empty;
         defer held.deinit(opts.a);
         for (assistant.content.items) |block| {
@@ -272,7 +251,6 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
     }
 }
 
-/// Joins held steering lines with newlines, so the next step sees one message.
 fn tryJoin(a: std.mem.Allocator, parts: []const []const u8) std.mem.Allocator.Error![]const u8 {
     if (parts.len == 0) return "";
     if (parts.len == 1) return parts[0];

@@ -1,6 +1,3 @@
-//! The `edit` tool: exact text replacement in a file, or creation when oldText
-//! is empty. Returns the unified diff of the change as part of its text.
-
 const std = @import("std");
 const util = @import("../util.zig");
 const platform = @import("../platform.zig");

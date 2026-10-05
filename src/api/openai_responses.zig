@@ -1,15 +1,7 @@
-//! OpenAI Responses API streaming adapter. The wire format behind every
-//! customProvider with api "openai-responses".
-
 const std = @import("std");
 const api = @import("../api.zig");
 const types = @import("../types.zig");
 
-// ---- request building -----------------------------------------------------
-
-/// One entry of the `input` array. A user message is a `message` with a
-/// `content` part; an assistant's own blocks are a `message` of `output_text`
-/// parts and `function_call` entries.
 const InputPart = struct {
     @"type": []const u8,
     text: ?[]const u8 = null,
@@ -79,7 +71,6 @@ fn buildInput(a: std.mem.Allocator, req: api.Request) ![]const InputItem {
 
 fn buildBody(req: api.Request) ![]u8 {
     const a = req.scratch;
-    // OpenAI Responses rejects max_output_tokens below 16.
     const max_tokens: ?u64 = if (req.model.max_tokens > 0)
         (if (req.model.max_tokens > 16) req.model.max_tokens else 16)
     else
@@ -101,8 +92,6 @@ fn buildBody(req: api.Request) ![]u8 {
     };
     return std.json.Stringify.valueAlloc(a, body, .{ .emit_null_optional_fields = false });
 }
-
-// ---- streaming state ------------------------------------------------------
 
 const Chunk = struct {
     @"type": ?[]const u8 = null,
@@ -154,7 +143,6 @@ const State = struct {
     status: ?[]const u8 = null,
     incomplete: ?[]const u8 = null,
     stream_error: ?[]const u8 = null,
-    /// Set by `run` when the stream did not run to completion.
     failed: bool = false,
 
     pub fn handle(st: *State, chunk: Chunk) !void {
@@ -278,8 +266,6 @@ fn finalize(st: *State) !void {
     if (st.reasoning.items.len > 0) try st.msg.content.append(a, .{ .thinking = .{ .text = st.reasoning.items } });
     if (st.text.items.len > 0) try st.msg.content.append(a, .{ .text = st.text.items });
 
-    // A broken stream leaves arguments truncated; running them would be a
-    // call the model never finished making.
     const has_calls = try api.appendCalls(st.msg, st.sink, a, st.calls.items, st.failed);
 
     var usage = st.usage;

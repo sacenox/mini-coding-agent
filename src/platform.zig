@@ -1,9 +1,3 @@
-//! Process-wide handles, set once at startup and never mutated.
-//!
-//! These are the only globals in the program: the IO implementation, the
-//! long-lived allocator, the environment, and the command line. Everything
-//! else is threaded explicitly by the caller.
-
 const std = @import("std");
 
 pub var io: std.Io = undefined;

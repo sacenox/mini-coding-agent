@@ -1,7 +1,3 @@
-//! Append-only JSONL session log. One record per line, fsynced on write.
-//! Committed lines are never rewritten or deleted; a write failure is returned
-//! to the caller so it can stop the turn.
-
 const std = @import("std");
 const platform = @import("platform.zig");
 const util = @import("util.zig");
@@ -9,8 +5,6 @@ const types = @import("types.zig");
 
 const alphabet = "0123456789abcdefghijklmnopqrstuvwxyz";
 
-/// A value written byte-for-byte as it stands, never re-encoded. The struct
-/// field that holds it supplies the key, so only the value is written here.
 const Raw = struct {
     bytes: []const u8 = "",
     pub fn jsonStringify(self: Raw, jws: anytype) !void {
@@ -106,8 +100,6 @@ const ToolResultRecord = struct {
     timestamp: i64,
 };
 
-/// A number written byte-for-byte, so a non-finite cost becomes `null` rather
-/// than the string `"nan"` std would emit.
 const Number = struct {
     value: f64 = 0,
     pub fn jsonStringify(self: Number, jws: anytype) !void {
@@ -196,7 +188,6 @@ pub const Request = struct {
     api: []const u8,
     thinking_effort: []const u8,
     system_prompt: []const u8,
-    /// A pre-serialized JSON array of tool schemas, written verbatim.
     tools_json: []const u8,
 };
 
@@ -204,7 +195,6 @@ pub const Session = struct {
     a: std.mem.Allocator,
     sessions_dir: []const u8,
     cwd: []const u8,
-    /// The session directory name; the header of the request carries it.
     id: ?[]const u8 = null,
     file: ?std.Io.File = null,
     closed: bool = false,
@@ -241,13 +231,11 @@ pub const Session = struct {
             .api = req.api,
             .thinkingEffort = req.thinking_effort,
             .systemPrompt = req.system_prompt,
-            // A tool array is replayed verbatim; an absent one is an empty array.
             .tools = .{ .bytes = if (req.tools_json.len > 0) req.tools_json else "[]" },
         });
         try self.commitLine(scratch, line);
     }
 
-    /// Appends the terminating newline to one serialized record and commits it.
     fn commitLine(self: *Session, scratch: std.mem.Allocator, line: []const u8) !void {
         var out: std.Io.Writer.Allocating = .init(scratch);
         defer out.deinit();
@@ -282,9 +270,6 @@ pub const Session = struct {
                 else => return e,
             };
             const log_path = try util.join(self.a, &.{ dir, "session.jsonl" });
-            // The id is published only once the log is open, so a failure here
-            // leaves the session retryable rather than naming a session whose
-            // log does not exist.
             const file = try std.Io.Dir.cwd().createFile(platform.io, log_path, .{ .truncate = false });
             self.id = name;
             self.file = file;

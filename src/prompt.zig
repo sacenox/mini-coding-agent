@@ -1,6 +1,3 @@
-//! The system prompt: the configured prompt, any discovered skills, and the
-//! opted-in agent files. Nothing else is injected.
-
 const std = @import("std");
 const platform = @import("platform.zig");
 const util = @import("util.zig");
@@ -33,7 +30,6 @@ fn discoverSkills(a: std.mem.Allocator, dirs: []const []const u8) ![]Skill {
         for (util.listDir(a, root)) |entry| {
             const path = util.join(a, &.{ root, entry, "SKILL.md" }) catch continue;
             if (!util.fileExists(path)) continue;
-            // An unreadable skill file is skipped, not fatal.
             const text = util.readFileAlloc(a, path, 1 << 20) catch continue;
             const meta = frontmatter(text);
             const name = meta.name orelse continue;
@@ -65,13 +61,10 @@ fn agentFiles(a: std.mem.Allocator) ![]const []const u8 {
     return found.items;
 }
 
-/// How many discovered files made it into the system prompt.
 pub const Loaded = struct { agent_files: usize = 0, skills: usize = 0 };
 
-/// The system prompt and the counts of the files that fed it.
 pub const Built = struct { prompt: []const u8, loaded: Loaded };
 
-/// Builds the system prompt from the config. The result lives for the process.
 pub fn buildSystemPrompt(a: std.mem.Allocator, cfg: *const config.Config) !Built {
     var sections: std.ArrayList([]const u8) = .empty;
     var loaded: Loaded = .{};

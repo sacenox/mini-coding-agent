@@ -84,9 +84,7 @@ pub const Editor = struct {
     col: usize = 0,
     scroll: usize = 0,
     width: usize = 80,
-    /// Persistent: the line buffers and anything stored in them.
     a: std.mem.Allocator,
-    /// Transient: wrap and cell computations, freed with the frame.
     s: std.mem.Allocator = undefined,
 
     pub fn init(a: std.mem.Allocator) Editor {
@@ -95,7 +93,6 @@ pub const Editor = struct {
         return e;
     }
 
-    /// The editor's text with lines joined by newlines, matching `text()`.
     pub fn contents(self: *Editor) []const u8 {
         var out: std.ArrayList(u8) = .empty;
         for (self.lines.items, 0..) |line, i| {
@@ -208,7 +205,6 @@ pub const Editor = struct {
         return out.items;
     }
 
-    /// The code point column whose cell is the last one at or before `cell`.
     fn colAtCell(self: *Editor, line: []const u8, cell: usize) usize {
         const cs = self.cells(line);
         var i = cs.len - 1;
@@ -216,10 +212,7 @@ pub const Editor = struct {
         return i;
     }
 
-    /// The wrapped row and column the caret sits at on the current line.
     fn caret(self: *Editor) struct { row: usize, col: usize } {
-        // `width` is set by `render2`; a key can arrive before the first frame,
-        // and the division below must not be by zero.
         const width = @max(self.width, 1);
         const line = self.lines.items[self.row];
         const expanded = render.expandTabs(self.s, line, TAB);
@@ -276,7 +269,6 @@ pub const Editor = struct {
         }
         const head = cat(self.a, &.{ before, first });
         const tail = cat(self.a, &.{ rest.items[rest.items.len - 1], after });
-        // Replace current line with head, then insert middles and tail.
         self.lines.items[self.row] = head;
         var insert_at = self.row + 1;
         for (rest.items[0 .. rest.items.len - 1]) |m| {
@@ -404,8 +396,6 @@ pub const Editor = struct {
         self.col = start;
     }
 
-    /// Applies `step` to the word ending at the caret; false when there is no
-    /// word before the caret.
     pub fn completeWord(self: *Editor, step: *const fn (word: []const u8) ?[]const u8) bool {
         const line = self.lines.items[self.row];
         const start = wordStart(line, self.col);

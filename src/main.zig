@@ -1,5 +1,3 @@
-//! mini: a fast, transparent, config-first terminal coding agent.
-
 const std = @import("std");
 const platform = @import("platform.zig");
 const util = @import("util.zig");
@@ -13,9 +11,6 @@ const tools = @import("tools/index.zig");
 const tui = @import("tui/tui.zig");
 const term = @import("tui/term.zig");
 
-/// The terminal is process-wide state, so its reset is too: a panic or a
-/// segfault must hand the tty back before the process dies, exactly as the
-/// signal and exit paths do. Both handlers below are allocation-free.
 pub const panic = std.debug.FullPanic(panicRestore);
 
 fn panicRestore(msg: []const u8, ra: ?usize) noreturn {
@@ -23,8 +18,6 @@ fn panicRestore(msg: []const u8, ra: ?usize) noreturn {
     std.debug.defaultPanic(msg, ra);
 }
 
-/// `std.debug` routes SEGV/ILL/BUS/FPE here when the root file declares it, so
-/// a crash in the allocator or a bad pointer cannot leave the tty raw either.
 pub const debug = struct {
     pub fn handleSegfault(addr: ?usize, name: []const u8, ctx: ?std.debug.CpuContextPtr) noreturn {
         term.restore();
@@ -65,8 +58,6 @@ fn parseArgs(a: std.mem.Allocator) !ParsedArgs {
     return result;
 }
 
-/// The headless projection: tool activity on stderr, the reply on stdout. It
-/// records only whether anything went wrong, which sets the exit code.
 const PrintCtx = struct { failed: bool = false };
 
 fn printEvent(ctx: *anyopaque, event: agent.Event) void {
@@ -115,8 +106,6 @@ fn runPrint(a: std.mem.Allocator, prompt_text: []const u8, opts: agent.Options) 
     opts.session.close();
     if (pc.failed) return 1;
 
-    // The reply is the last assistant turn's text; anything before it is a
-    // tool round trip whose output already reached stderr.
     var i = messages.items.len;
     const last = while (i > 0) {
         i -= 1;

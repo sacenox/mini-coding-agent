@@ -1,8 +1,3 @@
-//! The TUI: append-only scrollback above a bounded live region. It is one
-//! projection of the agent event stream; it owns no agent or provider
-//! semantics. The turn runs on a thread and reports through a queue; the event
-//! loop renders and reads keys.
-
 const std = @import("std");
 const platform = @import("../platform.zig");
 const util = @import("../util.zig");
@@ -21,25 +16,19 @@ const editor_mod = @import("editor.zig");
 const stream = @import("stream.zig");
 const complete = @import("complete.zig");
 
-/// Status-row spinner frames; the only animation in the TUI.
 const SPINNER = "⠀⠁⠂⠃⠄⠅⠆⠇⡀⡁⡂⡃⡄⡅⡆⡇⠈⠉⠊⠋⠌⠍⠎⠏⡈⡉⡊⡋⡌⡍⡎⡏⠐⠑⠒⠓⠔⠕⠖⠗⡐⡑⡒⡓⡔⡕⡖⡗⠘⠙⠚⠛⠜⠝⠞⠟⡘⡙⡚⡛⡜⡝⡞⡟⠠⠡⠢⠣⠤⠥⠦⠧⡠⡡⡢⡣⡤⡥⡦⡧⠨⠩⠪⠫⠬⠭⠮⠯⡨⡩⡪⡫⡬⡭⡮⡯⠰⠱⠲⠳⠴⠵⠶⠷⡰⡱⡲⡳⡴⡵⡶⡷⠸⠹⠺⠻⠼⠽⠾⠿⡸⡹⡺⡻⡼⡽⡾⡿⢀⢁⢂⢃⢄⢅⢆⢇⣀⣁⣂⣃⣄⣅⣆⣇⢈⢉⢊⢋⢌⢍⢎⢏⣈⣉⣊⣋⣌⣍⣎⣏⢐⢑⢒⢓⢔⢕⢖⢗⣐⣑⣒⣓⣔⣕⣖⣗⢘⢙⢚⢛⢜⢝⢞⢟⣘⣙⣚⣛⣜⣝⣞⣟⢠⢡⢢⢣⢤⢥⢦⢧⣠⣡⣢⣣⣤⣥⣦⣧⢨⢩⢪⢫⢬⢭⢮⢯⣨⣩⣪⣫⣬⣭⣮⣯⢰⢱⢲⢳⢴⢵⢶⢷⣰⣱⣲⣳⣴⣵⣶⣷⢸⢹⢺⢻⢼⢽⢾⢿⣸⣹⣺⣻⣼⣽⣾⣿";
 const SPINNER_MS = 120;
 const BODY_PREFIX = " | ";
 const ERROR_PREFIX = " ! ";
 
-/// Lines of scrollback kept in memory so a resize can re-wrap them. Rows are
-/// rebuilt from these, so the value bounds the memory a session can hold.
 const HISTORY_LINES = 1000;
 
-/// Display-only elision for tool bodies; `edit` diffs are always shown in full.
 const MAX_BODY_ROWS = 12;
 const ELIDED_HEAD = 4;
 const ELIDED_TAIL = 4;
 
-/// One announced call, held until its result commits the line to scrollback.
 const PendingCall = struct { name: []const u8, summary: []const u8 };
 
-/// Width every state word is padded to, so the tool heads align.
 const STATE_WIDTH = "running".len;
 const STATE_PAD = std.fmt.comptimePrint("{{s: <{d}}}", .{STATE_WIDTH});
 
@@ -47,8 +36,6 @@ fn paintRow(a: std.mem.Allocator, line: []const u8) []const u8 {
     return std.fmt.allocPrint(a, "{s}{s}\x1b[K", .{ theme.SGR_PLAIN, line }) catch line;
 }
 
-/// Wraps plain text, then styles each row: styling after the break is what lets
-/// a continuation row inherit its source line's style.
 fn styleRow(a: std.mem.Allocator, line: stream.BodyLine, width: usize) []const []const u8 {
     const safe = render.sanitize(a, line.text);
     const expanded = render.expandTabs(a, safe, 4);
@@ -60,9 +47,6 @@ fn styleRow(a: std.mem.Allocator, line: stream.BodyLine, width: usize) []const [
             continue;
         }
         const row_bg = if (line.bg) |bg| theme.sgrBg(a, bg) else theme.SGR_NORMAL_BG;
-        // The span's foreground must not hand the row's own background back to
-        // `Normal`: a diff row's tint has to cover its text, not just the cells
-        // `ESC[K` erases after it.
         const styled = if (line.style) |s| styles.styledWith(a, .{
             .fg = s.fg,
             .bg = line.bg orelse theme.current.bg,
@@ -83,7 +67,6 @@ fn renderRows(a: std.mem.Allocator, lines: []const stream.BodyLine, width: usize
     return out.items;
 }
 
-/// `renderRows` plus the display-only elision applied to long tool bodies.
 fn bodyRows(a: std.mem.Allocator, lines: []const stream.BodyLine, width: usize) []const []const u8 {
     const rows = renderRows(a, lines, width);
     if (rows.len <= MAX_BODY_ROWS) return rows;
@@ -98,8 +81,6 @@ fn callHead(a: std.mem.Allocator, name: []const u8) []const u8 {
     return styles.teal(a, std.fmt.allocPrint(a, "-> {s}", .{name}) catch "->");
 }
 
-/// The rows of one announced call: the state word and the tool head, then the
-/// arguments, wrapped at `width`.
 fn callRows(a: std.mem.Allocator, width: usize, call: PendingCall, running: bool) []const []const u8 {
     const padded = std.fmt.allocPrint(a, STATE_PAD, .{if (running) "running" else "queued"}) catch "";
     const word = if (running) styles.teal(a, padded) else styles.dim(a, padded);
@@ -124,7 +105,6 @@ fn collapseWs(a: std.mem.Allocator, s: []const u8) []const u8 {
     return out.items;
 }
 
-/// The call line's summary, from the raw arguments JSON the provider streamed.
 fn callSummary(a: std.mem.Allocator, name: []const u8, args_json: []const u8) []const u8 {
     const parsed = std.json.parseFromSliceLeaky(std.json.Value, a, args_json, .{}) catch return args_json;
     if (parsed == .object) {
@@ -152,10 +132,6 @@ fn diffLine(line: []const u8) stream.BodyLine {
     return .{ .text = line };
 }
 
-/// Styled lines for a tool call's changed files, shown in full. The patch's own
-/// `Index:`/`---`/`+++` header is dropped: the path above it carries the name.
-/// Only the opening run is dropped, so a removed line that happens to start
-/// with `---` is still shown.
 fn diffRows(a: std.mem.Allocator, diffs: []const common.FileDiff) []const stream.BodyLine {
     var out: std.ArrayList(stream.BodyLine) = .empty;
     for (diffs) |d| {
@@ -176,7 +152,6 @@ fn diffRows(a: std.mem.Allocator, diffs: []const common.FileDiff) []const stream
     return out.items;
 }
 
-/// Display rewrite of a tool result, by tool name.
 fn resultLines(a: std.mem.Allocator, name: []const u8, text: []const u8, is_error: bool) []const stream.BodyLine {
     const trimmed = std.mem.trimEnd(u8, text, " \t\r\n");
     var lines: std.ArrayList([]const u8) = .empty;
@@ -203,9 +178,6 @@ fn resultLines(a: std.mem.Allocator, name: []const u8, text: []const u8, is_erro
     return out.items;
 }
 
-// ---- token estimate (display only) --------------------------------------
-
-/// Roughly four characters per token, the usual rule of thumb.
 fn estimateTextTokens(text: []const u8) u64 {
     return (text.len + 3) / 4;
 }
@@ -226,8 +198,6 @@ fn estimateMessageTokens(m: types.Message) u64 {
     };
 }
 
-/// The last assistant turn's reported usage plus an estimate of everything
-/// after it; the whole transcript plus the prompt when there is no usage yet.
 fn estimateContextTokens(messages: []const types.Message, system_prompt: []const u8, tools_json: []const u8) u64 {
     var last_idx: ?usize = null;
     var usage: u64 = 0;
@@ -249,8 +219,6 @@ fn estimateContextTokens(messages: []const types.Message, system_prompt: []const
     return total + estimateTextTokens(system_prompt) + estimateTextTokens(tools_json);
 }
 
-/// `12k`, `1.2M`, or the plain count below a thousand. The trailing zeros the
-/// one- or two-decimal rounding leaves are trimmed back off.
 fn formatTokens(a: std.mem.Allocator, n: u64) []const u8 {
     if (n < 1000) return std.fmt.allocPrint(a, "{d}", .{n}) catch "";
     const millions = n >= 1_000_000;
@@ -272,13 +240,10 @@ fn contextUsageLine(a: std.mem.Allocator, used: u64, model: *const types.Model) 
     return if (percent >= 85) styles.yellow(a, text) else styles.dim(a, text);
 }
 
-// ---- live region ---------------------------------------------------------
-
 const LiveRegion = struct {
     rows: usize = 0,
     cursor_up: usize = 0,
 
-    /// Rows the region currently occupies on screen.
     fn clear(self: *LiveRegion, a: std.mem.Allocator) []const u8 {
         if (self.rows == 0) return "";
         var out: std.ArrayList(u8) = .empty;
@@ -310,8 +275,6 @@ const LiveRegion = struct {
     }
 };
 
-// ---- the Tui -------------------------------------------------------------
-
 var resize_flag = std.atomic.Value(bool).init(false);
 var exit_flag = std.atomic.Value(bool).init(false);
 
@@ -319,9 +282,6 @@ fn onWinch(_: std.posix.SIG) callconv(.c) void {
     resize_flag.store(true, .seq_cst);
 }
 
-/// A signal that must restore the terminal before the process ends.
-/// The restore happens here, not in the event loop: a signal that arrives while
-/// the loop is blocked on a prompt or a lock must not leave the tty raw.
 fn onExitSignal(_: std.posix.SIG) callconv(.c) void {
     term.restore();
     exit_flag.store(true, .seq_cst);
@@ -335,13 +295,10 @@ const Tui = struct {
     editor: editor_mod.Editor,
     live: LiveRegion = .{},
     messages: std.ArrayList(types.Message) = .empty,
-    /// Session-lifetime display buffers: scroll, pending calls, prompts.
     arena: std.heap.ArenaAllocator,
     a: std.mem.Allocator,
-    /// Per-frame scratch: rendering only, reset each draw and key.
     scratch: std.heap.ArenaAllocator,
     s: std.mem.Allocator,
-    /// Scrollback line buffers, freed once the frame is written.
     sarena: std.heap.ArenaAllocator,
     sa: std.mem.Allocator,
 
@@ -355,8 +312,6 @@ const Tui = struct {
     events: std.ArrayList(agent.Event) = .empty,
     batch: std.ArrayList(agent.Event) = .empty,
     event_mutex: std.Io.Mutex = .init,
-    /// Event payloads copied off the agent thread. Written and reset only while
-    /// `event_mutex` is held, so it is never touched concurrently.
     qarena: std.heap.ArenaAllocator,
     q: std.mem.Allocator,
 
@@ -389,7 +344,6 @@ const Tui = struct {
     last_input_ms: i64 = 0,
     command_active: bool = false,
 
-    // interactive prompt state: an open list prompt, and its answer slot
     prompt_open: bool = false,
     prompt_options: []const []const u8 = &.{},
     prompt_ids: []const []const u8 = &.{},
@@ -417,9 +371,6 @@ const Tui = struct {
         };
     }
 
-    /// Binds the arena allocators and the objects that allocate from them. Must
-    /// run on the final heap location: an `Allocator` captures a pointer to its
-    /// arena, so it cannot be created on a stack copy that is later moved.
     fn bindAllocators(self: *Tui) void {
         self.a = self.arena.allocator();
         self.s = self.scratch.allocator();
@@ -437,7 +388,6 @@ const Tui = struct {
         self.editor.s = self.s;
     }
 
-    // ---- scrollback ------------------------------------------------------
     fn push(self: *Tui, line: []const u8) void {
         const clean = render.sanitize(self.sa, line);
         const blank = clean.len == 0 or (self.separator and self.wrote);
@@ -450,9 +400,6 @@ const Tui = struct {
             self.last_blank = true;
         }
         if (clean.len != 0) {
-            // `clean` may point at scratch or at the agent's event buffer, both
-            // of which are reset before a resize can read this line back, so
-            // the history keeps a copy or drops the line.
             if (platform.gpa.dupe(u8, clean)) |owned| {
                 if (self.history.append(platform.gpa, owned)) |_| self.capHistory() else |_| platform.gpa.free(owned);
             } else |_| {}
@@ -464,9 +411,6 @@ const Tui = struct {
         self.dirty = true;
     }
 
-    /// Drops the oldest history line past the cap. Both the list and its
-    /// strings use the process allocator, not a session arena, so an evicted
-    /// line's memory comes back and a long session stays bounded.
     fn capHistory(self: *Tui) void {
         while (self.history.items.len > HISTORY_LINES) {
             const old = self.history.orderedRemove(0);
@@ -474,10 +418,6 @@ const Tui = struct {
         }
     }
 
-    /// Rebuilds the whole scrollback at the current width. The terminal cannot
-    /// reflow rows it has already been given, so the history is re-wrapped and
-    /// the screen is rewritten from scratch; the terminal's own scrollback is
-    /// dropped too, since it holds the old, narrow rendering.
     fn reflow(self: *Tui) void {
         self.term.refreshSize();
         self.live.rows = 0;
@@ -499,15 +439,12 @@ const Tui = struct {
         for (renderRows(self.s, lines, width)) |row| self.push(row);
     }
 
-    /// One standalone line between blank separators, away from the live
-    /// region: banners, errors, command output.
     fn note(self: *Tui, line: []const u8) void {
         self.separator = true;
         self.push(line);
         self.separator = true;
     }
 
-    /// A standalone error line, in red.
     fn fail(self: *Tui, comptime fmt: []const u8, args: anytype) void {
         self.note(styles.red(self.s, std.fmt.allocPrint(self.s, fmt, args) catch "! error"));
     }
@@ -538,7 +475,6 @@ const Tui = struct {
         self.separator = true;
     }
 
-    // ---- status ----------------------------------------------------------
     fn statusLine(self: *Tui) []const u8 {
         const model = self.opts.model orelse return styles.dim(self.s, "no model configured");
         const used = estimateContextTokens(self.messages.items, self.opts.system_prompt, self.opts.tools_json);
@@ -571,11 +507,6 @@ const Tui = struct {
         return " ";
     }
 
-    /// Styled rows for the announced calls, wrapped to `width` and capped at
-    /// `budget` rows. The running call is drawn first, so its arguments are what
-    /// survives a full region; the tail the cap cuts is counted in one dim row.
-    /// The block never exceeds its budget, which keeps the live region's row
-    /// count exact.
     fn queueRows(self: *Tui, width: usize, budget: usize) []const []const u8 {
         if (budget == 0) return &.{};
         var out: std.ArrayList([]const u8) = .empty;
@@ -583,7 +514,6 @@ const Tui = struct {
             for (callRows(self.s, width, call, i == 0 and self.phase == .running_tool)) |row| out.append(self.s, row) catch {};
         }
         if (out.items.len <= budget) return out.items;
-        // The last budgeted row carries the count of the rows that do not fit.
         const keep = budget - 1;
         const hidden = out.items.len - keep;
         out.shrinkRetainingCapacity(keep);
@@ -591,7 +521,6 @@ const Tui = struct {
         return out.items;
     }
 
-    // ---- drawing ---------------------------------------------------------
     fn draw(self: *Tui) void {
         if (self.closed) return;
         self.resetScratch();
@@ -604,8 +533,6 @@ const Tui = struct {
         const rows = renderRows(self.s, inflight, width);
 
         const room = if (height > status.len + 1) height - status.len - 1 else 0;
-        // Announced calls wrap, so their row count is not known until they are
-        // built; the cap keeps the block inside the room the body shares.
         const queue = self.queueRows(width, room);
         const keep = @min(rows.len, room - queue.len);
         const body = rows[rows.len - keep ..];
@@ -627,22 +554,16 @@ const Tui = struct {
             scroll;
         const frame_text = self.live.draw(self.s, lines.items, cursor_row, ed.cursor_col, above);
         self.term.write(frame_text);
-        // The scrollback was written; its buffer and line allocations are
-        // reused next frame.
         self.scroll.clearRetainingCapacity();
         _ = self.sarena.reset(.retain_capacity);
         self.sa = self.sarena.allocator();
     }
 
-    /// Tool names arrive in event payloads that point into the agent's
-    /// per-step scratch, which is reset as soon as the callback returns. The
-    /// status line outlives that reset, so it keeps its own copy.
     fn keepName(self: *Tui, slot: *?[]const u8, value: ?[]const u8) void {
         if (slot.*) |old| self.a.free(old);
         slot.* = if (value) |v| self.a.dupe(u8, v) catch null else null;
     }
 
-    // ---- events ----------------------------------------------------------
     fn handleAgentEvent(self: *Tui, event: agent.Event) void {
         if (self.closed) return;
         self.resetScratch();
@@ -699,9 +620,6 @@ const Tui = struct {
         self.activity.reset();
         self.commitLines(self.reply.flush());
         defer self.streamed.clearRetainingCapacity();
-        // The text already streamed; this re-feed only recovers what the
-        // streaming renderer held back. An allocation failure drops that
-        // recovery, never the streamed text.
         const text = types.assistantText(self.s, am) catch return;
         const trimmed = std.mem.trim(u8, text, " \t\r\n");
         if (trimmed.len > 0 and std.mem.indexOf(u8, self.streamed.items, trimmed) == null) {
@@ -717,9 +635,6 @@ const Tui = struct {
             self.commitLines(&.{.{ .text = std.fmt.allocPrint(self.s, "{s}  {s}", .{ callHead(self.s, call.name), call.summary }) catch call.summary }});
         }
         const width = @max(self.term.width() - BODY_PREFIX.len, 1);
-        // A tool that supplies a body wants one line instead of its text: the
-        // header already carries the path, so the body carries what is not
-        // visible anywhere else.
         const lines: []const stream.BodyLine = if (!is_error and body != null)
             &.{.{ .text = body.? }}
         else
@@ -745,7 +660,6 @@ const Tui = struct {
         self.pending_calls.clearRetainingCapacity();
     }
 
-    // ---- input -----------------------------------------------------------
     fn handleKey(self: *Tui, key: term.Key) void {
         self.resetScratch();
         if (key == .eof) {
@@ -842,7 +756,6 @@ const Tui = struct {
         self.dirty = true;
     }
 
-    // ---- commands --------------------------------------------------------
     fn runCommand(self: *Tui, command: Command) void {
         switch (command) {
             .help => self.showHelp(),
@@ -887,8 +800,6 @@ const Tui = struct {
         for (keys) |row| self.push(helpRow(self.s, row[0], row[1], width));
     }
 
-    /// Starts a fresh session: the current log is closed, a new one is opened
-    /// in the same directory, and the transcript is dropped.
     fn newSession(self: *Tui) void {
         self.opts.session.close();
         const cwd = std.process.currentPathAlloc(platform.io, self.a) catch ".";
@@ -936,8 +847,6 @@ const Tui = struct {
         self.pending_provider = provider_id;
     }
 
-    /// Opens a numbered list prompt and prints it. `ids` are the values the
-    /// answer maps back to, one per option.
     fn beginPrompt(self: *Tui, message: []const u8, options: []const []const u8, ids: []const []const u8) void {
         self.prompt_open = true;
         self.prompt_options = options;
@@ -953,8 +862,6 @@ const Tui = struct {
         self.separator = true;
     }
 
-    /// Applies the answer to the open prompt. The command is left inactive
-    /// unless the step it starts opens another prompt.
     fn answerPrompt(self: *Tui) void {
         const answer = std.mem.trim(u8, self.prompt_answer, " \t\r\n");
         const command = self.pending_command;
@@ -985,8 +892,6 @@ const Tui = struct {
         }
     }
 
-    /// Switches the running session to `model`; the tools and their image
-    /// behaviour follow the new model.
     fn select(self: *Tui, m: *const types.Model) void {
         self.opts.model = m;
         self.opts.supports_images = m.supports_images;
@@ -995,7 +900,6 @@ const Tui = struct {
         self.dirty = true;
     }
 
-    // ---- steering interaction (called on the agent thread) ---------------
     fn isPauseRequested(ctx: *anyopaque) bool {
         const self: *Tui = @ptrCast(@alignCast(ctx));
         return self.pause_requested.load(.seq_cst);
@@ -1030,7 +934,6 @@ const Tui = struct {
     }
 };
 
-/// One aligned `key  description` help row; the key column is dimmed.
 fn helpRow(a: std.mem.Allocator, key: []const u8, description: []const u8, width: usize) []const u8 {
     var padded: std.ArrayList(u8) = .empty;
     padded.appendSlice(a, key) catch {};
@@ -1057,8 +960,6 @@ fn completePathStep(word: []const u8) ?[]const u8 {
     return complete.completePath(word);
 }
 
-/// A command the prompt accepts. `wire` is the word typed after the slash and
-/// `help` is what `/help` lists it as.
 const Command = enum {
     help,
     new,
@@ -1080,12 +981,9 @@ const Command = enum {
         };
     }
 
-    /// The whole table, in the order `/help` lists it.
     const all = [_]Command{ .help, .new, .provider, .model, .thinking };
 };
 
-/// The command `text` names, or null when it names none. Only the first word
-/// is read, so `/model extra` still resolves to `/model`.
 fn findCommand(text: []const u8) ?Command {
     if (text.len == 0 or text[0] != '/') return null;
     var i: usize = 1;
@@ -1093,8 +991,6 @@ fn findCommand(text: []const u8) ?Command {
     return std.meta.stringToEnum(Command, text[1..i]);
 }
 
-/// Completes a `/command` draft to the one command it names, or to the prefix
-/// every match shares. Null when nothing more can be filled in.
 fn completeCommand(draft: []const u8) ?[]const u8 {
     if (draft.len == 0 or draft[0] != '/') return null;
     if (std.mem.indexOfAny(u8, draft, " \t\n") != null) return null;
@@ -1105,7 +1001,6 @@ fn completeCommand(draft: []const u8) ?[]const u8 {
         matched = if (matched) |have| complete.commonPrefix(have, c.wire()) else c.wire();
     }
     const name = matched orelse return null;
-    // Nothing to add when the draft is already what the matches share.
     if (name.len <= typed.len) return null;
     return std.fmt.allocPrint(platform.gpa, "/{s}", .{name}) catch null;
 }
@@ -1135,14 +1030,8 @@ fn turnThread(self: *Tui) void {
     self.turn_done.store(true, .seq_cst);
 }
 
-/// Deep-copies an event's variable-length payload into the TUI arena. The
-/// agent thread resets its per-step scratch as soon as the callback returns, so
-/// a queued event must not keep pointing into it.
 fn copyEvent(a: std.mem.Allocator, e: agent.Event) agent.Event {
     return switch (e) {
-        // An allocation failure here would otherwise leave a slice pointing
-        // into scratch the agent is about to reset; an empty payload keeps the
-        // event safe, at the cost of a display-only line.
         .phase => |p| .{ .phase = .{ .phase = p.phase, .detail = if (p.detail) |d| a.dupe(u8, d) catch "" else null } },
         .text => |s| .{ .text = a.dupe(u8, s) catch "" },
         .reasoning => |s| .{ .reasoning = a.dupe(u8, s) catch "" },
@@ -1182,11 +1071,8 @@ fn eventTrampoline(ctx: *anyopaque, event: agent.Event) void {
     self.event_mutex.unlock(platform.io);
 }
 
-/// Runs the TUI until the user exits. `opts` and `cfg` outlive the call.
 pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const config.ToolName) !void {
     const gpa = platform.gpa;
-    // The theme is chosen once, before anything is painted: the sequences the
-    // rows are wrapped in are baked from it.
     theme.init(gpa, cfg.theme);
     const opts_ptr = try gpa.create(agent.Options);
     opts_ptr.* = opts;
@@ -1241,9 +1127,6 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
         }
         for (keys.items) |k| self.handleKey(k);
 
-        // Double-buffer the queue: the agent appends to `events` while the loop
-        // drains `batch`, and the payload arena is reset once the queue is
-        // empty, so a copied event outlives its own handling but not longer.
         self.event_mutex.lockUncancelable(platform.io);
         std.mem.swap(std.ArrayList(agent.Event), &self.events, &self.batch);
         self.event_mutex.unlock(platform.io);

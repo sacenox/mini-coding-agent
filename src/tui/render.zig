@@ -1,8 +1,5 @@
 const std = @import("std");
 
-/// The cell count one code point occupies on screen: two for an East-Asian
-/// wide code point, zero for a combining or zero-width one, one otherwise.
-/// Combining marks use the common Unicode mark ranges.
 pub fn charWidth(code: u21) u8 {
     if (code < 32 or (code >= 0x7f and code < 0xa0)) return 0;
     if (code == 0x200b or code == 0x200c or code == 0x200d or code == 0xfeff) return 0;
@@ -53,9 +50,6 @@ fn isCombining(code: u21) bool {
         (code >= 0xfe20 and code <= 0xfe2f);
 }
 
-/// One code point of `text` and the cells it occupies. An SGR sequence is one
-/// piece of zero cells, so styled text measures and wraps as its plain text
-/// does. A tab is zero cells here; `expandTabs` is what gives it columns.
 const Piece = struct { text: []const u8, width: usize };
 
 fn nextPiece(text: []const u8, i: *usize) ?Piece {
@@ -73,7 +67,6 @@ fn nextPiece(text: []const u8, i: *usize) ?Piece {
     return piece;
 }
 
-/// The terminal cells `text` occupies.
 pub fn displayWidth(text: []const u8) usize {
     var width: usize = 0;
     var i: usize = 0;
@@ -89,12 +82,7 @@ fn isSgrAt(text: []const u8, i: usize) ?usize {
     return null;
 }
 
-/// Drops control code points and every escape sequence except SGR. Text is
-/// decoded by code point, so a UTF-8 continuation byte in 0x80-0x9f — the range
-/// C1 controls also occupy — survives.
 pub fn sanitize(a: std.mem.Allocator, text: []const u8) []const u8 {
-    // Fast path: plain printable ASCII (tab and newline included) has nothing
-    // to drop, which is the common case for tool output.
     var clean = true;
     for (text) |c| {
         if (c >= 0x80 or c == 0x1b or c == 0x7f or (c < 0x20 and c != 0x09 and c != 0x0a)) {
@@ -128,7 +116,6 @@ pub fn sanitize(a: std.mem.Allocator, text: []const u8) []const u8 {
         const seq_len = std.unicode.utf8ByteSequenceLength(c) catch 1;
         const len = @min(@as(usize, seq_len), text.len - i);
         if (c < 0x80) {
-            // Tab survives to `expandTabs`; newline is a row boundary.
             if ((c < 0x20 and c != 0x09 and c != 0x0a) or c == 0x7f) {
                 i += 1;
                 continue;
@@ -148,8 +135,6 @@ pub fn sanitize(a: std.mem.Allocator, text: []const u8) []const u8 {
     return out.items;
 }
 
-/// Replaces each tab with the spaces that carry the column to the next tab
-/// stop, so a terminal never has to guess where a tab lands.
 pub fn expandTabs(a: std.mem.Allocator, text: []const u8, size: usize) []const u8 {
     if (std.mem.indexOfScalar(u8, text, '\t') == null) return text;
     var out: std.ArrayList(u8) = .empty;
@@ -169,8 +154,6 @@ pub fn expandTabs(a: std.mem.Allocator, text: []const u8, size: usize) []const u
     return out.items;
 }
 
-/// Splits one logical line into physical rows no wider than `width` cells.
-/// SGR sequences count as zero cells and stay attached to the following text.
 pub fn wrapLine(a: std.mem.Allocator, text: []const u8, width: usize) []const []const u8 {
     var rows: std.ArrayList([]const u8) = .empty;
     if (width == 0 or text.len == 0) {

@@ -1,6 +1,3 @@
-//! The `bash` tool: run a command detached, forward its output, and report
-//! the files it changed. Cancellation kills the process group.
-
 const std = @import("std");
 const platform = @import("../platform.zig");
 const util = @import("../util.zig");
@@ -49,9 +46,6 @@ const Acc = struct {
     }
 };
 
-/// Ends the command's process group: `SIGTERM` first so it can clean up, then
-/// `SIGKILL` for whatever is left. Cancel must stop the whole tree, not just
-/// the shell, or a background grandchild outlives the turn.
 fn killGroup(pid: i32) void {
     std.posix.kill(-pid, .TERM) catch {};
     std.Io.sleep(platform.io, .{ .nanoseconds = 300 * std.time.ns_per_ms }, .boot) catch {};
@@ -110,15 +104,10 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
         }
         const remaining = now.durationTo(deadline).toMilliseconds();
         const wait_ms: i32 = @intCast(@min(100, @max(1, remaining)));
-        // A poll failure must not leave the command running: the tool returns
-        // at once, so nothing would ever collect it or its process group.
         const ready = std.posix.poll(&fds, wait_ms) catch {
             broken = true;
             break;
         };
-        // A timeout means neither stream has data yet. Reading anyway would
-        // return WouldBlock, but checking first keeps the wait a real one
-        // instead of a spin.
         if (ready == 0) continue;
         for (0..2) |i| {
             if (!open[i]) continue;
@@ -147,8 +136,6 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
     const term = child.wait(platform.io) catch std.process.Child.Term{ .unknown = 0 };
 
     if (oom) return fail(a, "bash failed: out of memory", .{});
-    // A broken stream leaves the command's own output incomplete, so it is
-    // reported as a failure rather than as a quiet command.
     if (broken) return fail(a, "bash failed: could not read the command's output", .{});
 
     const code: ?u8 = switch (term) {

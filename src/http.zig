@@ -1,10 +1,7 @@
-//! Minimal HTTP client for streaming Server-Sent Events responses.
-
 const std = @import("std");
 const platform = @import("platform.zig");
 const build_options = @import("build_options");
 
-/// Providers require a product user-agent; the client default is the std one.
 const user_agent = "mini-coding-agent/" ++ build_options.version;
 
 pub const Header = struct { name: []const u8, value: []const u8 };
@@ -25,9 +22,6 @@ const HttpError = error{
     Aborted,
 } || std.mem.Allocator.Error;
 
-/// POSTs `body` and dispatches each SSE event's concatenated data payload.
-/// On a non-2xx status the response body is stored in `err_body` and
-/// `error.HttpStatus` is returned, so the caller can surface it as-is.
 pub fn postSse(
     a: std.mem.Allocator,
     url: []const u8,
@@ -39,8 +33,6 @@ pub fn postSse(
 ) HttpError!void {
     const uri = std.Uri.parse(url) catch return error.RequestFailed;
     var client: std.http.Client = .{ .allocator = a, .io = platform.io };
-    // The client owns the connection pool; without this the idle connection
-    // (and its fd) outlives the request for the life of the process.
     defer client.deinit();
 
     var hdrs: std.ArrayList(std.http.Header) = .empty;

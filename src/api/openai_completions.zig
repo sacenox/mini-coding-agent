@@ -1,11 +1,6 @@
-//! OpenAI-compatible chat completions with streaming. The wire format behind
-//! opencode-go and every customProvider with api "openai-completions".
-
 const std = @import("std");
 const api = @import("../api.zig");
 const types = @import("../types.zig");
-
-// ---- request building -----------------------------------------------------
 
 const ToolCall = struct {
     id: []const u8,
@@ -13,8 +8,6 @@ const ToolCall = struct {
     function: struct { name: []const u8, arguments: []const u8 },
 };
 
-/// An assistant turn: its text, and one `tool_calls` entry per call. The key
-/// is absent when the turn made no call.
 const Assistant = struct {
     role: []const u8 = "assistant",
     content: []const u8,
@@ -44,7 +37,6 @@ const Part = union(enum) {
     }
 };
 
-/// The images a run of tool results carried, as one trailing user message.
 const Images = struct {
     role: []const u8 = "user",
     content: []const Part,
@@ -101,10 +93,6 @@ fn buildMessages(a: std.mem.Allocator, req: api.Request) ![]const Message {
     var i: usize = 0;
     while (i < req.messages.len) {
         if (req.messages[i] == .tool_result) {
-            // A run of tool results lands together. Any images among them ride
-            // as one following user message: a tool message's content is a
-            // string, and a user message between a call and its results is
-            // rejected.
             const start = i;
             var images = false;
             while (i < req.messages.len and req.messages[i] == .tool_result) : (i += 1) {
@@ -154,8 +142,6 @@ fn buildBody(req: api.Request) ![]u8 {
     };
     return std.json.Stringify.valueAlloc(a, body, .{ .emit_null_optional_fields = false });
 }
-
-// ---- streaming state ------------------------------------------------------
 
 const Chunk = struct {
     id: ?[]const u8 = null,
@@ -213,11 +199,8 @@ const State = struct {
     usage: types.Usage = .{},
     finish_reason: ?[]const u8 = null,
     stream_error: ?[]const u8 = null,
-    /// Set by `run` when the stream did not run to completion.
     failed: bool = false,
 
-    /// One payload, already parsed. Everything this wire records about the
-    /// response it learns here; `run` owns the life cycle around it.
     pub fn handle(st: *State, chunk: Chunk) !void {
         if (chunk.@"error") |err| {
             if (err.message) |m| {
@@ -283,9 +266,6 @@ fn handleDelta(st: *State, delta: Chunk.Delta) !void {
     }
 }
 
-/// The usage facts one chunk carries. A prompt that is mostly a cache hit is
-/// billed as the difference, so the cached and written-back tokens come out of
-/// `input`.
 fn usageOf(u: Chunk.Usage) types.Usage {
     var cache_read = if (u.@"prompt_tokens_details") |d| d.@"cached_tokens".value else 0;
     if (cache_read == 0) cache_read = u.@"cached_tokens".value;
@@ -302,8 +282,6 @@ fn usageOf(u: Chunk.Usage) types.Usage {
     return usage;
 }
 
-/// A stream that produced finished calls is a tool turn, not a stop. A broken
-/// stream reports none, and `run` restores the transport's own reason.
 fn mapStopReason(st: *State, has_calls: bool) void {
     if (has_calls) {
         st.msg.stop_reason = .tool_use;

@@ -1,5 +1,3 @@
-//! Small helpers: time formatting, filesystem reads, path joins, slugs.
-
 const std = @import("std");
 const platform = @import("platform.zig");
 
@@ -7,7 +5,6 @@ pub fn nowMs() i64 {
     return std.Io.Timestamp.now(platform.io, .real).toMilliseconds();
 }
 
-/// The UTC calendar fields of one epoch millisecond value.
 const Date = struct {
     year: u16,
     month: u8,
@@ -34,7 +31,6 @@ const Date = struct {
     }
 };
 
-/// ISO-8601 UTC with milliseconds, matching `new Date().toISOString()`.
 fn isoFromMs(buf: []u8, ms: i64) []const u8 {
     const d = Date.fromMs(ms);
     return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}Z", .{
@@ -47,7 +43,6 @@ pub fn isoAlloc(a: std.mem.Allocator) []const u8 {
     return isoFromMs(buf, nowMs());
 }
 
-/// `YYYYMMDD-HHMMSS`, the session directory prefix.
 pub fn stamp(buf: []u8, ms: i64) []const u8 {
     const d = Date.fromMs(ms);
     return std.fmt.bufPrint(buf, "{d:0>4}{d:0>2}{d:0>2}-{d:0>2}{d:0>2}{d:0>2}", .{
@@ -63,8 +58,6 @@ pub fn readFileAlloc(a: std.mem.Allocator, path: []const u8, max: usize) ![]u8 {
     return std.Io.Dir.cwd().readFileAlloc(platform.io, path, a, .limited(max));
 }
 
-/// Writes `data` to `path`, creating parent directories. The file is truncated
-/// first; a partial write is reported to the caller.
 pub fn writeFile(path: []const u8, data: []const u8) !void {
     if (std.fs.path.dirname(path)) |dir| {
         std.Io.Dir.cwd().createDirPath(platform.io, dir) catch {};
@@ -79,8 +72,6 @@ pub fn fileExists(path: []const u8) bool {
     return true;
 }
 
-/// Directory names under `root`, skipping the "." and ".." entries. Returns an
-/// empty slice when the directory cannot be read.
 pub fn listDir(a: std.mem.Allocator, root: []const u8) [][]u8 {
     var out: std.ArrayList([]u8) = .empty;
     const dir = std.Io.Dir.cwd().openDir(platform.io, root, .{ .iterate = true }) catch return &.{};
@@ -97,7 +88,6 @@ pub fn randomBytes(buf: []u8) void {
     std.Io.random(platform.io, buf);
 }
 
-/// The byte length of a valid UTF-8 sequence at the start of `p`, or null.
 fn utf8SeqLen(p: []const u8) ?usize {
     if (p.len == 0) return null;
     const c = p[0];
@@ -121,8 +111,6 @@ fn utf8SeqLen(p: []const u8) ?usize {
     return null;
 }
 
-/// Replaces invalid byte sequences with U+FFFD so the text survives the JSON
-/// and session round trips. Returns `text` unchanged when it is already valid.
 pub fn utf8Clean(a: std.mem.Allocator, text: []const u8) ![]const u8 {
     if (std.unicode.utf8ValidateSlice(text)) return text;
     var out: std.ArrayList(u8) = .empty;
@@ -142,7 +130,6 @@ pub fn utf8Clean(a: std.mem.Allocator, text: []const u8) ![]const u8 {
     return out.items;
 }
 
-/// Lowercased, non-alphanumerics collapsed to "-", trimmed, capped at 40.
 pub fn slugify(a: std.mem.Allocator, text: []const u8) []const u8 {
     var out: std.ArrayList(u8) = .empty;
     var pending_dash = false;

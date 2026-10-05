@@ -1,8 +1,3 @@
-//! Config: `$XDG_CONFIG_HOME/mini-coding-agent/config.json` (or the equivalent
-//! under `$HOME`). Every user-facing behavior that can vary comes from here,
-//! with a sane default. There is no project-local config. A `-c`/`--config`
-//! file is read after the global one and overrides its keys.
-
 const std = @import("std");
 const platform = @import("platform.zig");
 const util = @import("util.zig");
@@ -28,8 +23,6 @@ pub const CustomProvider = struct {
 };
 
 pub const Config = struct {
-    /// The file `save` writes back to: the global config, or the override when
-    /// one was given on the command line.
     path: []const u8,
     sessions_dir: []const u8,
     system_prompt: []const u8,
@@ -38,15 +31,11 @@ pub const Config = struct {
     tools: []const ToolName,
     provider: ?[]const u8,
     model: ?[]const u8,
-    /// Null when unset: no reasoning parameter is sent, so the provider picks.
     thinking_effort: ?[]const u8,
-    /// A theme id; see `theme.find`.
     theme: []const u8,
     custom_providers: []const CustomProvider,
 };
 
-/// The on-disk shape. Every key is optional so an override file may set any
-/// subset; a `null` leaves the value the global file (or the default) supplied.
 const File = struct {
     @"sessionsDir": ?[]const u8 = null,
     @"systemPrompt": ?[]const u8 = null,
@@ -70,9 +59,6 @@ pub fn configPath(a: std.mem.Allocator) []const u8 {
     return util.join(a, &.{ configDir(a), "config.json" }) catch "config.json";
 }
 
-/// `$XDG_STATE_HOME/mini-coding-agent/sessions`, else
-/// `$HOME/.local/state/mini-coding-agent/sessions`, else the relative
-/// `sessions`.
 fn sessionsDir(a: std.mem.Allocator) []const u8 {
     const state = platform.getEnv("XDG_STATE_HOME") orelse blk: {
         const home = platform.home() orelse return "sessions";
@@ -81,11 +67,6 @@ fn sessionsDir(a: std.mem.Allocator) []const u8 {
     return util.join(a, &.{ state, "mini-coding-agent/sessions" }) catch "sessions";
 }
 
-/// Loads the config. The global file is always read; when `override` is given
-/// it is read after and its keys win. A missing global file means every
-/// default, but a missing override is an error. Any read, parse, or validation
-/// failure is reported on stderr and returned. The result is allocated from
-/// `a` and lives for the process.
 pub fn load(a: std.mem.Allocator, override: ?[]const u8) !Config {
     var cfg = try defaults(a);
     try readInto(a, configPath(a), false, &cfg);
@@ -126,16 +107,12 @@ fn readInto(a: std.mem.Allocator, path: []const u8, required: bool, cfg: *Config
     if (file.theme) |v| cfg.theme = v;
 }
 
-/// The subset of config a TUI command persists. `null` leaves a key alone.
 pub const Update = struct {
     provider: ?[]const u8 = null,
     model: ?[]const u8 = null,
     thinking_effort: ?[]const u8 = null,
 };
 
-/// Merges `update` into the on-disk config, preserving every other key. The
-/// merge is textual: the file at `cfg.path` is parsed, the changed keys
-/// replaced, and the whole object written back.
 pub fn save(a: std.mem.Allocator, cfg: *const Config, update: Update) !void {
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
@@ -157,8 +134,6 @@ pub fn save(a: std.mem.Allocator, cfg: *const Config, update: Update) !void {
     const json_text = std.json.Stringify.valueAlloc(tmp, root, .{ .whitespace = .indent_2 }) catch
         return error.OutOfMemory;
     const out = try std.fmt.allocPrint(tmp, "{s}\n", .{json_text});
-    // Written atomically: a temp file, then a rename over the target, so an
-    // interrupted write can never leave a truncated config behind.
     const temp = try std.fmt.allocPrint(tmp, "{s}.tmp", .{path});
     try util.writeFile(temp, out);
     try std.Io.Dir.cwd().rename(temp, std.Io.Dir.cwd(), path, platform.io);

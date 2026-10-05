@@ -1,10 +1,3 @@
-//! Provider-neutral transcript types: what a message is, before any wire
-//! protocol encodes it.
-//!
-//! A tool call's arguments are kept as their raw JSON object text, exactly as
-//! the provider streamed them, so provider continuation data survives a
-//! round trip without a parse/print cycle.
-
 const std = @import("std");
 
 pub const Usage = struct {
@@ -48,10 +41,7 @@ pub const ImageContent = struct {
 pub const ToolCall = struct {
     id: []const u8,
     name: []const u8,
-    /// A JSON object, verbatim from the provider stream.
     arguments: []const u8,
-    /// Provider continuation data (Google's `thoughtSignature`), preserved so a
-    /// tool round trip can be replayed.
     thought_signature: ?[]const u8 = null,
 };
 
@@ -93,8 +83,6 @@ pub const Message = union(enum) {
     tool_result: ToolResultMessage,
 };
 
-/// Concatenates an assistant message's text blocks. An allocation failure is
-/// returned rather than a silently truncated string.
 pub fn assistantText(a: std.mem.Allocator, msg: *const AssistantMessage) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     for (msg.content.items) |block| switch (block) {
@@ -104,7 +92,6 @@ pub fn assistantText(a: std.mem.Allocator, msg: *const AssistantMessage) ![]cons
     return out.items;
 }
 
-/// The model a resolved provider serves.
 pub const Model = struct {
     id: []const u8,
     name: []const u8,
@@ -112,7 +99,6 @@ pub const Model = struct {
     provider: []const u8,
     base_url: []const u8,
     api_key: ?[]const u8,
-    /// The effort actually sent, after clamping to what the model accepts.
     effort: []const u8,
     supports_images: bool,
     context_window: u64,
@@ -121,6 +107,5 @@ pub const Model = struct {
     cost_output: f64,
     cost_cache_read: f64,
     session_header: ?[]const u8,
-    /// Extra request headers, from a custom provider. Plain name/value pairs.
     headers: []const [2][]const u8 = &.{},
 };

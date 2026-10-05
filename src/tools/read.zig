@@ -1,6 +1,3 @@
-//! The `read` tool: returns a file's text, or the image itself for a png, jpg,
-//! or webp when the model accepts image input.
-
 const std = @import("std");
 const util = @import("../util.zig");
 const types = @import("../types.zig");
@@ -20,7 +17,6 @@ const image_mime = [_]struct { ext: []const u8, mime: []const u8 }{
 };
 
 const max_text_chars = 100_000;
-/// Cap on the base64 payload sent to the provider, where the file inflates by 4/3.
 const max_image_base64_bytes = 5 * 1024 * 1024;
 
 fn fail(a: std.mem.Allocator, comptime fmt: []const u8, args: anytype) common.Result {
@@ -38,8 +34,6 @@ fn mimeFor(path: []const u8) ?[]const u8 {
     return null;
 }
 
-/// The position `n` lines after `pos`, or null when fewer than `n` lines
-/// remain. A huge `n` costs no more than the text has lines.
 fn advance(text: []const u8, pos: usize, n: usize) ?usize {
     var p = pos;
     var left = n;
@@ -50,10 +44,6 @@ fn advance(text: []const u8, pos: usize, n: usize) ?usize {
     return p;
 }
 
-/// The bytes of `range` lines starting at the 1-based line `offset`, each line
-/// keeping its trailing newline so consecutive reads reassemble the file. Null
-/// when the text has fewer than `offset` lines; a range that runs past the end
-/// stops there.
 fn lineSlice(text: []const u8, offset: usize, range: ?usize) ?[]const u8 {
     const start = advance(text, 0, offset - 1) orelse return null;
     if (offset > 1 and start >= text.len) return null;
@@ -66,9 +56,6 @@ fn countLines(text: []const u8) usize {
     return std.mem.count(u8, text, "\n") + @intFromBool(text[text.len - 1] != '\n');
 }
 
-/// The display body for a text read: the line window that was asked for, then
-/// the number of lines returned, and whether the cap cut the read short. The
-/// path stays out: the call line above the body already carries it.
 fn bodyLine(a: std.mem.Allocator, args: Args, lines: usize, truncated: bool) ?[]const u8 {
     var out: std.Io.Writer.Allocating = .init(a);
     const w = &out.writer;
@@ -129,8 +116,6 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
     const slice = lineSlice(text, offset, args.range) orelse
         return fail(a, "read failed: {s} has fewer than {d} lines", .{ path, offset });
 
-    // Cut back to a code point boundary so the truncation never splits a
-    // sequence and hands the provider bytes that are not valid UTF-8.
     var sent = slice;
     if (slice.len > max_text_chars) {
         var cut: usize = max_text_chars;

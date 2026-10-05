@@ -1,8 +1,3 @@
-//! Syntax highlighting for committed scrollback, once, over the whole block.
-//! Grammars are linked C artifacts; their `highlights.scm` queries ship with
-//! the grammar and are consumed as data. Capture names are mapped to the active
-//! theme's palette in `theme.zig`.
-
 const std = @import("std");
 const ts = @import("tree-sitter");
 const render = @import("render.zig");
@@ -89,7 +84,6 @@ fn getGrammars(a: std.mem.Allocator) *Grammars {
     return &grammars.?;
 }
 
-/// One styled range, in byte offsets into the highlighted text.
 const Span = struct {
     start: u32,
     end: u32,
@@ -103,12 +97,10 @@ fn captureNode(match: ts.Query.Match, index: u32) ?ts.Node {
     return null;
 }
 
-/// Node text in UTF-8, from a tree whose offsets are UTF16 code units.
 fn nodeText(u: Utf16, text: []const u8, node: ts.Node) []const u8 {
     return text[byteOf(u, node.startByte() / 2)..byteOf(u, node.endByte() / 2)];
 }
 
-// POSIX regex via libc for `#match?`/`#not-match?`.
 extern fn regcomp(preg: *anyopaque, regex: [*:0]const u8, cflags: c_int) c_int;
 extern fn regexec(preg: *const anyopaque, string: [*:0]const u8, nmatch: usize, pmatch: ?*anyopaque, eflags: c_int) c_int;
 extern fn regfree(preg: *anyopaque) void;
@@ -164,8 +156,6 @@ fn predicatesPass(a: std.mem.Allocator, query: *const ts.Query, match: ts.Query.
     return true;
 }
 
-/// tree-sitter stores a predicate's name without its leading `#`, so every
-/// comparison here is against the bare name.
 fn evalPredicate(a: std.mem.Allocator, query: *const ts.Query, match: ts.Query.Match, name: ?[]const u8, args: []const ts.Query.PredicateStep, u: Utf16, text: []const u8) bool {
     const n = name orelse return true;
     if (std.mem.eql(u8, n, "eq?")) return eqText(query, match, args, u, text);
@@ -187,7 +177,6 @@ fn evalPredicate(a: std.mem.Allocator, query: *const ts.Query, match: ts.Query.M
         }
         return if (std.mem.eql(u8, n, "any-of?")) found else !found;
     }
-    // `is?`, `is-not?`, `set!`, `offset!` and unknown predicates: accept.
     return true;
 }
 
@@ -196,9 +185,6 @@ fn spansOf(a: std.mem.Allocator, syn: *Syntax, node: ts.Node, u: Utf16, text: []
     const cursor = ts.QueryCursor.create();
     defer cursor.destroy();
     cursor.exec(syn.query, node);
-    // Captures are visited in the cursor's own order, not grouped by match: a
-    // later match may capture a node that starts before one an earlier match
-    // captured, and `paint` resolves the overlap by that same order.
     while (cursor.nextCapture()) |pair| {
         const match = pair[1];
         if (!predicatesPass(a, syn.query, match, u, text)) continue;
@@ -229,9 +215,6 @@ fn collectByKind(a: std.mem.Allocator, node: ts.Node, kinds: []const []const u8,
     }
 }
 
-/// Replaces every span inside `[start, end)` with one span covering it. Used
-/// for a whole heading and for an inline code span, whose style overrides the
-/// narrower spans inside them.
 fn recolor(a: std.mem.Allocator, spans: []Span, start: u32, end: u32, style: theme.Style) []Span {
     var kept: std.ArrayList(Span) = .empty;
     for (spans) |span| {
@@ -245,12 +228,10 @@ const Event = struct { at: u32, open: bool, span: usize, order: usize };
 
 fn eventLess(_: void, x: Event, y: Event) bool {
     if (x.at != y.at) return x.at < y.at;
-    if (x.open != y.open) return !x.open and y.open; // close (false) before open (true)
+    if (x.open != y.open) return !x.open and y.open;
     return x.order < y.order;
 }
 
-/// Wraps every span in its colour; spans nest, so the innermost wins, and text
-/// outside any span falls back to `Normal`.
 fn paint(a: std.mem.Allocator, text: []const u8, spans: []const Span) []u8 {
     var events: std.ArrayList(Event) = .empty;
     for (spans, 0..) |span, i| {
@@ -283,9 +264,6 @@ fn paint(a: std.mem.Allocator, text: []const u8, spans: []const Span) []u8 {
     return out.items;
 }
 
-/// Writes the text up to `end` under the innermost active style, then advances
-/// `at`. A span crossing a newline re-asserts itself after it, because a row is
-/// painted on its own and the break ends the terminal's colour run.
 fn emit(a: std.mem.Allocator, out: *std.ArrayList(u8), active: *std.ArrayList(usize), spans: []const Span, text: []const u8, end: u32, at: *u32, plain: *bool) void {
     if (end <= at.*) return;
     const style: ?theme.Style = if (active.items.len == 0) null else spans[active.items[active.items.len - 1]].style;
@@ -308,8 +286,6 @@ fn emit(a: std.mem.Allocator, out: *std.ArrayList(u8), active: *std.ArrayList(us
     at.* = end;
 }
 
-/// Colors one committed block of Markdown: block spans, then each inline run
-/// parsed by the inline grammar, with headings and inline code recolored.
 pub fn highlightMarkdown(a: std.mem.Allocator, text: []const u8) []const u8 {
     const g = getGrammars(a);
     const u = utf16(a, text) orelse return text;
@@ -319,8 +295,6 @@ pub fn highlightMarkdown(a: std.mem.Allocator, text: []const u8) []const u8 {
     spans.appendSlice(a, spansOf(a, &g.markdown, root.rootNode(), u, text, 0)) catch {};
 
     var inline_nodes: std.ArrayList(ts.Node) = .empty;
-    // Table cells hold inline markup too, and the block grammar leaves it
-    // unparsed: the inline grammar runs over the cell text the same way.
     collectByKind(a, root.rootNode(), &.{ "inline", "pipe_table_cell" }, &inline_nodes);
     for (inline_nodes.items) |node| {
         const start = byteOf(u, node.startByte() / 2);
@@ -365,7 +339,6 @@ pub fn highlightMarkdown(a: std.mem.Allocator, text: []const u8) []const u8 {
 
 const Align = enum { none, left, center, right };
 
-/// A delimiter cell's alignment, read off its own text: `:--`, `:-:`, `--:`.
 fn alignOf(cell: []const u8) Align {
     const left = cell.len > 0 and cell[0] == ':';
     const right = cell.len > 1 and cell[cell.len - 1] == ':';
@@ -377,16 +350,8 @@ fn alignOf(cell: []const u8) Align {
 
 const Row = struct { cells: []const []const u8, delimiter: bool };
 
-/// One table, printed the way prettier prints one: every column is as wide as
-/// its widest cell, three characters at least, and each cell is padded to that
-/// width under the alignment its delimiter cell declares. Cells come from the
-/// grammar's own nodes, never from a split on `|`, so an escaped pipe and a
-/// code span holding one each stay inside one cell. Null when the header names
-/// no column.
 fn formatTable(a: std.mem.Allocator, text: []const u8, u: Utf16, table: ts.Node) ?[]const u8 {
     var rows: std.ArrayList(Row) = .empty;
-    // GFM reads the column count off the header row: a row with more cells than
-    // the header has drops the extras, and the delimiter row is capped by it.
     var named: usize = 0;
     var i: u32 = 0;
     while (i < table.childCount()) : (i += 1) {
@@ -409,8 +374,6 @@ fn formatTable(a: std.mem.Allocator, text: []const u8, u: Utf16, table: ts.Node)
     }
     if (rows.items.len == 0 or named == 0) return null;
 
-    // The delimiter row is the only row whose alignment counts; a row that
-    // leaves a column out pads it empty under the same alignment.
     const aligns = a.alloc(Align, named) catch return null;
     const widths = a.alloc(usize, named) catch return null;
     @memset(aligns, .none);
@@ -422,8 +385,6 @@ fn formatTable(a: std.mem.Allocator, text: []const u8, u: Utf16, table: ts.Node)
         }
     }
 
-    // The table node's range includes the newline that ends its last row, and
-    // an element still streaming has none: write back exactly what was there.
     const end = byteOf(u, table.endByte() / 2);
     const trailing = end > 0 and end <= text.len and text[end - 1] == '\n';
 
@@ -457,9 +418,6 @@ fn formatTable(a: std.mem.Allocator, text: []const u8, u: Utf16, table: ts.Node)
     return block.items;
 }
 
-/// Prints every top-level table of a committed block under aligned columns.
-/// A table inside a quote or a list is left alone: its rows carry a prefix that
-/// is no part of any cell, so rebuilding a row from its cells would drop it.
 pub fn formatTables(a: std.mem.Allocator, text: []const u8) []const u8 {
     const u = utf16(a, text) orelse return text;
     const root = parse(getGrammars(a).markdown.parser, u) orelse return text;
@@ -486,13 +444,8 @@ pub fn formatTables(a: std.mem.Allocator, text: []const u8) []const u8 {
     return out.items;
 }
 
-/// Every grammar is fed UTF16LE, so a node's offsets are UTF16 code units and
-/// not UTF-8 byte offsets. The choice matters: the markdown block grammar
-/// reports an ERROR for input with no final line ending in UTF-8, and parses
-/// that same input in UTF-16.
 const Utf16 = struct {
     units: []u16,
-    /// One byte offset in the UTF-8 text per code unit, plus a final end entry.
     byte_of: []u32,
 };
 
@@ -503,7 +456,6 @@ fn utf16(a: std.mem.Allocator, text: []const u8) ?Utf16 {
     var u: usize = 0;
     while (u < units.len) {
         byte_of[u] = @intCast(i);
-        // A surrogate pair is one code point: both units share its offset.
         if (units[u] >= 0xd800 and units[u] <= 0xdbff and u + 1 < units.len and
             units[u + 1] >= 0xdc00 and units[u + 1] <= 0xdfff)
         {
@@ -527,7 +479,6 @@ fn parse(parser: *ts.Parser, u: Utf16) ?*ts.Tree {
     return parser.parseStringEncoding(std.mem.sliceAsBytes(u.units), null, .utf16le);
 }
 
-/// Colors a fenced code block's body by its fence info string.
 pub fn highlightCode(a: std.mem.Allocator, info: []const u8, text: []const u8) []const u8 {
     const trimmed = std.mem.trim(u8, info, " \t\r\n");
     var end: usize = 0;

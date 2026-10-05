@@ -1,8 +1,3 @@
-//! Working-tree snapshots and the diffs between them. A snapshot records the
-//! tree under the working directory; diffing two of them yields the changed
-//! files, each a unified patch or a note for content that cannot be tracked.
-//! Display-only: a diff never reaches the model.
-
 const std = @import("std");
 const platform = @import("../platform.zig");
 const diff = @import("../diff.zig");
@@ -25,7 +20,6 @@ const FileState = struct {
     mtime: i128,
     inode: u64,
     kind: Kind,
-    /// The UTF-8 content, only for `text`.
     content: ?[]const u8,
 };
 
@@ -38,14 +32,9 @@ fn ignored(name: []const u8) bool {
     return false;
 }
 
-/// Captures the working tree: a relpath -> state map. Text content up to the
-/// per-file and total caps is read; larger or binary files keep only their
-/// stat. Keys and content are allocated from `a`; the tree is freed with the
-/// caller's arena.
 pub fn capture(a: std.mem.Allocator) !Tree {
     var tree = Tree.init(a);
 
-    // Transient walk bookkeeping; released before returning.
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
     const tmp = arena.allocator();
@@ -148,8 +137,6 @@ fn diffOne(a: std.mem.Allocator, path: []const u8, before: ?FileState, after: ?F
     return .{ .path = path, .note = noteFor(a, if (af.content == null) af.kind else bf.kind, "changed") };
 }
 
-/// The files that differ between two captures, sorted by path. Allocated from
-/// `a`.
 pub fn diffTrees(a: std.mem.Allocator, before: Tree, after: Tree) ![]common.FileDiff {
     var paths: std.ArrayList([]const u8) = .empty;
     var it = before.iterator();

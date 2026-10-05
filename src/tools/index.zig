@@ -1,8 +1,3 @@
-//! The tool set: schemas handed to the model, and dispatch to implementations.
-//!
-//! A name in the config that has no implementation is not advertised to the
-//! model, so a request can never reach a tool that cannot run.
-
 const std = @import("std");
 const config = @import("../config.zig");
 const common = @import("common.zig");
@@ -37,10 +32,6 @@ pub fn execute(a: std.mem.Allocator, scratch: std.mem.Allocator, name: []const u
     };
 }
 
-/// One configured tool as `{"name":…,"description":…,"parameters":…}`, the
-/// protocol-neutral form each provider adapter encodes its own wire form from.
-/// `with_images` picks the `read` description that mentions image input, so the
-/// model is never told about something the model itself cannot use.
 fn writeTool(w: *std.Io.Writer, name: config.ToolName, with_images: bool) !void {
     const description = switch (name) {
         .read => if (with_images) read_image_description else read_description,
@@ -60,7 +51,6 @@ fn writeTool(w: *std.Io.Writer, name: config.ToolName, with_images: bool) !void 
     try w.writeByte('}');
 }
 
-/// The configured tool schemas as the JSON array recorded in the session.
 pub fn json(a: std.mem.Allocator, names: []const config.ToolName, with_images: bool) []const u8 {
     var out: std.Io.Writer.Allocating = .init(a);
     const w = &out.writer;

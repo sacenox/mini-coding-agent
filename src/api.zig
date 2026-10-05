@@ -1,20 +1,12 @@
-//! The provider contract: one streaming request in, one assistant message out,
-//! with deltas delivered through a sink.
-
 const std = @import("std");
 const types = @import("types.zig");
 const http = @import("http.zig");
 const util = @import("util.zig");
 
 pub const Event = union(enum) {
-    /// Assistant text delta.
     text: []const u8,
-    /// Reasoning delta.
     reasoning: []const u8,
-    /// A tool call block began; the name is known but arguments have not
-    /// finished streaming.
     tool_start: []const u8,
-    /// A tool call block finished.
     tool_call: types.ToolCall,
 };
 
@@ -27,8 +19,6 @@ pub const Sink = struct {
     }
 };
 
-/// JSON written byte-for-byte as it stands, never re-encoded. The struct field
-/// that holds it supplies the key.
 pub const Raw = struct {
     bytes: []const u8 = "",
 
@@ -39,8 +29,6 @@ pub const Raw = struct {
     }
 };
 
-/// A provider error value: a message string, or an object carrying one under
-/// "message". An empty string is no error at all.
 pub const ErrField = struct {
     message: ?[]const u8 = null,
 
@@ -59,7 +47,6 @@ pub const ErrField = struct {
     }
 };
 
-/// A token count a provider may send as an integer or a float.
 pub const Count = struct {
     value: u64 = 0,
 
@@ -75,13 +62,10 @@ pub const Count = struct {
 };
 
 pub const Request = struct {
-    /// Long-lived allocator: the returned message's content outlives the step.
     pers: std.mem.Allocator,
-    /// Per-step arena: the request body and each parsed event. Reset freely.
     scratch: std.mem.Allocator,
     model: *const types.Model,
     system_prompt: []const u8,
-    /// A pre-serialized JSON array of tool schemas, verbatim.
     tools_json: []const u8,
     messages: []const types.Message,
     effort: []const u8,
@@ -89,35 +73,17 @@ pub const Request = struct {
     cancel: *const std.atomic.Value(bool),
 };
 
-/// An untrusted stream index is a hint, never a size. Anything past this is
-/// treated like a missing index so a hostile chunk cannot force an allocation.
 pub const max_stream_index = 10_000;
 
-/// How one wire reaches its provider: the URL, the key header, and the body
-/// encoder. Everything else about the request is the same for all four.
 pub const Wire = struct {
-    /// The header the api key travels in, and the prefix its value carries.
-    /// An empty key sends no header at all.
     key_header: []const u8,
     key_prefix: []const u8 = "",
-    /// A protocol version header, sent verbatim when its name is not empty.
     version: [2][]const u8 = .{ "", "" },
-    /// The path appended to the model's base URL, after any trailing slash.
-    /// `build_url` overrides it for a provider whose URL is not base plus path.
     path: []const u8 = "",
     build_url: ?*const fn (std.mem.Allocator, Request) anyerror![]u8 = null,
     build_body: *const fn (Request) anyerror![]u8,
 };
 
-/// The request life cycle every wire shares, over a `State` that carries
-/// `req`, `sink`, `arena`, `msg`, `stream_error` and `failed`, and handles each
-/// payload through `State.handle`. `finalize` moves the accumulated state into
-/// `msg`.
-///
-/// A stream that fails or is cancelled still finalizes first: the text the
-/// model did stream belongs in the transcript, and dropping it would lose a
-/// turn the user can see and cannot recover. A tool call whose arguments never
-/// finished is not emitted, so a partial call is never handed to a tool.
 pub fn run(
     comptime State: type,
     comptime Chunk: type,
@@ -140,10 +106,6 @@ pub fn run(
 
     var st = State{ .req = req, .sink = sink, .arena = &arena, .msg = &msg };
 
-    // A stream that did not run to the end can leave a tool call with a name
-    // but truncated arguments. Such a call is not a call the model finished
-    // making, so `finalize` drops it rather than emit arguments to run; the
-    // transport's own stop reason is the one the message keeps.
     const complete = try post(req, url, hdrs, body, .{ .ctx = &st, .onEvent = onData(State, Chunk) }, &msg);
     st.failed = !complete;
     const reason = msg.stop_reason;
@@ -161,16 +123,11 @@ pub fn run(
     return msg;
 }
 
-/// The SSE hook every wire shares: parse one payload into the wire's `Chunk`
-/// type and hand it to `State.handle`. The arena is reset before the next
-/// payload, so nothing may keep a pointer into the chunk.
 fn onData(comptime State: type, comptime Chunk: type) *const fn (ctx: *anyopaque, data: []const u8) void {
     return struct {
         fn hook(ctx: *anyopaque, data: []const u8) void {
             const st: *State = @ptrCast(@alignCast(ctx));
             defer _ = st.arena.reset(.retain_capacity);
-            // The sentinel OpenAI-compatible streams send in place of a final
-            // event. It is not JSON, and it is not a failure.
             if (std.mem.eql(u8, std.mem.trim(u8, data, " \r\n"), "[DONE]")) return;
             const chunk = std.json.parseFromSliceLeaky(Chunk, st.arena.allocator(), data, .{ .ignore_unknown_fields = true }) catch |e| {
                 if (e != error.OutOfMemory and st.stream_error == null) st.stream_error = "stream: invalid JSON chunk";
@@ -183,9 +140,6 @@ fn onData(comptime State: type, comptime Chunk: type) *const fn (ctx: *anyopaque
     }.hook;
 }
 
-/// Grows `list` so `index` exists, and returns the element there. An untrusted
-/// stream index is a hint, never a size: anything outside the sane range
-/// appends instead, so a hostile chunk cannot force an allocation.
 pub fn blockAt(comptime T: type, list: *std.ArrayList(T), a: std.mem.Allocator, index: i64) !*T {
     const idx: usize = if (index >= 0 and index <= max_stream_index)
         @intCast(index)
@@ -195,9 +149,6 @@ pub fn blockAt(comptime T: type, list: *std.ArrayList(T), a: std.mem.Allocator, 
     return &list.items[idx];
 }
 
-/// Runs one streaming request. Transport and protocol failures are recorded in
-/// the returned message's `stop_reason`/`error_message`; only a failure to
-/// allocate is an error.
 pub fn stream(req: Request, sink: Sink) std.mem.Allocator.Error!types.AssistantMessage {
     if (std.mem.eql(u8, req.model.api, "openai-completions")) {
         return @import("api/openai_completions.zig").stream(req, sink);
@@ -227,9 +178,6 @@ fn newAssistant(req: Request) types.AssistantMessage {
     };
 }
 
-/// The header list every request shares: content negotiation, the wire's own
-/// key and version headers, then the caller's custom and session headers. A
-/// header with an empty value is left out entirely.
 fn wireHeaders(a: std.mem.Allocator, req: Request, wire: Wire) ![]http.Header {
     var list: std.ArrayList(http.Header) = .empty;
     errdefer list.deinit(a);
@@ -257,9 +205,6 @@ fn wireHeaders(a: std.mem.Allocator, req: Request, wire: Wire) ![]http.Header {
     return list.toOwnedSlice(a);
 }
 
-/// Sends the request and maps a transport failure onto `msg`. Returns false
-/// once the caller must return `msg` as-is; true when the stream completed and
-/// the caller should proceed to finalize.
 fn post(req: Request, url: []const u8, hdrs: []const http.Header, body: []const u8, handler: http.SseHandler, msg: *types.AssistantMessage) std.mem.Allocator.Error!bool {
     var err_body: ?[]const u8 = null;
     http.postSse(req.scratch, url, hdrs, body, handler, req.cancel, &err_body) catch |e| {
@@ -284,17 +229,13 @@ fn post(req: Request, url: []const u8, hdrs: []const http.Header, body: []const 
     return true;
 }
 
-/// One tool call as the provider streams it. The wires differ only in where
-/// the pieces arrive; the shape and the accumulation are the same.
 pub const Call = struct {
     id: []const u8 = "",
     name: []const u8 = "",
     args: std.ArrayList(u8) = .empty,
     started: bool = false,
-    /// Google's continuation data, replayed on the next request.
     thought_signature: ?[]const u8 = null,
 
-    /// Records the name and announces the call the first time one arrives.
     pub fn announce(self: *Call, a: std.mem.Allocator, sink: Sink, name: []const u8) !void {
         if (self.name.len == 0) self.name = try a.dupe(u8, name);
         if (!self.started and self.name.len > 0) {
@@ -304,9 +245,6 @@ pub const Call = struct {
     }
 };
 
-/// Appends every call the stream finished with, and says whether there was
-/// one. A stream that failed left arguments truncated, so its calls are
-/// dropped: a partial call is not a call the model finished making.
 pub fn appendCalls(msg: *types.AssistantMessage, sink: Sink, a: std.mem.Allocator, calls: []const Call, failed: bool) !bool {
     if (failed) return false;
     var any = false;
@@ -328,13 +266,10 @@ pub fn appendCalls(msg: *types.AssistantMessage, sink: Sink, a: std.mem.Allocato
     return any;
 }
 
-/// A call's arguments, or an empty object when the provider streamed none.
 pub fn argumentsOrObject(args: []const u8) []const u8 {
     return if (args.len > 0) args else "{}";
 }
 
-/// Records the tokens a response cost and prices them. The total is the
-/// provider's own when it reported one, and the sum of the parts otherwise.
 pub fn finishUsage(msg: *types.AssistantMessage, model: *const types.Model, usage: types.Usage) void {
     var u = usage;
     if (u.total_tokens == 0) u.total_tokens = u.input + u.output + u.cache_read + u.cache_write;
@@ -350,7 +285,6 @@ pub fn finishUsage(msg: *types.AssistantMessage, model: *const types.Model, usag
     msg.usage = u;
 }
 
-/// A non-empty string field, or null.
 pub fn stringField(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
     const v = obj.get(key) orelse return null;
     return switch (v) {
@@ -359,11 +293,6 @@ pub fn stringField(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
     };
 }
 
-/// How one provider frames its `tools` array value: `open` and `close` bound
-/// it, and each element is `entry` wrapped around the call's schema under
-/// `params_key`. The key `"tools"` is supplied by the struct field that holds
-/// the value. A provider with no tools writes nothing at all, which is also how
-/// an unparsable `tools_json` is treated.
 pub const ToolsForm = struct {
     open: []const u8,
     entry: []const u8,
@@ -372,9 +301,6 @@ pub const ToolsForm = struct {
     close: []const u8,
 };
 
-/// A request's `tools` array, rendered verbatim from the flat `tools_json` the
-/// session recorded, in the wire form `form` describes. It is written as an
-/// array value, so the caller's struct field supplies the key.
 pub const Tools = struct {
     a: std.mem.Allocator,
     json: []const u8,
@@ -387,9 +313,6 @@ pub const Tools = struct {
     }
 };
 
-/// Writes the `tools` array in the wire form `form` describes, from the flat
-/// `tools_json` array the session recorded. Nothing at all is written when
-/// there is no tool, which is also how an unparsable `tools_json` is treated.
 pub fn writeTools(w: *std.Io.Writer, a: std.mem.Allocator, tools_json: []const u8, form: ToolsForm) !void {
     if (tools_json.len == 0) return;
     const root = std.json.parseFromSliceLeaky(std.json.Value, a, tools_json, .{}) catch return;
@@ -411,9 +334,6 @@ pub fn writeTools(w: *std.Io.Writer, a: std.mem.Allocator, tools_json: []const u
     try w.writeAll(form.close);
 }
 
-/// `"name":"…","description":"…","<params_key>":<schema>` — the body every
-/// provider's tool encoding shares. A schema that names no parameters is sent
-/// as `{}` rather than panicking on a session log written by another version.
 fn writeToolBody(w: *std.Io.Writer, obj: std.json.ObjectMap, params_key: []const u8) !void {
     try w.writeAll("\"name\":");
     try std.json.Stringify.encodeJsonString(stringField(obj, "name") orelse "", .{}, w);
@@ -429,7 +349,6 @@ fn writeToolBody(w: *std.Io.Writer, obj: std.json.ObjectMap, params_key: []const
     }
 }
 
-/// `base_url` plus one path segment, with a trailing slash on the base ignored.
 fn buildUrl(a: std.mem.Allocator, base: []const u8, path: []const u8) ![]u8 {
     return std.fmt.allocPrint(a, "{s}{s}", .{ std.mem.trimEnd(u8, base, "/"), path });
 }
