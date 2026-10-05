@@ -145,10 +145,10 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
         return types.Model{
             .id = model_id,
             .name = model_id,
-            .api = p.api,
+            .api = @tagName(p.api),
             .provider = provider_id,
-            .base_url = p.base_url,
-            .api_key = firstEnv(p.env_keys),
+            .base_url = p.@"baseUrl",
+            .api_key = firstEnv(p.@"envKeys"),
             .effort = cfg.thinking_effort orelse "",
             // Custom providers are uncatalogued; assume image input. A model
             // that rejects images surfaces the provider error as-is.
@@ -159,12 +159,21 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
             .cost_output = 0,
             .cost_cache_read = 0,
             .session_header = null,
-            .headers = p.headers,
+            .headers = headerPairs(a, p.headers),
         };
     }
 
     err.* = std.fmt.allocPrint(a, "unknown provider \"{s}\"", .{provider_id}) catch "unknown provider";
     return null;
+}
+
+/// A custom provider's header map as plain name/value pairs, or none.
+fn headerPairs(a: std.mem.Allocator, headers: ?std.json.ArrayHashMap([]const u8)) []const [2][]const u8 {
+    const h = headers orelse return &.{};
+    var out: std.ArrayList([2][]const u8) = .empty;
+    var it = h.map.iterator();
+    while (it.next()) |e| out.append(a, .{ e.key_ptr.*, e.value_ptr.* }) catch {};
+    return out.toOwnedSlice(a) catch &.{};
 }
 
 /// A provider the TUI can offer in `/provider`. `key_present` is only a hint;
@@ -178,7 +187,7 @@ pub fn providers(a: std.mem.Allocator, cfg: *const config.Config) []ProviderEntr
         out.append(a, .{ .id = b.id, .name = b.id, .key_present = firstEnv(b.env_keys) != null }) catch {};
     }
     for (cfg.custom_providers) |p| {
-        out.append(a, .{ .id = p.id, .name = p.name orelse p.id, .key_present = p.env_keys.len == 0 or firstEnv(p.env_keys) != null }) catch {};
+        out.append(a, .{ .id = p.id, .name = p.name orelse p.id, .key_present = p.@"envKeys".len == 0 or firstEnv(p.@"envKeys") != null }) catch {};
     }
     return out.toOwnedSlice(a) catch &.{};
 }

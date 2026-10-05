@@ -5,7 +5,6 @@
 
 const std = @import("std");
 const config = @import("../config.zig");
-const json_mod = @import("../json.zig");
 const common = @import("common.zig");
 const read_tool = @import("read.zig");
 const edit_tool = @import("edit.zig");
@@ -49,9 +48,9 @@ fn writeTool(w: *std.Io.Writer, name: config.ToolName, with_images: bool) !void 
         .bash => bash_description,
     };
     try w.writeAll("{\"name\":");
-    try json_mod.writeString(w, @tagName(name));
+    try std.json.Stringify.encodeJsonString(@tagName(name), .{}, w);
     try w.writeAll(",\"description\":");
-    try json_mod.writeString(w, description);
+    try std.json.Stringify.encodeJsonString(description, .{}, w);
     try w.writeAll(",\"parameters\":");
     try w.writeAll(switch (name) {
         .read => read_params,

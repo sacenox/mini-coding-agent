@@ -4,62 +4,64 @@
 const std = @import("std");
 const api = @import("../api.zig");
 const types = @import("../types.zig");
-const json = @import("../json.zig");
 
 // ---- request building -----------------------------------------------------
 
-fn writeText(w: *std.Io.Writer, text: []const u8) !void {
-    try w.writeAll("{\"text\":");
-    try json.writeString(w, text);
-    try w.writeByte('}');
+/// A part of a content object. Exactly one member is set; the rest are null
+/// and are left out.
+const Part = struct {
+    text: ?[]const u8 = null,
+    @"inlineData": ?struct { @"mimeType": []const u8, data: []const u8 } = null,
+    @"functionCall": ?struct { name: []const u8, args: api.Raw, @"thoughtSignature": ?[]const u8 = null } = null,
+    @"functionResponse": ?struct {
+        name: []const u8,
+        response: Response,
+        const Response = struct { output: ?[]const u8 = null, @"error": ?[]const u8 = null };
+    } = null,
+};
+
+const Content = struct {
+    role: []const u8,
+    parts: []const Part,
+};
+
+const SystemInstruction = struct { parts: []const Part };
+
+const GenerationConfig = struct {
+    @"maxOutputTokens": ?u64 = null,
+    @"thinkingConfig": ?struct { @"includeThoughts": bool = true, @"thinkingBudget": u64 } = null,
+};
+
+const Body = struct {
+    contents: []const Content,
+    @"systemInstruction": ?SystemInstruction = null,
+    tools: ?api.Tools = null,
+    @"generationConfig": ?GenerationConfig = null,
+};
+
+fn textPart(text: []const u8) Part {
+    return .{ .text = text };
 }
 
-fn writeImage(w: *std.Io.Writer, img: types.ImageContent) !void {
-    try w.writeAll("{\"inlineData\":{\"mimeType\":");
-    try json.writeString(w, img.mime_type);
-    try w.writeAll(",\"data\":");
-    try json.writeString(w, img.data);
-    try w.writeAll("}}");
-}
-
-fn writeFunctionCall(w: *std.Io.Writer, c: types.ToolCall) !void {
-    try w.writeAll("{\"functionCall\":{\"name\":");
-    try json.writeString(w, c.name);
-    try w.writeAll(",\"args\":");
-    try w.writeAll(api.argumentsOrObject(c.arguments));
-    try w.writeByte('}');
-    if (c.thought_signature) |sig| {
-        try w.writeAll(",\"thoughtSignature\":");
-        try json.writeString(w, sig);
-    }
-    try w.writeByte('}');
-}
-
-/// A user or assistant message as a content object.
-fn writeContent(w: *std.Io.Writer, msg: types.Message) !void {
+fn contentParts(a: std.mem.Allocator, msg: types.Message) ![]const Part {
     switch (msg) {
         .user => |u| {
-            try w.writeAll("{\"role\":\"user\",\"parts\":[");
-            try writeText(w, u.content);
-            try w.writeAll("]}");
+            const parts = try a.alloc(Part, 1);
+            parts[0] = textPart(u.content);
+            return parts;
         },
         .assistant => |am| {
-            try w.writeAll("{\"role\":\"model\",\"parts\":[");
-            var first = true;
+            var parts: std.ArrayList(Part) = .empty;
             for (am.content.items) |block| switch (block) {
-                .text => |t| {
-                    if (!first) try w.writeByte(',');
-                    first = false;
-                    try writeText(w, t);
-                },
-                .tool_call => |c| {
-                    if (!first) try w.writeByte(',');
-                    first = false;
-                    try writeFunctionCall(w, c);
-                },
+                .text => |t| try parts.append(a, textPart(t)),
+                .tool_call => |c| try parts.append(a, .{ .@"functionCall" = .{
+                    .name = c.name,
+                    .args = .{ .bytes = api.argumentsOrObject(c.arguments) },
+                    .@"thoughtSignature" = c.thought_signature,
+                } }),
                 .thinking => {},
             };
-            try w.writeAll("]}");
+            return parts.items;
         },
         .tool_result => unreachable,
     }
@@ -67,20 +69,36 @@ fn writeContent(w: *std.Io.Writer, msg: types.Message) !void {
 
 /// A run of tool results becomes one user turn of functionResponse parts. The
 /// response key is "error" when the tool failed and "output" otherwise.
-fn writeToolResults(w: *std.Io.Writer, run: []const types.Message) !void {
-    try w.writeAll("{\"role\":\"user\",\"parts\":[");
-    for (run, 0..) |msg, i| {
-        if (i > 0) try w.writeByte(',');
+fn toolResultContent(a: std.mem.Allocator, run: []const types.Message) !Content {
+    const parts = try a.alloc(Part, run.len);
+    for (run, parts) |msg, *part| {
         const t = msg.tool_result;
-        try w.writeAll("{\"functionResponse\":{\"name\":");
-        try json.writeString(w, t.tool_name);
-        try w.writeAll(",\"response\":{\"");
-        try w.writeAll(if (t.is_error) "error" else "output");
-        try w.writeAll("\":");
-        try json.writeString(w, t.text);
-        try w.writeAll("}}}");
+        part.* = .{ .@"functionResponse" = .{ .name = t.tool_name, .response = if (t.is_error)
+            .{ .@"error" = t.text }
+        else
+            .{ .output = t.text } } };
     }
-    try w.writeAll("]}");
+    return .{ .role = "user", .parts = parts };
+}
+
+fn buildContents(a: std.mem.Allocator, req: api.Request) ![]const Content {
+    var out: std.ArrayList(Content) = .empty;
+    var i: usize = 0;
+    while (i < req.messages.len) {
+        if (req.messages[i] == .tool_result) {
+            const start = i;
+            while (i < req.messages.len and req.messages[i] == .tool_result) : (i += 1) {}
+            try out.append(a, try toolResultContent(a, req.messages[start..i]));
+            continue;
+        }
+        const msg = req.messages[i];
+        try out.append(a, .{
+            .role = if (msg == .assistant) "model" else "user",
+            .parts = try contentParts(a, msg),
+        });
+        i += 1;
+    }
+    return out.items;
 }
 
 /// Thinking budget per effort. `off` disables thinking entirely.
@@ -101,62 +119,30 @@ fn budgetFor(effort: []const u8) ?u64 {
 }
 
 fn buildBody(req: api.Request) ![]u8 {
-    var out: std.Io.Writer.Allocating = .init(req.scratch);
-    const w = &out.writer;
-
-    try w.writeAll("{\"contents\":[");
-    var first = true;
-    var i: usize = 0;
-    while (i < req.messages.len) {
-        if (req.messages[i] == .tool_result) {
-            const start = i;
-            while (i < req.messages.len and req.messages[i] == .tool_result) : (i += 1) {}
-            if (!first) try w.writeByte(',');
-            first = false;
-            try writeToolResults(w, req.messages[start..i]);
-            continue;
-        }
-        if (!first) try w.writeByte(',');
-        first = false;
-        try writeContent(w, req.messages[i]);
-        i += 1;
-    }
-    try w.writeByte(']');
-
-    if (req.system_prompt.len > 0) {
-        try w.writeAll(",\"systemInstruction\":{\"parts\":[");
-        try writeText(w, req.system_prompt);
-        try w.writeAll("]}");
-    }
-
-    try api.writeTools(w, req.scratch, req.tools_json, .{
-        .open = ",\"tools\":[{\"functionDeclarations\":[",
-        .entry = "{",
-        .params_key = "parametersJsonSchema",
-        .entry_close = "}",
-        .close = "]}]",
-    });
-
-    // `generationConfig` holds max tokens and, when the model thinks, the
-    // thinking budget. It is written only when it has at least one field.
-    if (req.model.max_tokens > 0 or budgetFor(req.effort) != null) {
-        try w.writeAll(",\"generationConfig\":{");
-        if (req.model.max_tokens > 0) {
-            try w.writeAll("\"maxOutputTokens\":");
-            try json.writeNum(w, req.model.max_tokens);
-        }
-        if (budgetFor(req.effort)) |budget| {
-            if (req.model.max_tokens > 0) try w.writeByte(',');
-            try w.writeAll("\"thinkingConfig\":{");
-            if (budget > 0) try w.writeAll("\"includeThoughts\":true,");
-            try w.writeAll("\"thinkingBudget\":");
-            try json.writeNum(w, budget);
-            try w.writeByte('}');
-        }
-        try w.writeByte('}');
-    }
-    try w.writeByte('}');
-    return out.written();
+    const a = req.scratch;
+    const budget = budgetFor(req.effort);
+    const config: ?GenerationConfig = if (req.model.max_tokens > 0 or budget != null) .{
+        .@"maxOutputTokens" = if (req.model.max_tokens > 0) req.model.max_tokens else null,
+        .@"thinkingConfig" = if (budget) |b| .{ .@"includeThoughts" = b > 0, .@"thinkingBudget" = b } else null,
+    } else null;
+    const sys = if (req.system_prompt.len > 0) blk: {
+        const parts = try a.alloc(Part, 1);
+        parts[0] = textPart(req.system_prompt);
+        break :blk SystemInstruction{ .parts = parts };
+    } else null;
+    const body = Body{
+        .contents = try buildContents(a, req),
+        .@"systemInstruction" = sys,
+        .tools = if (req.tools_json.len > 0) .{ .a = a, .json = req.tools_json, .form = .{
+            .open = "[{\"functionDeclarations\":[",
+            .entry = "{",
+            .params_key = "parametersJsonSchema",
+            .entry_close = "}",
+            .close = "]}]",
+        } } else null,
+        .@"generationConfig" = config,
+    };
+    return std.json.Stringify.valueAlloc(a, body, .{ .emit_null_optional_fields = false });
 }
 
 /// Google addresses a model by path, not by a query parameter, and streams
@@ -175,6 +161,32 @@ fn buildUrl(a: std.mem.Allocator, req: api.Request) ![]u8 {
 
 // ---- streaming state ------------------------------------------------------
 
+const Chunk = struct {
+    @"error": ?api.ErrField = null,
+    candidates: []const Candidate = &.{},
+    @"usageMetadata": ?Usage = null,
+
+    const Candidate = struct {
+        content: ?struct { parts: []const Piece = &.{} } = null,
+        @"finishReason": ?[]const u8 = null,
+    };
+
+    const Piece = struct {
+        text: ?[]const u8 = null,
+        thought: ?bool = null,
+        @"functionCall": ?Function = null,
+        @"thoughtSignature": ?[]const u8 = null,
+        const Function = struct { name: ?[]const u8 = null, args: ?std.json.Value = null };
+    };
+
+    const Usage = struct {
+        @"promptTokenCount": api.Count = .{},
+        @"candidatesTokenCount": api.Count = .{},
+        @"thoughtsTokenCount": api.Count = .{},
+        @"totalTokenCount": api.Count = .{},
+    };
+};
+
 const State = struct {
     req: api.Request,
     sink: api.Sink,
@@ -189,56 +201,56 @@ const State = struct {
     /// Set by `run` when the stream did not run to completion.
     failed: bool = false,
 
-    pub fn handle(st: *State, obj: std.json.ObjectMap) !void {
-        if (api.errorMessage(obj, "error")) |message| {
-            if (st.stream_error == null) st.stream_error = try st.req.pers.dupe(u8, message);
-            return;
+    pub fn handle(st: *State, chunk: Chunk) !void {
+        if (chunk.@"error") |err| {
+            if (err.message) |m| {
+                if (st.stream_error == null) st.stream_error = try st.req.pers.dupe(u8, m);
+                return;
+            }
         }
 
-        if (api.firstObjField(obj, "candidates")) |candidate| {
-            if (api.objField(candidate, "content")) |content| {
-                if (content.get("parts")) |parts| {
-                    if (parts == .array) {
-                        for (parts.array.items) |part| {
-                            if (part != .object) continue;
-                            if (part.object.get("functionCall") != null) {
-                                try addCall(st, part.object);
-                                continue;
-                            }
-                            const text = api.stringField(part.object, "text") orelse continue;
-                            if (api.boolField(part.object, "thought", false)) {
-                                try st.reasoning.appendSlice(st.req.pers, text);
-                                st.sink.emit(.{ .reasoning = text });
-                            } else {
-                                try st.text.appendSlice(st.req.pers, text);
-                                st.sink.emit(.{ .text = text });
-                            }
-                        }
+        if (chunk.candidates.len > 0) {
+            const candidate = chunk.candidates[0];
+            if (candidate.content) |content| {
+                for (content.parts) |part| {
+                    if (part.@"functionCall" != null) {
+                        try addCall(st, part);
+                        continue;
+                    }
+                    const text = part.text orelse continue;
+                    if (part.thought orelse false) {
+                        try st.reasoning.appendSlice(st.req.pers, text);
+                        st.sink.emit(.{ .reasoning = text });
+                    } else {
+                        try st.text.appendSlice(st.req.pers, text);
+                        st.sink.emit(.{ .text = text });
                     }
                 }
             }
-            if (api.stringField(candidate, "finishReason")) |fr| {
-                st.finish = try st.req.pers.dupe(u8, fr);
+            if (candidate.@"finishReason") |fr| {
+                if (fr.len > 0) st.finish = try st.req.pers.dupe(u8, fr);
             }
         }
 
-        if (api.objField(obj, "usageMetadata")) |u| {
-            st.usage.input = api.numField(u, "promptTokenCount");
-            st.usage.output = api.numField(u, "candidatesTokenCount") + api.numField(u, "thoughtsTokenCount");
-            st.usage.total_tokens = api.numField(u, "totalTokenCount");
+        if (chunk.@"usageMetadata") |u| {
+            st.usage.input = u.@"promptTokenCount".value;
+            st.usage.output = u.@"candidatesTokenCount".value + u.@"thoughtsTokenCount".value;
+            st.usage.total_tokens = u.@"totalTokenCount".value;
         }
     }
 };
 
 /// Google sends a whole call in one part, so a call is appended, not grown in
 /// place. The id is derived from the name and order because Google omits one.
-fn addCall(st: *State, part: std.json.ObjectMap) !void {
-    const fc = api.objField(part, "functionCall") orelse return;
+fn addCall(st: *State, part: Chunk.Piece) !void {
+    const fc = part.@"functionCall" orelse return;
     const call = try st.calls.addOne(st.req.pers);
     call.* = .{};
-    if (api.stringField(part, "thoughtSignature")) |sig| call.thought_signature = try st.req.pers.dupe(u8, sig);
-    try call.announce(st.req.pers, st.sink, api.stringField(fc, "name") orelse "");
-    if (fc.get("args")) |args| {
+    if (part.@"thoughtSignature") |sig| {
+        if (sig.len > 0) call.thought_signature = try st.req.pers.dupe(u8, sig);
+    }
+    try call.announce(st.req.pers, st.sink, fc.name orelse "");
+    if (fc.args) |args| {
         if (args != .null) {
             var out: std.Io.Writer.Allocating = .init(st.req.pers);
             try std.json.Stringify.value(args, .{}, &out.writer);
@@ -273,5 +285,5 @@ const wire = api.Wire{
 };
 
 pub fn stream(req: api.Request, sink: api.Sink) std.mem.Allocator.Error!types.AssistantMessage {
-    return api.run(State, wire, req, sink, finalize);
+    return api.run(State, Chunk, wire, req, sink, finalize);
 }

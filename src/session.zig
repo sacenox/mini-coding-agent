@@ -5,10 +5,190 @@
 const std = @import("std");
 const platform = @import("platform.zig");
 const util = @import("util.zig");
-const json = @import("json.zig");
 const types = @import("types.zig");
 
 const alphabet = "0123456789abcdefghijklmnopqrstuvwxyz";
+
+/// A value written byte-for-byte as it stands, never re-encoded. The struct
+/// field that holds it supplies the key, so only the value is written here.
+const Raw = struct {
+    bytes: []const u8 = "",
+    pub fn jsonStringify(self: Raw, jws: anytype) !void {
+        try jws.beginWriteRaw();
+        try jws.writer.writeAll(self.bytes);
+        jws.endWriteRaw();
+    }
+};
+
+const StopReason = enum {
+    pending,
+    stop,
+    length,
+    tool_use,
+    err,
+    aborted,
+
+    pub fn jsonStringify(self: StopReason, jws: anytype) !void {
+        try jws.write(@as([]const u8, switch (self) {
+            .pending => "pending",
+            .stop => "stop",
+            .length => "length",
+            .tool_use => "toolUse",
+            .err => "error",
+            .aborted => "aborted",
+        }));
+    }
+
+    fn fromWire(reason: types.StopReason) StopReason {
+        return switch (reason) {
+            .pending => .pending,
+            .stop => .stop,
+            .length => .length,
+            .tool_use => .tool_use,
+            .err => .err,
+            .aborted => .aborted,
+        };
+    }
+};
+
+const ThinkingBlock = struct {
+    type: []const u8 = "thinking",
+    thinking: []const u8,
+    thinkingSignature: ?[]const u8 = null,
+};
+const CallBlock = struct {
+    type: []const u8 = "toolCall",
+    id: []const u8,
+    name: []const u8,
+    arguments: Raw,
+    thoughtSignature: ?[]const u8 = null,
+};
+const Block = union(enum) {
+    text: TextPart,
+    thinking: ThinkingBlock,
+    tool_call: CallBlock,
+
+    pub fn jsonStringify(self: Block, jws: anytype) !void {
+        switch (self) {
+            .text => |v| try jws.write(v),
+            .thinking => |v| try jws.write(v),
+            .tool_call => |v| try jws.write(v),
+        }
+    }
+};
+
+const UserRecord = struct {
+    role: []const u8 = "user",
+    content: []const u8,
+    timestamp: i64,
+};
+
+const TextPart = struct { type: []const u8 = "text", text: []const u8 };
+const ImagePart = struct { type: []const u8 = "image", data: []const u8, mimeType: []const u8 };
+const Part = union(enum) {
+    text: TextPart,
+    image: ImagePart,
+
+    pub fn jsonStringify(self: Part, jws: anytype) !void {
+        switch (self) {
+            .text => |v| try jws.write(v),
+            .image => |v| try jws.write(v),
+        }
+    }
+};
+
+const ToolResultRecord = struct {
+    role: []const u8 = "toolResult",
+    toolCallId: []const u8,
+    toolName: []const u8,
+    content: []const Part,
+    isError: bool,
+    timestamp: i64,
+};
+
+/// A number written byte-for-byte, so a non-finite cost becomes `null` rather
+/// than the string `"nan"` std would emit.
+const Number = struct {
+    value: f64 = 0,
+    pub fn jsonStringify(self: Number, jws: anytype) !void {
+        if (!std.math.isFinite(self.value)) return jws.write(null);
+        try jws.write(self.value);
+    }
+};
+
+const UsageRecord = struct {
+    input: u64 = 0,
+    output: u64 = 0,
+    cacheRead: u64 = 0,
+    cacheWrite: u64 = 0,
+    reasoning: ?u64 = null,
+    totalTokens: u64 = 0,
+    cost: struct {
+        input: Number = .{},
+        output: Number = .{},
+        cacheRead: Number = .{},
+        total: Number = .{},
+    } = .{},
+};
+
+const AssistantRecord = struct {
+    role: []const u8 = "assistant",
+    content: []const Block,
+    api: []const u8,
+    provider: []const u8,
+    model: []const u8,
+    usage: UsageRecord,
+    stopReason: StopReason,
+    timestamp: i64,
+    responseId: ?[]const u8 = null,
+    responseModel: ?[]const u8 = null,
+    rawStopReason: ?[]const u8 = null,
+    errorMessage: ?[]const u8 = null,
+};
+
+const MessageRecord = union(enum) {
+    user: UserRecord,
+    tool_result: ToolResultRecord,
+    assistant: AssistantRecord,
+
+    pub fn jsonStringify(self: MessageRecord, jws: anytype) !void {
+        switch (self) {
+            .user => |v| try jws.write(v),
+            .tool_result => |v| try jws.write(v),
+            .assistant => |v| try jws.write(v),
+        }
+    }
+};
+
+const MessageLine = struct {
+    type: []const u8 = "message",
+    at: []const u8,
+    message: MessageRecord,
+};
+
+const RequestLine = struct {
+    type: []const u8 = "request",
+    at: []const u8,
+    provider: []const u8,
+    model: []const u8,
+    api: []const u8,
+    thinkingEffort: []const u8,
+    systemPrompt: []const u8,
+    tools: Raw,
+};
+
+const HeaderLine = struct {
+    type: []const u8 = "session",
+    version: u32 = 1,
+    id: []const u8,
+    cwd: []const u8,
+    createdAt: []const u8,
+    title: []const u8,
+};
+
+fn stringify(a: std.mem.Allocator, value: anytype) ![]u8 {
+    return std.json.Stringify.valueAlloc(a, value, .{ .emit_null_optional_fields = false });
+}
 
 pub const Request = struct {
     provider: []const u8,
@@ -37,39 +217,43 @@ pub const Session = struct {
         if (self.closed) return;
         try self.ensure(if (message == .user) util.slugify(self.a, message.user.content) else "session");
 
-        var out: std.Io.Writer.Allocating = .init(scratch);
-        defer out.deinit();
-        const w = &out.writer;
-        try w.writeAll("{\"type\":\"message\",\"at\":");
-        try json.writeString(w, util.isoAlloc(scratch));
-        try w.writeAll(",\"message\":");
-        try writeMessage(w, message);
-        try w.writeAll("}\n");
-        try self.commit(out.written());
+        var arena = std.heap.ArenaAllocator.init(scratch);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const line = try stringify(a, MessageLine{
+            .at = util.isoAlloc(a),
+            .message = try messageRecord(a, message),
+        });
+        try self.commitLine(scratch, line);
     }
 
     pub fn appendRequest(self: *Session, scratch: std.mem.Allocator, req: Request) !void {
         if (self.closed) return;
         try self.ensure("session");
 
+        var arena = std.heap.ArenaAllocator.init(scratch);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const line = try stringify(a, RequestLine{
+            .at = util.isoAlloc(a),
+            .provider = req.provider,
+            .model = req.model,
+            .api = req.api,
+            .thinkingEffort = req.thinking_effort,
+            .systemPrompt = req.system_prompt,
+            // A tool array is replayed verbatim; an absent one is an empty array.
+            .tools = .{ .bytes = if (req.tools_json.len > 0) req.tools_json else "[]" },
+        });
+        try self.commitLine(scratch, line);
+    }
+
+    /// Appends the terminating newline to one serialized record and commits it.
+    fn commitLine(self: *Session, scratch: std.mem.Allocator, line: []const u8) !void {
         var out: std.Io.Writer.Allocating = .init(scratch);
         defer out.deinit();
         const w = &out.writer;
-        try w.writeAll("{\"type\":\"request\",\"at\":");
-        try json.writeString(w, util.isoAlloc(scratch));
-        try w.writeAll(",\"provider\":");
-        try json.writeString(w, req.provider);
-        try w.writeAll(",\"model\":");
-        try json.writeString(w, req.model);
-        try w.writeAll(",\"api\":");
-        try json.writeString(w, req.api);
-        try w.writeAll(",\"thinkingEffort\":");
-        try json.writeString(w, req.thinking_effort);
-        try w.writeAll(",\"systemPrompt\":");
-        try json.writeString(w, req.system_prompt);
-        try w.writeAll(",\"tools\":");
-        try w.writeAll(if (req.tools_json.len > 0) req.tools_json else "[]");
-        try w.writeAll("}\n");
+        try w.writeAll(line);
+        try w.writeByte('\n');
         try self.commit(out.written());
     }
 
@@ -107,15 +291,13 @@ pub const Session = struct {
             var header_buf: std.Io.Writer.Allocating = .init(self.a);
             defer header_buf.deinit();
             const w = &header_buf.writer;
-            try w.writeAll("{\"type\":\"session\",\"version\":1,\"id\":");
-            try json.writeString(w, name);
-            try w.writeAll(",\"cwd\":");
-            try json.writeString(w, self.cwd);
-            try w.writeAll(",\"createdAt\":");
-            try json.writeString(w, util.isoAlloc(self.a));
-            try w.writeAll(",\"title\":");
-            try json.writeString(w, title);
-            try w.writeAll("}\n");
+            try w.writeAll(try stringify(self.a, HeaderLine{
+                .id = name,
+                .cwd = self.cwd,
+                .createdAt = util.isoAlloc(self.a),
+                .title = title,
+            }));
+            try w.writeByte('\n');
             try self.commit(header_buf.written());
             return;
         }
@@ -135,126 +317,61 @@ pub const Session = struct {
     }
 };
 
-fn writeMessage(w: *std.Io.Writer, message: types.Message) !void {
+fn messageRecord(a: std.mem.Allocator, message: types.Message) !MessageRecord {
     switch (message) {
-        .user => |u| {
-            try w.writeAll("{\"role\":\"user\",\"content\":");
-            try json.writeString(w, u.content);
-            try w.writeAll(",\"timestamp\":");
-            try json.writeNum(w, u.timestamp);
-            try w.writeByte('}');
-        },
+        .user => |u| return .{ .user = .{ .content = u.content, .timestamp = u.timestamp } },
         .tool_result => |t| {
-            try w.writeAll("{\"role\":\"toolResult\",\"toolCallId\":");
-            try json.writeString(w, t.tool_call_id);
-            try w.writeAll(",\"toolName\":");
-            try json.writeString(w, t.tool_name);
-            try w.writeAll(",\"content\":[{\"type\":\"text\",\"text\":");
-            try json.writeString(w, t.text);
-            try w.writeByte('}');
+            var parts: std.ArrayList(Part) = .empty;
+            try parts.append(a, .{ .text = .{ .text = t.text } });
             for (t.images) |img| {
-                try w.writeAll(",{\"type\":\"image\",\"data\":");
-                try json.writeString(w, img.data);
-                try w.writeAll(",\"mimeType\":");
-                try json.writeString(w, img.mime_type);
-                try w.writeByte('}');
+                try parts.append(a, .{ .image = .{ .data = img.data, .mimeType = img.mime_type } });
             }
-            try w.writeByte(']');
-            try w.writeAll(",\"isError\":");
-            try json.writeBool(w, t.is_error);
-            try w.writeAll(",\"timestamp\":");
-            try json.writeNum(w, t.timestamp);
-            try w.writeByte('}');
+            return .{ .tool_result = .{
+                .toolCallId = t.tool_call_id,
+                .toolName = t.tool_name,
+                .content = try parts.toOwnedSlice(a),
+                .isError = t.is_error,
+                .timestamp = t.timestamp,
+            } };
         },
         .assistant => |m| {
-            try w.writeAll("{\"role\":\"assistant\",\"content\":[");
-            for (m.content.items, 0..) |block, i| {
-                if (i > 0) try w.writeByte(',');
-                switch (block) {
-                    .text => |t| {
-                        try w.writeAll("{\"type\":\"text\",\"text\":");
-                        try json.writeString(w, t);
-                        try w.writeByte('}');
+            var blocks: std.ArrayList(Block) = .empty;
+            for (m.content.items) |block| try blocks.append(a, switch (block) {
+                .text => |t| .{ .text = .{ .text = t } },
+                .thinking => |t| .{ .thinking = .{ .thinking = t.text, .thinkingSignature = t.signature } },
+                .tool_call => |c| .{ .tool_call = .{
+                    .id = c.id,
+                    .name = c.name,
+                    .arguments = .{ .bytes = c.arguments },
+                    .thoughtSignature = c.thought_signature,
+                } },
+            });
+            return .{ .assistant = .{
+                .content = try blocks.toOwnedSlice(a),
+                .api = m.api,
+                .provider = m.provider,
+                .model = m.model,
+                .usage = .{
+                    .input = m.usage.input,
+                    .output = m.usage.output,
+                    .cacheRead = m.usage.cache_read,
+                    .cacheWrite = m.usage.cache_write,
+                    .reasoning = m.usage.reasoning,
+                    .totalTokens = m.usage.total_tokens,
+                    .cost = .{
+                        .input = .{ .value = m.usage.cost_input },
+                        .output = .{ .value = m.usage.cost_output },
+                        .cacheRead = .{ .value = m.usage.cost_cache_read },
+                        .total = .{ .value = m.usage.cost_total },
                     },
-                    .thinking => |t| {
-                        try w.writeAll("{\"type\":\"thinking\",\"thinking\":");
-                        try json.writeString(w, t.text);
-                        if (t.signature) |sig| {
-                            try w.writeAll(",\"thinkingSignature\":");
-                            try json.writeString(w, sig);
-                        }
-                        try w.writeByte('}');
-                    },
-                    .tool_call => |c| {
-                        try w.writeAll("{\"type\":\"toolCall\",\"id\":");
-                        try json.writeString(w, c.id);
-                        try w.writeAll(",\"name\":");
-                        try json.writeString(w, c.name);
-                        try w.writeAll(",\"arguments\":");
-                        try w.writeAll(c.arguments);
-                        if (c.thought_signature) |sig| {
-                            try w.writeAll(",\"thoughtSignature\":");
-                            try json.writeString(w, sig);
-                        }
-                        try w.writeByte('}');
-                    },
-                }
-            }
-            try w.writeAll("],\"api\":");
-            try json.writeString(w, m.api);
-            try w.writeAll(",\"provider\":");
-            try json.writeString(w, m.provider);
-            try w.writeAll(",\"model\":");
-            try json.writeString(w, m.model);
-            try w.writeAll(",\"usage\":");
-            try writeUsage(w, m.usage);
-            try w.writeAll(",\"stopReason\":");
-            try json.writeString(w, m.stop_reason.wire());
-            try w.writeAll(",\"timestamp\":");
-            try json.writeNum(w, m.timestamp);
-            if (m.response_id) |v| {
-                try w.writeAll(",\"responseId\":");
-                try json.writeString(w, v);
-            }
-            if (m.response_model) |v| {
-                try w.writeAll(",\"responseModel\":");
-                try json.writeString(w, v);
-            }
-            if (m.raw_stop_reason) |v| {
-                try w.writeAll(",\"rawStopReason\":");
-                try json.writeString(w, v);
-            }
-            if (m.error_message) |v| {
-                try w.writeAll(",\"errorMessage\":");
-                try json.writeString(w, v);
-            }
-            try w.writeByte('}');
+                },
+                .stopReason = .fromWire(m.stop_reason),
+                .timestamp = m.timestamp,
+                .responseId = m.response_id,
+                .responseModel = m.response_model,
+                .rawStopReason = m.raw_stop_reason,
+                .errorMessage = m.error_message,
+            } };
         },
     }
-}
-
-fn writeUsage(w: *std.Io.Writer, u: types.Usage) !void {
-    try w.writeAll("{\"input\":");
-    try json.writeNum(w, u.input);
-    try w.writeAll(",\"output\":");
-    try json.writeNum(w, u.output);
-    try w.writeAll(",\"cacheRead\":");
-    try json.writeNum(w, u.cache_read);
-    try w.writeAll(",\"cacheWrite\":");
-    try json.writeNum(w, u.cache_write);
-    if (u.reasoning) |r| {
-        try w.writeAll(",\"reasoning\":");
-        try json.writeNum(w, r);
-    }
-    try w.writeAll(",\"totalTokens\":");
-    try json.writeNum(w, u.total_tokens);
-    try w.writeAll(",\"cost\":{\"input\":");
-    try json.writeFloat(w, u.cost_input);
-    try w.writeAll(",\"output\":");
-    try json.writeFloat(w, u.cost_output);
-    try w.writeAll(",\"cacheRead\":");
-    try json.writeFloat(w, u.cost_cache_read);
-    try w.writeAll(",\"total\":");
-    try json.writeFloat(w, u.cost_total);
-    try w.writeAll("}}");
 }

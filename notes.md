@@ -65,3 +65,7 @@ src/config.zig
 `src/tui/tui.zig` - This file has a lot of responsibilities, making it very big. Token estimation and commands at least, could be extracted. 
 
 `src/tui/theme.zig` - will eventually grow too much, each theme we add will make that file worse. A refactor for later, since it's ok right now.
+
+# Actions post review
+
+- Address the JSON issues, and it's helpers. Zig does have a good JSON support, we just ignored it and hand rolled ours. We loose some data to show on error messages.

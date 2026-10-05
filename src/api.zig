@@ -4,7 +4,6 @@
 const std = @import("std");
 const types = @import("types.zig");
 const http = @import("http.zig");
-const json = @import("json.zig");
 const util = @import("util.zig");
 
 pub const Event = union(enum) {
@@ -25,6 +24,53 @@ pub const Sink = struct {
 
     pub fn emit(self: Sink, event: Event) void {
         self.on_event(self.ctx, event);
+    }
+};
+
+/// JSON written byte-for-byte as it stands, never re-encoded. The struct field
+/// that holds it supplies the key.
+pub const Raw = struct {
+    bytes: []const u8 = "",
+
+    pub fn jsonStringify(self: Raw, jws: anytype) !void {
+        try jws.beginWriteRaw();
+        try jws.writer.writeAll(self.bytes);
+        jws.endWriteRaw();
+    }
+};
+
+/// A provider error value: a message string, or an object carrying one under
+/// "message". An empty string is no error at all.
+pub const ErrField = struct {
+    message: ?[]const u8 = null,
+
+    const Body = struct { message: ?[]const u8 = null };
+
+    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !@This() {
+        if (try source.peekNextTokenType() != .object_begin) {
+            const token = try source.nextAlloc(allocator, options.allocate.?);
+            return .{ .message = switch (token) {
+                .string, .allocated_string => |v| v,
+                else => null,
+            } };
+        }
+        const body = try std.json.innerParse(Body, allocator, source, options);
+        return .{ .message = if (body.message) |m| if (m.len > 0) m else null else null };
+    }
+};
+
+/// A token count a provider may send as an integer or a float.
+pub const Count = struct {
+    value: u64 = 0,
+
+    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !@This() {
+        _ = options;
+        const token = try source.nextAlloc(allocator, .alloc_if_needed);
+        return switch (token) {
+            .number, .allocated_number => |n| .{ .value = @intFromFloat(@max(std.fmt.parseFloat(f64, n) catch 0, 0)) },
+            .null => .{},
+            else => error.UnexpectedToken,
+        };
     }
 };
 
@@ -74,6 +120,7 @@ pub const Wire = struct {
 /// finished is not emitted, so a partial call is never handed to a tool.
 pub fn run(
     comptime State: type,
+    comptime Chunk: type,
     comptime wire: Wire,
     req: Request,
     sink: Sink,
@@ -97,7 +144,7 @@ pub fn run(
     // but truncated arguments. Such a call is not a call the model finished
     // making, so `finalize` drops it rather than emit arguments to run; the
     // transport's own stop reason is the one the message keeps.
-    const complete = try post(req, url, hdrs, body, .{ .ctx = &st, .onEvent = onData(State) }, &msg);
+    const complete = try post(req, url, hdrs, body, .{ .ctx = &st, .onEvent = onData(State, Chunk) }, &msg);
     st.failed = !complete;
     const reason = msg.stop_reason;
     const message = msg.error_message;
@@ -114,10 +161,10 @@ pub fn run(
     return msg;
 }
 
-/// The SSE hook every wire shares: parse one payload into `st.arena` and hand
-/// the object to `State.handle`. The arena is reset before the next payload, so
-/// nothing may keep a pointer into it.
-fn onData(comptime State: type) *const fn (ctx: *anyopaque, data: []const u8) void {
+/// The SSE hook every wire shares: parse one payload into the wire's `Chunk`
+/// type and hand it to `State.handle`. The arena is reset before the next
+/// payload, so nothing may keep a pointer into the chunk.
+fn onData(comptime State: type, comptime Chunk: type) *const fn (ctx: *anyopaque, data: []const u8) void {
     return struct {
         fn hook(ctx: *anyopaque, data: []const u8) void {
             const st: *State = @ptrCast(@alignCast(ctx));
@@ -125,12 +172,11 @@ fn onData(comptime State: type) *const fn (ctx: *anyopaque, data: []const u8) vo
             // The sentinel OpenAI-compatible streams send in place of a final
             // event. It is not JSON, and it is not a failure.
             if (std.mem.eql(u8, std.mem.trim(u8, data, " \r\n"), "[DONE]")) return;
-            const root = std.json.parseFromSliceLeaky(std.json.Value, st.arena.allocator(), data, .{}) catch {
-                if (st.stream_error == null) st.stream_error = "stream: invalid JSON chunk";
+            const chunk = std.json.parseFromSliceLeaky(Chunk, st.arena.allocator(), data, .{ .ignore_unknown_fields = true }) catch |e| {
+                if (e != error.OutOfMemory and st.stream_error == null) st.stream_error = "stream: invalid JSON chunk";
                 return;
             };
-            if (root != .object) return;
-            State.handle(st, root.object) catch {
+            State.handle(st, chunk) catch {
                 if (st.stream_error == null) st.stream_error = "stream: out of memory";
             };
         }
@@ -304,20 +350,6 @@ pub fn finishUsage(msg: *types.AssistantMessage, model: *const types.Model, usag
     msg.usage = u;
 }
 
-/// An integer field, or null when it is missing or not a number.
-pub fn optNumField(obj: std.json.ObjectMap, key: []const u8) ?u64 {
-    return switch (obj.get(key) orelse return null) {
-        .integer => |n| @intCast(@max(n, 0)),
-        .float => |f| @intFromFloat(@max(f, 0)),
-        else => null,
-    };
-}
-
-/// An integer field, or 0 when it is missing or not a number.
-pub fn numField(obj: std.json.ObjectMap, key: []const u8) u64 {
-    return optNumField(obj, key) orelse 0;
-}
-
 /// A non-empty string field, or null.
 pub fn stringField(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
     const v = obj.get(key) orelse return null;
@@ -327,73 +359,11 @@ pub fn stringField(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
     };
 }
 
-/// A nested object field, or null when it is missing or not an object.
-pub fn objField(obj: std.json.ObjectMap, key: []const u8) ?std.json.ObjectMap {
-    return switch (obj.get(key) orelse return null) {
-        .object => |o| o,
-        else => null,
-    };
-}
-
-/// The first object element of an array field, or null when the field is
-/// missing, not an array, empty, or its first element is not an object.
-pub fn firstObjField(obj: std.json.ObjectMap, key: []const u8) ?std.json.ObjectMap {
-    const arr = switch (obj.get(key) orelse return null) {
-        .array => |x| x,
-        else => return null,
-    };
-    if (arr.items.len == 0) return null;
-    return switch (arr.items[0]) {
-        .object => |o| o,
-        else => null,
-    };
-}
-
-/// A provider error message out of `key`, or null. The field may be a message
-/// string itself or an object carrying one under "message"; an empty value is
-/// no error at all.
-pub fn errorMessage(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
-    const err = switch (obj.get(key) orelse return null) {
-        .object => |o| return stringField(o, "message"),
-        .string => |s| s,
-        else => return null,
-    };
-    return if (err.len > 0) err else null;
-}
-
-/// A boolean field, or `default` when the field is missing or not a boolean.
-pub fn boolField(obj: std.json.ObjectMap, key: []const u8, default: bool) bool {
-    return switch (obj.get(key) orelse return default) {
-        .bool => |b| b,
-        else => default,
-    };
-}
-
-/// An integer field, or `default` when the field is missing or not an integer.
-pub fn intOr(obj: std.json.ObjectMap, key: []const u8, default: i64) i64 {
-    return switch (obj.get(key) orelse .null) {
-        .integer => |n| n,
-        else => default,
-    };
-}
-
-/// `base_url` plus one path segment, with a trailing slash on the base ignored.
-fn buildUrl(a: std.mem.Allocator, base: []const u8, path: []const u8) ![]u8 {
-    return std.fmt.allocPrint(a, "{s}{s}", .{ std.mem.trimEnd(u8, base, "/"), path });
-}
-
-/// The tool schemas parsed from the session's flat form, or null when there
-/// are none. Borrowed from `a`.
-pub fn parseTools(a: std.mem.Allocator, tools_json: []const u8) ?[]const std.json.Value {
-    if (tools_json.len == 0) return null;
-    const root = std.json.parseFromSliceLeaky(std.json.Value, a, tools_json, .{}) catch return null;
-    return if (root == .array) root.array.items else null;
-}
-
-/// How one provider frames its `tools` array: `open` and `close` bound the
-/// whole thing, and each element is `entry` wrapped around the call's schema
-/// under `params_key`. A provider with no tools writes nothing at all, which is
-/// also how an unparsable `tools_json` is treated.
+/// How one provider frames its `tools` array value: `open` and `close` bound
+/// it, and each element is `entry` wrapped around the call's schema under
+/// `params_key`. The key `"tools"` is supplied by the struct field that holds
+/// the value. A provider with no tools writes nothing at all, which is also how
+/// an unparsable `tools_json` is treated.
 pub const ToolsForm = struct {
     open: []const u8,
     entry: []const u8,
@@ -402,14 +372,30 @@ pub const ToolsForm = struct {
     close: []const u8,
 };
 
+/// A request's `tools` array, rendered verbatim from the flat `tools_json` the
+/// session recorded, in the wire form `form` describes. It is written as an
+/// array value, so the caller's struct field supplies the key.
+pub const Tools = struct {
+    a: std.mem.Allocator,
+    json: []const u8,
+    form: ToolsForm,
+
+    pub fn jsonStringify(self: Tools, jws: anytype) !void {
+        try jws.beginWriteRaw();
+        try writeTools(jws.writer, self.a, self.json, self.form);
+        jws.endWriteRaw();
+    }
+};
+
 /// Writes the `tools` array in the wire form `form` describes, from the flat
-/// `tools_json` array the session recorded. `open` carries the key and its
-/// leading comma, so nothing at all is written when there is no tool, which is
-/// also how an unparsable `tools_json` is treated.
+/// `tools_json` array the session recorded. Nothing at all is written when
+/// there is no tool, which is also how an unparsable `tools_json` is treated.
 pub fn writeTools(w: *std.Io.Writer, a: std.mem.Allocator, tools_json: []const u8, form: ToolsForm) !void {
-    const tools = parseTools(a, tools_json) orelse return;
+    if (tools_json.len == 0) return;
+    const root = std.json.parseFromSliceLeaky(std.json.Value, a, tools_json, .{}) catch return;
+    if (root != .array) return;
     var first = true;
-    for (tools) |tool| {
+    for (root.array.items) |tool| {
         if (tool != .object) continue;
         if (first) {
             try w.writeAll(form.open);
@@ -430,9 +416,9 @@ pub fn writeTools(w: *std.Io.Writer, a: std.mem.Allocator, tools_json: []const u
 /// as `{}` rather than panicking on a session log written by another version.
 fn writeToolBody(w: *std.Io.Writer, obj: std.json.ObjectMap, params_key: []const u8) !void {
     try w.writeAll("\"name\":");
-    try json.writeString(w, stringField(obj, "name") orelse "");
+    try std.json.Stringify.encodeJsonString(stringField(obj, "name") orelse "", .{}, w);
     try w.writeAll(",\"description\":");
-    try json.writeString(w, stringField(obj, "description") orelse "");
+    try std.json.Stringify.encodeJsonString(stringField(obj, "description") orelse "", .{}, w);
     try w.writeAll(",\"");
     try w.writeAll(params_key);
     try w.writeAll("\":");
@@ -441,4 +427,9 @@ fn writeToolBody(w: *std.Io.Writer, obj: std.json.ObjectMap, params_key: []const
     } else {
         try w.writeAll("{}");
     }
+}
+
+/// `base_url` plus one path segment, with a trailing slash on the base ignored.
+fn buildUrl(a: std.mem.Allocator, base: []const u8, path: []const u8) ![]u8 {
+    return std.fmt.allocPrint(a, "{s}{s}", .{ std.mem.trimEnd(u8, base, "/"), path });
 }
