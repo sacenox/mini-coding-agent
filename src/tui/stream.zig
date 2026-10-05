@@ -185,7 +185,7 @@ pub const TailStream = struct {
     pub fn pending(self: *TailStream) []BodyLine {
         var out: std.ArrayList(BodyLine) = .empty;
         if (self.rest.items.len > 0) {
-            out.append(self.a, .{ .text = self.rest.items, .style = .{ .fg = theme.PALETTE.comment } }) catch {};
+            out.append(self.a, .{ .text = self.rest.items, .style = .{ .fg = theme.current.comment } }) catch {};
         }
         return out.items;
     }

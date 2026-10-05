@@ -6,6 +6,7 @@
 const std = @import("std");
 const platform = @import("platform.zig");
 const util = @import("util.zig");
+const theme = @import("tui/theme.zig");
 
 pub const ToolName = enum { edit, read, bash };
 
@@ -32,6 +33,8 @@ pub const Config = struct {
     model: ?[]const u8,
     /// Null when unset: no reasoning parameter is sent, so the provider picks.
     thinking_effort: ?[]const u8,
+    /// A theme id; see `theme.find`.
+    theme: []const u8,
     custom_providers: []const CustomProvider,
 };
 
@@ -41,6 +44,7 @@ const known_keys = [_][]const u8{
     "sessionsDir", "systemPrompt",   "discoverAgentFiles",
     "skillsDirs",  "tools",          "provider",
     "model",       "thinkingEffort", "customProviders",
+    "theme",
 };
 
 fn configDir(a: std.mem.Allocator) []const u8 {
@@ -223,6 +227,10 @@ fn readInto(a: std.mem.Allocator, path: []const u8, required: bool, cfg: *Config
         if (!ok) return fail(a, path, "unknown thinkingEffort \"{s}\"", .{v});
         cfg.thinking_effort = v;
     }
+    if (try strField(a, obj, "theme", path)) |v| {
+        if (theme.find(v) == null) return fail(a, path, "unknown theme \"{s}\"", .{v});
+        cfg.theme = v;
+    }
 }
 
 /// The subset of config a TUI command persists. `null` leaves a key alone.
@@ -274,6 +282,7 @@ fn defaults(a: std.mem.Allocator) !Config {
         .provider = null,
         .model = null,
         .thinking_effort = null,
+        .theme = theme.default_id,
         .custom_providers = &.{},
     };
 }

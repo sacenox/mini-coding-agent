@@ -21,15 +21,15 @@ pub fn styledWith(a: std.mem.Allocator, style: theme.Style, text: []const u8) []
 
 /// `Comment`, the colour diff context lines share.
 pub fn dim(a: std.mem.Allocator, text: []const u8) []const u8 {
-    return fg(a, theme.PALETTE.comment, text);
+    return fg(a, theme.current.comment, text);
 }
 pub fn red(a: std.mem.Allocator, text: []const u8) []const u8 {
-    return fg(a, theme.PALETTE.red, text);
+    return fg(a, theme.current.error_, text);
 }
 pub fn yellow(a: std.mem.Allocator, text: []const u8) []const u8 {
-    return fg(a, theme.PALETTE.yellow, text);
+    return fg(a, theme.current.warn, text);
 }
 /// The tool accent: call-line heads.
 pub fn teal(a: std.mem.Allocator, text: []const u8) []const u8 {
-    return fg(a, theme.PALETTE.teal, text);
+    return fg(a, theme.current.accent, text);
 }

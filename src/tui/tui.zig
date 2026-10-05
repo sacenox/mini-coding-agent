@@ -61,7 +61,7 @@ fn styleRow(a: std.mem.Allocator, line: stream.BodyLine, width: usize) []const [
         // `ESC[K` erases after it.
         const styled = if (line.style) |s| styles.styledWith(a, .{
             .fg = s.fg,
-            .bg = line.bg orelse theme.NORMAL_BG,
+            .bg = line.bg orelse theme.current.bg,
             .bold = s.bold,
             .italic = s.italic,
             .underline = s.underline,
@@ -140,11 +140,11 @@ fn isEditHeader(line: []const u8) bool {
 }
 
 fn diffLine(line: []const u8) stream.BodyLine {
-    if (std.mem.startsWith(u8, line, "@@")) return .{ .text = line, .style = .{ .fg = theme.PALETTE.blue } };
-    if (std.mem.startsWith(u8, line, "+")) return .{ .text = line, .style = .{ .fg = theme.PALETTE.green }, .bg = theme.DIFF_ADD };
-    if (std.mem.startsWith(u8, line, "-")) return .{ .text = line, .style = .{ .fg = theme.PALETTE.red }, .bg = theme.DIFF_DELETE };
-    if (std.mem.startsWith(u8, line, "\\ No newline")) return .{ .text = line, .style = .{ .fg = theme.PALETTE.comment } };
-    if (std.mem.startsWith(u8, line, " ")) return .{ .text = line, .style = .{ .fg = theme.PALETTE.comment } };
+    if (std.mem.startsWith(u8, line, "@@")) return .{ .text = line, .style = .{ .fg = theme.current.prompt } };
+    if (std.mem.startsWith(u8, line, "+")) return .{ .text = line, .style = .{ .fg = theme.current.add }, .bg = theme.current.diff_add };
+    if (std.mem.startsWith(u8, line, "-")) return .{ .text = line, .style = .{ .fg = theme.current.error_ }, .bg = theme.current.diff_delete };
+    if (std.mem.startsWith(u8, line, "\\ No newline")) return .{ .text = line, .style = .{ .fg = theme.current.comment } };
+    if (std.mem.startsWith(u8, line, " ")) return .{ .text = line, .style = .{ .fg = theme.current.comment } };
     return .{ .text = line };
 }
 
@@ -155,7 +155,7 @@ fn diffLine(line: []const u8) stream.BodyLine {
 fn diffRows(a: std.mem.Allocator, diffs: []const common.FileDiff) []const stream.BodyLine {
     var out: std.ArrayList(stream.BodyLine) = .empty;
     for (diffs) |d| {
-        out.append(a, .{ .text = d.path, .style = .{ .fg = theme.PALETTE.blue } }) catch {};
+        out.append(a, .{ .text = d.path, .style = .{ .fg = theme.current.prompt } }) catch {};
         if (d.patch) |patch| {
             const trimmed = std.mem.trimEnd(u8, patch, " \t\r\n");
             var it = std.mem.splitScalar(u8, trimmed, '\n');
@@ -166,7 +166,7 @@ fn diffRows(a: std.mem.Allocator, diffs: []const common.FileDiff) []const stream
                 out.append(a, diffLine(l)) catch {};
             }
         } else if (d.note) |note| {
-            out.append(a, .{ .text = note, .style = .{ .fg = theme.PALETTE.comment } }) catch {};
+            out.append(a, .{ .text = note, .style = .{ .fg = theme.current.comment } }) catch {};
         }
     }
     return out.items;
@@ -470,7 +470,7 @@ const Tui = struct {
         self.separator = true;
         var it = std.mem.splitScalar(u8, text, '\n');
         var lines: std.ArrayList(stream.BodyLine) = .empty;
-        while (it.next()) |l| lines.append(self.s, .{ .text = l, .style = .{ .fg = theme.PALETTE.blue } }) catch {};
+        while (it.next()) |l| lines.append(self.s, .{ .text = l, .style = .{ .fg = theme.current.prompt } }) catch {};
         self.commitLines(lines.items);
         self.separator = true;
     }
@@ -1133,6 +1133,9 @@ fn eventTrampoline(ctx: *anyopaque, event: agent.Event) void {
 /// Runs the TUI until the user exits. `opts` and `cfg` outlive the call.
 pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const config.ToolName) !void {
     const gpa = platform.gpa;
+    // The theme is chosen once, before anything is painted: the sequences the
+    // rows are wrapped in are baked from it.
+    theme.init(gpa, cfg.theme);
     const opts_ptr = try gpa.create(agent.Options);
     opts_ptr.* = opts;
     const self = try gpa.create(Tui);

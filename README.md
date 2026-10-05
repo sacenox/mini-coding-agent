@@ -67,6 +67,7 @@ A full example:
   "provider": "opencode",
   "model": "deepseek-v4.1-flash",
   "thinkingEffort": "medium",
+  "theme": "tokyonight",
   "systemPrompt": "Be terse.",
   "sessionsDir": "/home/me/.local/state/mini-coding-agent/sessions",
   "discoverAgentFiles": true,
@@ -93,6 +94,7 @@ Keys:
 | `provider` | unset | provider id; built-ins are `opencode` and `opencode-go`, or a `customProviders` id |
 | `model` | unset | model id |
 | `thinkingEffort` | unset | one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; unset sends no reasoning parameter and clamps to what the model accepts |
+| `theme` | `tokyonight` | TUI palette: `tokyonight` or `oxocarbon`. Read at startup; there is no live reload |
 | `systemPrompt` | `""` | prepended to the system prompt |
 | `sessionsDir` | `$XDG_STATE_HOME/mini-coding-agent/sessions`, else `$HOME/.local/state/mini-coding-agent/sessions`, else `sessions` | where JSONL session logs go |
 | `discoverAgentFiles` | `true` | load `AGENTS.md`/`CLAUDE.md` from `$HOME/.agents` and the cwd |

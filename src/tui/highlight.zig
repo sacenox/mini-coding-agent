@@ -1,7 +1,7 @@
 //! Syntax highlighting for committed scrollback, once, over the whole block.
 //! Grammars are linked C artifacts; their `highlights.scm` queries ship with
-//! the grammar and are consumed as data. Capture names are mapped to the
-//! TokyoNight palette in `theme.zig`.
+//! the grammar and are consumed as data. Capture names are mapped to the active
+//! theme's palette in `theme.zig`.
 
 const std = @import("std");
 const ts = @import("tree-sitter");
@@ -336,7 +336,7 @@ pub fn highlightMarkdown(a: std.mem.Allocator, text: []const u8) []const u8 {
             spans.items,
             start + byteOf(iu, code.startByte() / 2),
             start + byteOf(iu, code.endByte() / 2),
-            theme.INLINE_CODE,
+            theme.current.inline_code,
         ));
     }
 
@@ -357,8 +357,8 @@ pub fn highlightMarkdown(a: std.mem.Allocator, text: []const u8) []const u8 {
                 break;
             }
         }
-        const idx = @min(level, theme.HEADINGS.len) - 1;
-        spans = std.ArrayList(Span).fromOwnedSlice(recolor(a, spans.items, byteOf(u, heading.startByte() / 2), byteOf(u, heading.endByte() / 2), theme.HEADINGS[idx]));
+        const idx = @min(level, theme.current.headings.len) - 1;
+        spans = std.ArrayList(Span).fromOwnedSlice(recolor(a, spans.items, byteOf(u, heading.startByte() / 2), byteOf(u, heading.endByte() / 2), theme.current.headings[idx]));
     }
     return paint(a, text, spans.items);
 }
