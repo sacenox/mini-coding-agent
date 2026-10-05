@@ -223,7 +223,7 @@ pub const Editor = struct {
         return .{ .row = row, .col = cell - row * width };
     }
 
-    pub fn render2(self: *Editor, width: usize, max_rows: usize) Render {
+    pub fn layout(self: *Editor, width: usize, max_rows: usize) Render {
         self.width = @max(1, width);
         var rows: std.ArrayList([]const u8) = .empty;
         var cursor_row: usize = 0;

@@ -536,7 +536,7 @@ const Tui = struct {
         const queue = self.queueRows(width, room);
         const keep = @min(rows.len, room - queue.len);
         const body = rows[rows.len - keep ..];
-        const ed = self.editor.render2(width, @max(height - status.len - queue.len - body.len, 1));
+        const ed = self.editor.layout(width, @max(height - status.len - queue.len - body.len, 1));
 
         var lines: std.ArrayList([]const u8) = .empty;
         for (body) |r| lines.append(self.s, paintRow(self.s, r)) catch {};
