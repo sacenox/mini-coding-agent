@@ -61,6 +61,8 @@ pub const Options = struct {
     a: std.mem.Allocator,
     model: ?*const types.Model,
     system_prompt: []const u8,
+    /// Counts of the discovered files in the system prompt.
+    loaded: struct { agent_files: usize = 0, skills: usize = 0 } = .{},
     tools_json: []const u8,
     supports_images: bool,
     session: *session.Session,

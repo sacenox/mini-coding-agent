@@ -153,10 +153,12 @@ fn run() !u8 {
     } else null;
 
     const supports_images = if (model_ptr) |m| m.supports_images else false;
+    const built = try prompt.buildSystemPrompt(a, &cfg);
     const opts = agent.Options{
         .a = a,
         .model = model_ptr,
-        .system_prompt = try prompt.buildSystemPrompt(a, &cfg),
+        .system_prompt = built.prompt,
+        .loaded = .{ .agent_files = built.loaded.agent_files, .skills = built.loaded.skills },
         .tools_json = tools.json(a, cfg.tools, supports_images),
         .supports_images = supports_images,
         .session = &sess,

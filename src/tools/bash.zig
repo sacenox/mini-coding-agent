@@ -11,7 +11,9 @@ const max_head = 10_000;
 const max_tail = 6_000;
 const truncated_marker = "\n\n... output truncated ...\n\n";
 
-const Args = struct { command: []const u8 };
+const default_timeout_s = 120;
+
+const Args = struct { command: []const u8, timeout: ?u64 = null };
 
 const Acc = struct {
     a: std.mem.Allocator,
@@ -90,15 +92,27 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
     var cancelled = false;
     var broken = false;
     var oom = false;
+    var timed_out = false;
+
+    const timeout_s = args.timeout orelse default_timeout_s;
+    const start = std.Io.Clock.awake.now(platform.io);
+    const deadline = start.addDuration(.fromSeconds(@intCast(@min(timeout_s, std.math.maxInt(i64)))));
 
     while (open[0] or open[1]) {
         if (ctx.cancel.load(.acquire)) {
             cancelled = true;
             break;
         }
+        const now = std.Io.Clock.awake.now(platform.io);
+        if (now.durationTo(deadline).nanoseconds <= 0) {
+            timed_out = true;
+            break;
+        }
+        const remaining = now.durationTo(deadline).toMilliseconds();
+        const wait_ms: i32 = @intCast(@min(100, @max(1, remaining)));
         // A poll failure must not leave the command running: the tool returns
         // at once, so nothing would ever collect it or its process group.
-        const ready = std.posix.poll(&fds, 100) catch {
+        const ready = std.posix.poll(&fds, wait_ms) catch {
             broken = true;
             break;
         };
@@ -129,7 +143,7 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
         if (oom) break;
     }
 
-    if (cancelled or oom or broken) killGroup(pid);
+    if (cancelled or timed_out or oom or broken) killGroup(pid);
     const term = child.wait(platform.io) catch std.process.Child.Term{ .unknown = 0 };
 
     if (oom) return fail(a, "bash failed: out of memory", .{});
@@ -141,7 +155,9 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
         .exited => |c| c,
         else => null,
     };
-    const label: []const u8 = if (code) |c|
+    const label: []const u8 = if (timed_out)
+        std.fmt.allocPrint(scratch, "timed out after {d}s", .{timeout_s}) catch "timed out"
+    else if (code) |c|
         std.fmt.allocPrint(scratch, "{d}", .{c}) catch "unknown"
     else if (cancelled)
         "aborted"

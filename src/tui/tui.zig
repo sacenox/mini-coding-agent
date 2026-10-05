@@ -485,6 +485,10 @@ const Tui = struct {
                 std.fmt.allocPrint(self.s, "mini · {s}/{s} · {s}", .{ m.provider, m.id, m.effort }) catch "mini"
         else
             "mini · no model configured");
+        const loaded = self.opts.loaded;
+        self.push(std.fmt.allocPrint(self.s, "{d} agent files · {d} skills", .{
+            loaded.agent_files, loaded.skills,
+        }) catch "resources");
         self.separator = true;
     }
 
@@ -798,7 +802,9 @@ const Tui = struct {
             .help => self.showHelp(),
             .new => {
                 self.newSession();
-                self.note("new session");
+                self.push("");
+                self.pushBanner();
+                self.note(styles.dim(self.s, "new session"));
             },
             .provider => self.startProviderSelect(),
             .model => {

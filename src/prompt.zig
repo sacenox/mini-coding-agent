@@ -65,15 +65,23 @@ fn agentFiles(a: std.mem.Allocator) ![]const []const u8 {
     return found.items;
 }
 
+/// How many discovered files made it into the system prompt.
+pub const Loaded = struct { agent_files: usize = 0, skills: usize = 0 };
+
+/// The system prompt and the counts of the files that fed it.
+pub const Built = struct { prompt: []const u8, loaded: Loaded };
+
 /// Builds the system prompt from the config. The result lives for the process.
-pub fn buildSystemPrompt(a: std.mem.Allocator, cfg: *const config.Config) ![]const u8 {
+pub fn buildSystemPrompt(a: std.mem.Allocator, cfg: *const config.Config) !Built {
     var sections: std.ArrayList([]const u8) = .empty;
+    var loaded: Loaded = .{};
 
     const configured = std.mem.trim(u8, cfg.system_prompt, " \t\r\n");
     if (configured.len > 0) try sections.append(a, configured);
 
     if (cfg.skills_dirs.len > 0) {
         const skills = try discoverSkills(a, cfg.skills_dirs);
+        loaded.skills = skills.len;
         if (skills.len > 0) {
             var out: std.ArrayList(u8) = .empty;
             try out.appendSlice(a, "## Skills\n");
@@ -85,7 +93,9 @@ pub fn buildSystemPrompt(a: std.mem.Allocator, cfg: *const config.Config) ![]con
     }
 
     if (cfg.discover_agent_files) {
-        for (try agentFiles(a)) |path| {
+        const files = try agentFiles(a);
+        loaded.agent_files = files.len;
+        for (files) |path| {
             const text = try util.readFileAlloc(a, path, 1 << 24);
             try sections.append(a, try std.fmt.allocPrint(a, "## {s}\n\n{s}", .{
                 path,
@@ -99,5 +109,5 @@ pub fn buildSystemPrompt(a: std.mem.Allocator, cfg: *const config.Config) ![]con
         if (i > 0) try joined.appendSlice(a, "\n\n");
         try joined.appendSlice(a, section);
     }
-    return joined.items;
+    return .{ .prompt = joined.items, .loaded = loaded };
 }

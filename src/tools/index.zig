@@ -20,7 +20,7 @@ const edit_params =
 ;
 
 const bash_params =
-    \\{"type":"object","required":["command"],"properties":{"command":{"type":"string","description":"Command to run"}},"additionalProperties":false}
+    \\{"type":"object","required":["command"],"properties":{"command":{"type":"string","description":"Command to run"},"timeout":{"type":"integer","description":"Timeout in seconds; defaults to 120"}},"additionalProperties":false}
 ;
 
 const read_description = "Read a file. Returns its text. Returns the whole file unless offset and range give a line window. Prefer bash for search or binary files.";

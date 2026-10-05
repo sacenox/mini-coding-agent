@@ -48,7 +48,8 @@ Hard constraints. Do not cross these without explicit direction:
 - **No sandbox or permission layer.** Tools run with the user's permissions;
   isolation is an environment concern, not the agent's.
 - **No loop limits.** No max turns, tool calls, token budgets, or agent-imposed
-  timeouts. The user's ability to interrupt is the limit.
+  timeouts (except for bash tool, agents are prone to running bad commands this is
+  guard against it). The user's ability to interrupt is the limit.
 - **Config-first.** Every user-facing behavior that can vary comes from config
   with a sane default. Global config only — no project-local config; a
   `-c`/`--config` file overrides the global one for a run — and never duplicate
@@ -106,18 +107,7 @@ endpoints, or replay files**; they stall and prove nothing. Use the
 `OPENCODE_API_KEY` environment variable and a scratch `XDG_CONFIG_HOME` with a
 `mini-coding-agent/config.json` that declares the provider under test.
 
-OpenCode Zen serves all four wire protocols. Base URLs and the working models:
-
-- `openai-completions` — base `https://opencode.ai/zen/go/v1`, model
-  `deepseek-v4.1-flash` (the daily path, also `opencode-go` in the config).
-- `openai-responses` — base `https://opencode.ai/zen/go/v1`, model
-  `gpt-6-luna`.
-- `anthropic-messages` — base `https://opencode.ai/zen`, model
-  `claude-haiku-4-5`.
-- `google-generative-ai` — base `https://opencode.ai/zen/v1`, model
-  `gemini-3.8-flash`.
-
-Every Zen request needs the `x-opencode-session` header; set it via the custom
+Every Zen/Go request needs the `x-opencode-session` header; set it via the custom
 provider's `headers`. Not every catalog model is enabled for the account (for
 example `claude-opus-5` is disabled and returns `Model access is disabled`), so
 use the models above. Run a real tool call, not just a text turn.
