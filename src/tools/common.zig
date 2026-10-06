@@ -15,7 +15,7 @@ pub const Context = struct {
     supports_images: bool,
     on_output: ?OutputFn = null,
     snapshot_ignore_dirs: []const []const u8 = &.{},
-    snapshot_uses_gitignore: bool = false,
+    snapshot_uses_gitignore: bool = true,
 };
 
 pub const FileDiff = struct {

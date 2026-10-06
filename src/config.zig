@@ -159,6 +159,6 @@ fn defaults(a: std.mem.Allocator) !Config {
         .theme = theme.default_id,
         .custom_providers = &.{},
         .snapshot_ignore_dirs = &.{},
-        .snapshot_uses_gitignore = false,
+        .snapshot_uses_gitignore = true,
     };
 }

@@ -22,7 +22,7 @@ pub const Tree = std.StringHashMap(FileState);
 
 pub const Ignore = struct {
     dirs: []const []const u8 = &.{},
-    uses_gitignore: bool = false,
+    uses_gitignore: bool = true,
 };
 
 fn ignoreSet(tmp: std.mem.Allocator, ignore: Ignore) !std.StringHashMap(void) {

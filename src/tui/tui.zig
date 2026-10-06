@@ -321,6 +321,7 @@ const Tui = struct {
     active: bool = false,
     paused: bool = false,
     pause_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    aborting: bool = false,
     turn_done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     steering_text: []const u8 = "",
     steering_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -482,6 +483,9 @@ const Tui = struct {
         if (self.paused or self.phase == .pausing) {
             return std.fmt.allocPrint(self.s, "{s} · {s}", .{ styles.dim(self.s, "paused - type steering, Enter to submit"), usage }) catch usage;
         }
+        if (self.active and self.pause_requested.load(.seq_cst)) {
+            return std.fmt.allocPrint(self.s, "{s} · {s}", .{ styles.dim(self.s, "pausing - waiting for the step boundary"), usage }) catch usage;
+        }
         if (!self.active or self.phase == .idle) return usage;
         const label = switch (self.phase) {
             .preparing => "preparing",
@@ -566,6 +570,7 @@ const Tui = struct {
 
     fn handleAgentEvent(self: *Tui, event: agent.Event) void {
         if (self.closed) return;
+        if (self.aborting) return;
         self.resetScratch();
         switch (event) {
             .phase => |p| {
@@ -671,6 +676,10 @@ const Tui = struct {
                 self.abort.store(true, .seq_cst);
                 self.steering_ready.store(true, .seq_cst);
                 self.steering_text = "";
+                if (!self.aborting) {
+                    self.aborting = true;
+                    self.endTurn(styles.red(self.s, "! cancelled"));
+                }
                 self.dirty = true;
             } else if (self.command_active) {
                 self.command_active = false;
@@ -746,6 +755,7 @@ const Tui = struct {
     fn startTurn(self: *Tui) void {
         self.active = true;
         self.abort.store(false, .seq_cst);
+        self.pause_requested.store(false, .seq_cst);
         self.turn_done.store(false, .seq_cst);
         self.phase = .preparing;
         self.keepName(&self.detail, null);
@@ -910,10 +920,15 @@ const Tui = struct {
     }
     fn requestSteering(ctx: *anyopaque) []const u8 {
         const self: *Tui = @ptrCast(@alignCast(ctx));
+        if (self.abort.load(.seq_cst)) return "";
         self.paused = true;
         self.dirty = true;
         while (!self.steering_ready.load(.seq_cst)) {
-            if (self.abort.load(.seq_cst)) return "";
+            if (self.abort.load(.seq_cst)) {
+                self.paused = false;
+                self.steering_ready.store(false, .seq_cst);
+                return "";
+            }
             std.Io.sleep(platform.io, .{ .nanoseconds = 10 * std.time.ns_per_ms }, .boot) catch {};
         }
         self.steering_ready.store(false, .seq_cst);
@@ -1144,6 +1159,7 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
         if (self.turn_done.load(.seq_cst) and self.active) {
             self.active = false;
             self.paused = false;
+            self.aborting = false;
             self.phase = .idle;
             self.dirty = true;
         }

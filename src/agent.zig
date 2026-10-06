@@ -92,7 +92,6 @@ fn steer(opts: Options, messages: *std.ArrayList(types.Message), content: []cons
 }
 
 fn pauseStep(run: Run) ?[]const u8 {
-    if (run.opts.cancel.load(.acquire)) return null;
     const interaction = run.interaction orelse return "";
     if (!interaction.pauseRequested()) return "";
     interaction.clearPause();
@@ -101,6 +100,12 @@ fn pauseStep(run: Run) ?[]const u8 {
     run.listener.emit(.{ .phase = .{ .phase = .idle } });
     if (run.opts.cancel.load(.acquire)) return null;
     return steering;
+}
+
+fn cancelled(opts: Options, listener: Listener) bool {
+    if (!opts.cancel.load(.acquire)) return false;
+    listener.emit(.cancelled);
+    return true;
 }
 
 const Run = struct {
@@ -125,6 +130,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
         _ = arena.reset(.retain_capacity);
         const scratch = arena.allocator();
 
+        if (cancelled(opts, listener)) return;
         const steering = pauseStep(run) orelse {
             listener.emit(.cancelled);
             return;
@@ -134,6 +140,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
             return;
         };
 
+        if (cancelled(opts, listener)) return;
         listener.emit(.{ .phase = .{ .phase = .preparing } });
         opts.session.appendRequest(scratch, .{
             .provider = model.provider,
@@ -147,6 +154,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
             return;
         };
 
+        if (cancelled(opts, listener)) return;
         listener.emit(.{ .phase = .{ .phase = .waiting_model } });
         var stream_ctx = StreamCtx{ .listener = listener };
         const assistant = opts.a.create(types.AssistantMessage) catch {
@@ -168,6 +176,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
             return;
         };
 
+        if (cancelled(opts, listener)) return;
         messages.append(opts.a, .{ .assistant = assistant }) catch {
             listener.emit(.{ .err = "out of memory" });
             return;
@@ -197,35 +206,43 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
 
         var held: std.ArrayList([]const u8) = .empty;
         defer held.deinit(opts.a);
+        var run_tools = true;
         for (assistant.content.items) |block| {
             if (block != .tool_call) continue;
             const call = block.tool_call;
 
-            const step = pauseStep(run) orelse {
-                listener.emit(.cancelled);
-                return;
-            };
-            if (step.len > 0) held.append(opts.a, step) catch {
-                listener.emit(.{ .err = "out of memory" });
-                return;
-            };
+            if (run_tools) {
+                if (opts.cancel.load(.acquire)) {
+                    run_tools = false;
+                } else if (pauseStep(run)) |step| {
+                    if (step.len > 0) held.append(opts.a, step) catch {
+                        listener.emit(.{ .err = "out of memory" });
+                        return;
+                    };
+                } else {
+                    run_tools = false;
+                }
+            }
+            if (run_tools and opts.cancel.load(.acquire)) run_tools = false;
 
-            listener.emit(.{ .phase = .{ .phase = .running_tool, .detail = call.name } });
-
-            const result = tools.execute(opts.a, scratch, call.name, call.arguments, .{
-                .cancel = opts.cancel,
-                .supports_images = opts.supports_images,
-                .on_output = .{ .ctx = &stream_ctx.listener, .on_chunk = onToolOutput },
-                .snapshot_ignore_dirs = opts.config.snapshot_ignore_dirs,
-                .snapshot_uses_gitignore = opts.config.snapshot_uses_gitignore,
-            });
+            var result: ?common.Result = null;
+            if (run_tools) {
+                listener.emit(.{ .phase = .{ .phase = .running_tool, .detail = call.name } });
+                result = tools.execute(opts.a, scratch, call.name, call.arguments, .{
+                    .cancel = opts.cancel,
+                    .supports_images = opts.supports_images,
+                    .on_output = .{ .ctx = &stream_ctx.listener, .on_chunk = onToolOutput },
+                    .snapshot_ignore_dirs = opts.config.snapshot_ignore_dirs,
+                    .snapshot_uses_gitignore = opts.config.snapshot_uses_gitignore,
+                });
+            }
 
             const tool_message = types.Message{ .tool_result = .{
                 .tool_call_id = call.id,
                 .tool_name = call.name,
-                .text = result.text,
-                .images = result.images,
-                .is_error = result.is_error,
+                .text = if (result) |r| r.text else "aborted",
+                .images = if (result) |r| r.images else &.{},
+                .is_error = if (result) |r| r.is_error else true,
                 .timestamp = util.nowMs(),
             } };
             messages.append(opts.a, tool_message) catch {
@@ -238,12 +255,17 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
             };
             listener.emit(.{ .tool_result = .{
                 .name = call.name,
-                .text = result.text,
-                .is_error = result.is_error,
-                .diffs = result.diffs,
-                .body = result.body,
+                .text = tool_message.tool_result.text,
+                .is_error = tool_message.tool_result.is_error,
+                .diffs = if (result) |r| r.diffs else &.{},
+                .body = if (result) |r| r.body else null,
             } });
         }
+        if (!run_tools) {
+            listener.emit(.cancelled);
+            return;
+        }
+        if (cancelled(opts, listener)) return;
         const joined = tryJoin(opts.a, held.items) catch {
             listener.emit(.{ .err = "out of memory" });
             return;
