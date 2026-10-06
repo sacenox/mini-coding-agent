@@ -264,3 +264,19 @@ pub fn sgr(a: std.mem.Allocator, style: Style) []const u8 {
         b[2],
     }) catch "";
 }
+
+pub fn sgrOn(a: std.mem.Allocator, style: Style, base: Style) []const u8 {
+    const f = rgb(style.fg orelse base.fg orelse current.fg);
+    const b = rgb(style.bg orelse base.bg orelse current.bg);
+    return std.fmt.allocPrint(a, "\x1b[{s}{s}{s}38;2;{d};{d};{d};48;2;{d};{d};{d}m", .{
+        if (style.bold or base.bold) "1;" else "22;",
+        if (style.italic or base.italic) "3;" else "23;",
+        if (style.underline or base.underline) "4;" else "24;",
+        f[0],
+        f[1],
+        f[2],
+        b[0],
+        b[1],
+        b[2],
+    }) catch "";
+}

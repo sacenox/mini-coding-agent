@@ -28,6 +28,14 @@
             .url = "git+https://github.com/tree-sitter/tree-sitter-go?ref=v0.25.0#1547678a9da59885853f5f5cc8a99cc203fa2e2c",
             .hash = "N-V-__8AAM9cIgDSWz10pu4QwvyegGvG1p3E3KBTILC3fqGh",
         },
+        .tree_sitter_bash = .{
+            .url = "git+https://github.com/tree-sitter/tree-sitter-bash?ref=v0.25.0#56b54c61fb48bce0c63e3dfa2240b5d274384763",
+            .hash = "N-V-__8AANjenwCy_cXlIbU8nqBzGxMlEHVokLZJYrmIXtoz",
+        },
+        .tree_sitter_diff = .{
+            .url = "git+https://github.com/the-mikedavis/tree-sitter-diff#46c09fdf38f4b29b3baefcb88aed6c4ea67ffc7d",
+            .hash = "N-V-__8AAPUcFACL4N4XTVUilDAwPIkX8066VSaipW5tYXDT",
+        },
         // The v1.1.2 tag predates the repo's `build.zig.zon`, and Zig resolves
         // a `?ref=` tag against the default branch when the tag has none, whose
         // manifest lacks a `fingerprint`. The commit is pinned instead.

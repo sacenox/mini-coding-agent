@@ -11,6 +11,8 @@ extern fn tree_sitter_markdown_inline() callconv(.c) *const ts.Language;
 extern fn tree_sitter_python() callconv(.c) *const ts.Language;
 extern fn tree_sitter_go() callconv(.c) *const ts.Language;
 extern fn tree_sitter_zig() callconv(.c) *const ts.Language;
+extern fn tree_sitter_bash() callconv(.c) *const ts.Language;
+extern fn tree_sitter_diff() callconv(.c) *const ts.Language;
 
 const JS_QUERIES = @embedFile("js_highlights");
 const TS_QUERIES = @embedFile("ts_highlights");
@@ -20,6 +22,8 @@ const MD_INLINE_QUERIES = @embedFile("md_inline_highlights");
 const PY_QUERIES = @embedFile("py_highlights");
 const GO_QUERIES = @embedFile("go_highlights");
 const ZIG_QUERIES = @embedFile("zig_highlights");
+const BASH_QUERIES = @embedFile("bash_highlights");
+const DIFF_QUERIES = @embedFile("diff_highlights");
 
 const Syntax = struct {
     parser: *ts.Parser,
@@ -56,6 +60,8 @@ const Grammars = struct {
     python: Syntax,
     go: Syntax,
     zig: Syntax,
+    bash: Syntax,
+    diff: Syntax,
 
     fn init(a: std.mem.Allocator) Grammars {
         const js = tree_sitter_javascript();
@@ -66,6 +72,8 @@ const Grammars = struct {
         const py = tree_sitter_python();
         const go_lang = tree_sitter_go();
         const zig_lang = tree_sitter_zig();
+        const bash_lang = tree_sitter_bash();
+        const diff_lang = tree_sitter_diff();
         return .{
             .javascript = syntax(a, js, &.{JS_QUERIES}) orelse unreachable,
             .typescript = syntax(a, ts_lang, &.{ JS_QUERIES, TS_QUERIES }) orelse unreachable,
@@ -75,6 +83,8 @@ const Grammars = struct {
             .python = syntax(a, py, &.{PY_QUERIES}) orelse unreachable,
             .go = syntax(a, go_lang, &.{GO_QUERIES}) orelse unreachable,
             .zig = syntax(a, zig_lang, &.{ZIG_QUERIES}) orelse unreachable,
+            .bash = syntax(a, bash_lang, &.{BASH_QUERIES}) orelse unreachable,
+            .diff = syntax(a, diff_lang, &.{DIFF_QUERIES}) orelse unreachable,
         };
     }
 };
@@ -84,7 +94,7 @@ fn getGrammars(a: std.mem.Allocator) *Grammars {
     return &grammars.?;
 }
 
-const Span = struct {
+pub const Span = struct {
     start: u32,
     end: u32,
     style: theme.Style,
@@ -232,7 +242,7 @@ fn eventLess(_: void, x: Event, y: Event) bool {
     return x.order < y.order;
 }
 
-fn paint(a: std.mem.Allocator, text: []const u8, spans: []const Span) []u8 {
+fn paint(a: std.mem.Allocator, text: []const u8, spans: []const Span, base: theme.Style) []u8 {
     var events: std.ArrayList(Event) = .empty;
     for (spans, 0..) |span, i| {
         if (span.end <= span.start) continue;
@@ -247,7 +257,7 @@ fn paint(a: std.mem.Allocator, text: []const u8, spans: []const Span) []u8 {
     var at: u32 = 0;
 
     for (events.items) |event| {
-        emit(a, &out, &active, spans, text, event.at, &at, &plain);
+        emit(a, &out, &active, spans, text, event.at, &at, &plain, base);
         if (event.open) {
             active.append(a, event.span) catch {};
         } else {
@@ -259,31 +269,111 @@ fn paint(a: std.mem.Allocator, text: []const u8, spans: []const Span) []u8 {
             }
         }
     }
-    emit(a, &out, &active, spans, text, @intCast(text.len), &at, &plain);
-    if (!plain) out.appendSlice(a, theme.SGR_PLAIN) catch {};
+    emit(a, &out, &active, spans, text, @intCast(text.len), &at, &plain, base);
+    if (!plain) out.appendSlice(a, theme.sgrOn(a, .{}, base)) catch {};
     return out.items;
 }
 
-fn emit(a: std.mem.Allocator, out: *std.ArrayList(u8), active: *std.ArrayList(usize), spans: []const Span, text: []const u8, end: u32, at: *u32, plain: *bool) void {
+fn emit(a: std.mem.Allocator, out: *std.ArrayList(u8), active: *std.ArrayList(usize), spans: []const Span, text: []const u8, end: u32, at: *u32, plain: *bool, base: theme.Style) void {
     if (end <= at.*) return;
+    const reset = theme.sgrOn(a, .{}, base);
     const style: ?theme.Style = if (active.items.len == 0) null else spans[active.items[active.items.len - 1]].style;
     if (style) |s| {
-        out.appendSlice(a, theme.sgr(a, s)) catch {};
+        const sgr = theme.sgrOn(a, s, base);
+        out.appendSlice(a, sgr) catch {};
         plain.* = false;
-    } else {
-        if (!plain.*) out.appendSlice(a, theme.SGR_PLAIN) catch {};
-        plain.* = true;
-    }
-    const chunk = text[at.*..end];
-    if (style) |s| {
+        const chunk = text[at.*..end];
         for (chunk) |c| {
             out.append(a, c) catch {};
-            if (c == '\n') out.appendSlice(a, theme.sgr(a, s)) catch {};
+            if (c == '\n') out.appendSlice(a, sgr) catch {};
         }
     } else {
-        out.appendSlice(a, chunk) catch {};
+        if (!plain.*) out.appendSlice(a, reset) catch {};
+        plain.* = true;
+        out.appendSlice(a, text[at.*..end]) catch {};
     }
     at.* = end;
+}
+
+pub fn paintOn(a: std.mem.Allocator, text: []const u8, spans: []const Span, base: theme.Style) []u8 {
+    return paint(a, text, spans, base);
+}
+
+fn syntaxFor(g: *Grammars, lang: []const u8) ?*Syntax {
+    if (std.mem.eql(u8, lang, "js") or std.mem.eql(u8, lang, "javascript") or std.mem.eql(u8, lang, "jsx")) return &g.javascript;
+    if (std.mem.eql(u8, lang, "ts") or std.mem.eql(u8, lang, "typescript")) return &g.typescript;
+    if (std.mem.eql(u8, lang, "tsx")) return &g.tsx;
+    if (std.mem.eql(u8, lang, "py") or std.mem.eql(u8, lang, "python")) return &g.python;
+    if (std.mem.eql(u8, lang, "go") or std.mem.eql(u8, lang, "golang")) return &g.go;
+    if (std.mem.eql(u8, lang, "zig")) return &g.zig;
+    if (std.mem.eql(u8, lang, "bash") or std.mem.eql(u8, lang, "sh") or std.mem.eql(u8, lang, "shell")) return &g.bash;
+    return null;
+}
+
+fn infoLang(info: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, info, " \t\r\n");
+    var end: usize = 0;
+    while (end < trimmed.len and trimmed[end] != ' ' and trimmed[end] != '\t') end += 1;
+    return trimmed[0..end];
+}
+
+pub fn spansFor(a: std.mem.Allocator, info: []const u8, text: []const u8) []const Span {
+    const g = getGrammars(a);
+    const lang = std.ascii.allocLowerString(a, infoLang(info)) catch infoLang(info);
+    const s = syntaxFor(g, lang) orelse return &.{};
+    const u = utf16(a, text) orelse return &.{};
+    const root = parse(s.parser, u) orelse return &.{};
+    defer root.destroy();
+    return spansOf(a, s, root.rootNode(), u, text, 0);
+}
+
+pub fn highlightOn(a: std.mem.Allocator, info: []const u8, text: []const u8, base: theme.Style) []const u8 {
+    return paint(a, text, spansFor(a, info, text), base);
+}
+
+pub const NodeSpan = struct { start: u32, end: u32, kind: []const u8 };
+
+const diff_line_kinds = [_][]const u8{
+    "file_change", "binary_change", "index",   "similarity", "dissimilarity",
+    "old_file",    "new_file",      "location", "addition",   "deletion",
+    "change",      "context",       "comment",  "special",    "unrecognized",
+};
+
+fn isDiffLineKind(kind: []const u8) bool {
+    for (diff_line_kinds) |k| {
+        if (std.mem.eql(u8, kind, k)) return true;
+    }
+    return false;
+}
+
+fn collectDiffNodes(a: std.mem.Allocator, node: ts.Node, u: Utf16, out: *std.ArrayList(NodeSpan)) void {
+    if (isDiffLineKind(node.kind())) {
+        out.append(a, .{
+            .start = byteOf(u, node.startByte() / 2),
+            .end = byteOf(u, node.endByte() / 2),
+            .kind = node.kind(),
+        }) catch {};
+        return;
+    }
+    var i: u32 = 0;
+    while (i < node.childCount()) : (i += 1) {
+        const child = node.child(i) orelse continue;
+        collectDiffNodes(a, child, u, out);
+    }
+}
+
+pub fn diffSpans(a: std.mem.Allocator, text: []const u8) []NodeSpan {
+    const g = getGrammars(a);
+    const u = utf16(a, text) orelse return &.{};
+    const root = parse(g.diff.parser, u) orelse return &.{};
+    defer root.destroy();
+    var out: std.ArrayList(NodeSpan) = .empty;
+    collectDiffNodes(a, root.rootNode(), u, &out);
+    return out.items;
+}
+
+pub fn highlightCode(a: std.mem.Allocator, info: []const u8, text: []const u8) []const u8 {
+    return highlightOn(a, info, text, .{});
 }
 
 pub fn highlightMarkdown(a: std.mem.Allocator, text: []const u8) []const u8 {
@@ -334,7 +424,7 @@ pub fn highlightMarkdown(a: std.mem.Allocator, text: []const u8) []const u8 {
         const idx = @min(level, theme.current.headings.len) - 1;
         spans = std.ArrayList(Span).fromOwnedSlice(recolor(a, spans.items, byteOf(u, heading.startByte() / 2), byteOf(u, heading.endByte() / 2), theme.current.headings[idx]));
     }
-    return paint(a, text, spans.items);
+    return paint(a, text, spans.items, .{});
 }
 
 const Align = enum { none, left, center, right };
@@ -477,25 +567,4 @@ fn byteOf(u: Utf16, unit: u32) u32 {
 
 fn parse(parser: *ts.Parser, u: Utf16) ?*ts.Tree {
     return parser.parseStringEncoding(std.mem.sliceAsBytes(u.units), null, .utf16le);
-}
-
-pub fn highlightCode(a: std.mem.Allocator, info: []const u8, text: []const u8) []const u8 {
-    const trimmed = std.mem.trim(u8, info, " \t\r\n");
-    var end: usize = 0;
-    while (end < trimmed.len and trimmed[end] != ' ' and trimmed[end] != '\t') end += 1;
-    const lang = std.ascii.allocLowerString(a, trimmed[0..end]) catch trimmed[0..end];
-    const g = getGrammars(a);
-    const u = utf16(a, text) orelse return text;
-    const syn: ?*Syntax =
-        if (std.mem.eql(u8, lang, "js") or std.mem.eql(u8, lang, "javascript") or std.mem.eql(u8, lang, "jsx")) &g.javascript
-        else if (std.mem.eql(u8, lang, "ts") or std.mem.eql(u8, lang, "typescript")) &g.typescript
-        else if (std.mem.eql(u8, lang, "tsx")) &g.tsx
-        else if (std.mem.eql(u8, lang, "py") or std.mem.eql(u8, lang, "python")) &g.python
-        else if (std.mem.eql(u8, lang, "go") or std.mem.eql(u8, lang, "golang")) &g.go
-        else if (std.mem.eql(u8, lang, "zig")) &g.zig
-        else null;
-    const s = syn orelse return text;
-    const root = parse(s.parser, u) orelse return text;
-    defer root.destroy();
-    return paint(a, text, spansOf(a, s, root.rootNode(), u, text, 0));
 }

@@ -28,6 +28,8 @@ pub fn build(b: *std.Build) void {
     const py = b.dependency("tree_sitter_python", .{ .target = target, .optimize = optimize });
     const go = b.dependency("tree_sitter_go", .{ .target = target, .optimize = optimize });
     const zig = b.dependency("tree_sitter_zig", .{ .target = target, .optimize = optimize });
+    const bash = b.dependency("tree_sitter_bash", .{ .target = target, .optimize = optimize });
+    const diff = b.dependency("tree_sitter_diff", .{ .target = target, .optimize = optimize });
 
     exe.root_module.link_libc = true;
     addGrammar(exe, js, "src", &.{ "parser.c", "scanner.c" });
@@ -38,6 +40,8 @@ pub fn build(b: *std.Build) void {
     addGrammar(exe, py, "src", &.{ "parser.c", "scanner.c" });
     addGrammar(exe, go, "src", &.{"parser.c"});
     addGrammar(exe, zig, "src", &.{"parser.c"});
+    addGrammar(exe, bash, "src", &.{ "parser.c", "scanner.c" });
+    addGrammar(exe, diff, "src", &.{"parser.c"});
 
     exe.root_module.addAnonymousImport("js_highlights", .{ .root_source_file = js.path("queries/highlights.scm") });
     exe.root_module.addAnonymousImport("ts_highlights", .{ .root_source_file = ts.path("queries/highlights.scm") });
@@ -47,6 +51,8 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addAnonymousImport("py_highlights", .{ .root_source_file = py.path("queries/highlights.scm") });
     exe.root_module.addAnonymousImport("go_highlights", .{ .root_source_file = go.path("queries/highlights.scm") });
     exe.root_module.addAnonymousImport("zig_highlights", .{ .root_source_file = zig.path("queries/highlights.scm") });
+    exe.root_module.addAnonymousImport("bash_highlights", .{ .root_source_file = bash.path("queries/highlights.scm") });
+    exe.root_module.addAnonymousImport("diff_highlights", .{ .root_source_file = diff.path("queries/highlights.scm") });
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
