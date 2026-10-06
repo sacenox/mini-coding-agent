@@ -140,11 +140,66 @@ const OXOCARBON_CAPTURES = [_]Capture{
     .{ .name = "text.reference", .style = .{ .fg = "#d0d0d0" } },
 };
 
+const KANAGAWA = Theme{
+    .fg = "#c5c9c5",
+    .bg = "#181616",
+    .comment = "#737c73",
+    .prompt = "#8ba4b0",
+    .accent = "#8ea4a2",
+    .add = "#76946a",
+    .error_ = "#e82424",
+    .warn = "#ff9e3b",
+    .diff_add = "#2b3328",
+    .diff_delete = "#43242b",
+    .inline_code = .{ .fg = "#8a9a7b", .bg = "#282727" },
+    .headings = &KANAGAWA_HEADINGS,
+    .captures = &KANAGAWA_CAPTURES,
+};
+
+const KANAGAWA_HEADINGS = [_]Style{
+    .{ .fg = "#8ba4b0", .bg = "#282727", .bold = true },
+};
+
+const KANAGAWA_CAPTURES = [_]Capture{
+    .{ .name = "boolean", .style = .{ .fg = "#b6927b", .bold = true } },
+    .{ .name = "character", .style = .{ .fg = "#8a9a7b" } },
+    .{ .name = "comment", .style = .{ .fg = "#737c73", .italic = true } },
+    .{ .name = "constant", .style = .{ .fg = "#b6927b" } },
+    .{ .name = "constant.builtin", .style = .{ .fg = "#949fb5" } },
+    .{ .name = "constructor", .style = .{ .fg = "#949fb5" } },
+    .{ .name = "escape", .style = .{ .fg = "#c4746e", .bold = true } },
+    .{ .name = "function", .style = .{ .fg = "#8ba4b0" } },
+    .{ .name = "function.builtin", .style = .{ .fg = "#949fb5" } },
+    .{ .name = "keyword", .style = .{ .fg = "#8992a7", .italic = true } },
+    .{ .name = "label", .style = .{ .fg = "#8992a7", .bold = true } },
+    .{ .name = "module", .style = .{ .fg = "#8ea4a2" } },
+    .{ .name = "number", .style = .{ .fg = "#a292a3" } },
+    .{ .name = "operator", .style = .{ .fg = "#c4746e" } },
+    .{ .name = "property", .style = .{ .fg = "#c4b28a" } },
+    .{ .name = "punctuation.bracket", .style = .{ .fg = "#9e9b93" } },
+    .{ .name = "punctuation.delimiter", .style = .{ .fg = "#9e9b93" } },
+    .{ .name = "punctuation.special", .style = .{ .fg = "#949fb5" } },
+    .{ .name = "string", .style = .{ .fg = "#8a9a7b" } },
+    .{ .name = "string.special", .style = .{ .fg = "#949fb5" } },
+    .{ .name = "type", .style = .{ .fg = "#8ea4a2" } },
+    .{ .name = "type.builtin", .style = .{ .fg = "#949fb5" } },
+    .{ .name = "variable", .style = .{ .fg = "#c5c9c5" } },
+    .{ .name = "variable.builtin", .style = .{ .fg = "#c4746e", .italic = true } },
+    .{ .name = "variable.parameter", .style = .{ .fg = "#a6a69c" } },
+    .{ .name = "text.emphasis", .style = .{ .italic = true } },
+    .{ .name = "text.strong", .style = .{ .bold = true } },
+    .{ .name = "text.literal", .style = .{ .fg = "#8a9a7b" } },
+    .{ .name = "text.title", .style = .{ .fg = "#8ba4b0", .bold = true } },
+    .{ .name = "text.uri", .style = .{ .fg = "#949fb5", .underline = true } },
+    .{ .name = "text.reference", .style = .{ .fg = "#c4b28a" } },
+};
+
 pub const default_id = "tokyonight";
 
 pub fn find(id: []const u8) ?*const Theme {
     if (std.mem.eql(u8, id, "tokyonight")) return &TOKYONIGHT;
     if (std.mem.eql(u8, id, "oxocarbon")) return &OXOCARBON;
+    if (std.mem.eql(u8, id, "kanagawa")) return &KANAGAWA;
     return null;
 }
 
