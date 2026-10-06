@@ -25,6 +25,14 @@ pub const Ignore = struct {
     uses_gitignore: bool = true,
 };
 
+fn normalizePattern(raw: []const u8) ?[]const u8 {
+    var line = std.mem.trim(u8, raw, " \t\r");
+    if (line.len == 0 or line[0] == '#') return null;
+    if (std.mem.startsWith(u8, line, "./")) line = line[2..];
+    line = std.mem.trimEnd(u8, line, "/");
+    return if (line.len == 0) null else line;
+}
+
 fn ignoreSet(tmp: std.mem.Allocator, ignore: Ignore) !std.StringHashMap(void) {
     var set = std.StringHashMap(void).init(tmp);
     var list: std.ArrayList([]const u8) = .empty;
@@ -36,8 +44,8 @@ fn ignoreSet(tmp: std.mem.Allocator, ignore: Ignore) !std.StringHashMap(void) {
         } else |_| {}
     }
     for (list.items) |dir| {
-        const gop = try set.getOrPut(dir);
-        if (!gop.found_existing) gop.key_ptr.* = dir;
+        const name = normalizePattern(dir) orelse continue;
+        try set.put(name, {});
     }
     return set;
 }
