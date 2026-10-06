@@ -6,8 +6,6 @@ Some of my notes might be because of lack of Zig experience.
 
 ## Notes
 
-**highlighting updates** - Let's update the code so we use tree-sitter to highlight the diffs, instead of the manual process we do now. We are also going to start highlighting the committed bash calls arguments (not on the preview).
-
 `src/config.zig` - When we fixed the issue with the model specific api being at provider level for opencode in a recent commit, apparently we didn't do it for custom providers. Again, the models need to carry the metadata, the provider is just a label grouping.
 
 ```jsonc

@@ -52,6 +52,15 @@ fn isCombining(code: u21) bool {
 
 const Piece = struct { text: []const u8, width: usize };
 
+const Decoded = struct { len: usize, cp: u21 };
+
+fn decodeAt(text: []const u8, i: usize) ?Decoded {
+    const n = std.unicode.utf8ByteSequenceLength(text[i]) catch return null;
+    if (i + n > text.len) return null;
+    const cp = std.unicode.utf8Decode(text[i .. i + n]) catch return null;
+    return .{ .len = n, .cp = cp };
+}
+
 fn nextPiece(text: []const u8, i: *usize) ?Piece {
     if (i.* >= text.len) return null;
     if (isSgrAt(text, i.*)) |n| {
@@ -59,11 +68,13 @@ fn nextPiece(text: []const u8, i: *usize) ?Piece {
         i.* += n;
         return piece;
     }
-    const n = std.unicode.utf8ByteSequenceLength(text[i.*]) catch 1;
-    const len = @min(@as(usize, n), text.len - i.*);
-    const cp = std.unicode.utf8Decode(text[i.* .. i.* + len]) catch text[i.*];
-    const piece = Piece{ .text = text[i.* .. i.* + len], .width = if (cp == '\t') 0 else charWidth(cp) };
-    i.* += len;
+    if (decodeAt(text, i.*)) |d| {
+        const piece = Piece{ .text = text[i.* .. i.* + d.len], .width = if (d.cp == '\t') 0 else charWidth(d.cp) };
+        i.* += d.len;
+        return piece;
+    }
+    const piece = Piece{ .text = text[i.* .. i.* + 1], .width = charWidth(text[i.*]) };
+    i.* += 1;
     return piece;
 }
 
@@ -113,8 +124,6 @@ pub fn sanitize(a: std.mem.Allocator, text: []const u8) []const u8 {
             i += 1;
             continue;
         }
-        const seq_len = std.unicode.utf8ByteSequenceLength(c) catch 1;
-        const len = @min(@as(usize, seq_len), text.len - i);
         if (c < 0x80) {
             if ((c < 0x20 and c != 0x09 and c != 0x0a) or c == 0x7f) {
                 i += 1;
@@ -124,13 +133,16 @@ pub fn sanitize(a: std.mem.Allocator, text: []const u8) []const u8 {
             i += 1;
             continue;
         }
-        const cp = std.unicode.utf8Decode(text[i .. i + len]) catch 0;
-        if (cp >= 0x80 and cp <= 0x9f) {
-            i += len;
+        const d = decodeAt(text, i) orelse {
+            i += 1;
+            continue;
+        };
+        if (d.cp >= 0x80 and d.cp <= 0x9f) {
+            i += d.len;
             continue;
         }
-        out.appendSlice(a, text[i .. i + len]) catch {};
-        i += len;
+        out.appendSlice(a, text[i .. i + d.len]) catch {};
+        i += d.len;
     }
     return out.items;
 }
