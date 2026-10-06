@@ -64,7 +64,8 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
         return fail(a, "bash failed: command must be a string", .{});
     };
 
-    const before = snapshot.capture(scratch) catch return fail(a, "bash failed: out of memory", .{});
+    const ignore = snapshot.Ignore{ .dirs = ctx.snapshot_ignore_dirs, .uses_gitignore = ctx.snapshot_uses_gitignore };
+    const before = snapshot.capture(scratch, ignore) catch return fail(a, "bash failed: out of memory", .{});
 
     var child = std.process.spawn(platform.io, .{
         .argv = &.{ "bash", "-c", args.command },
@@ -159,7 +160,7 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
     out.appendSlice(a, std.fmt.allocPrint(scratch, "exit code: {s}", .{label}) catch "exit code: unknown") catch
         return fail(a, "bash failed: out of memory", .{});
 
-    const after = snapshot.capture(scratch) catch return fail(a, "bash failed: out of memory", .{});
+    const after = snapshot.capture(scratch, ignore) catch return fail(a, "bash failed: out of memory", .{});
     const diffs = snapshot.diffTrees(scratch, before, after) catch return fail(a, "bash failed: out of memory", .{});
 
     return .{

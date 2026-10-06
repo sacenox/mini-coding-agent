@@ -1,17 +1,12 @@
 const std = @import("std");
 const platform = @import("../platform.zig");
+const util = @import("../util.zig");
 const diff = @import("../diff.zig");
 const common = @import("common.zig");
 
 const max_file_bytes = 1 << 20;
 const max_total_bytes = 32 << 20;
 const binary_sniff = 8192;
-
-const ignored_dirs = [_][]const u8{
-    ".git",          ".hg",  ".svn",        "node_modules",
-    ".venv",         "venv", "__pycache__", ".mypy_cache",
-    ".pytest_cache",
-};
 
 const Kind = enum { text, binary, large, link, untracked };
 
@@ -25,19 +20,36 @@ const FileState = struct {
 
 pub const Tree = std.StringHashMap(FileState);
 
-fn ignored(name: []const u8) bool {
-    for (ignored_dirs) |d| {
-        if (std.mem.eql(u8, d, name)) return true;
+pub const Ignore = struct {
+    dirs: []const []const u8 = &.{},
+    uses_gitignore: bool = false,
+};
+
+fn ignoreSet(tmp: std.mem.Allocator, ignore: Ignore) !std.StringHashMap(void) {
+    var set = std.StringHashMap(void).init(tmp);
+    var list: std.ArrayList([]const u8) = .empty;
+    try list.appendSlice(tmp, ignore.dirs);
+    if (ignore.uses_gitignore) {
+        if (util.readFileAlloc(tmp, ".gitignore", 1 << 20)) |text| {
+            var it = std.mem.tokenizeScalar(u8, text, '\n');
+            while (it.next()) |line| try list.append(tmp, line);
+        } else |_| {}
     }
-    return false;
+    for (list.items) |dir| {
+        const gop = try set.getOrPut(dir);
+        if (!gop.found_existing) gop.key_ptr.* = dir;
+    }
+    return set;
 }
 
-pub fn capture(a: std.mem.Allocator) !Tree {
+pub fn capture(a: std.mem.Allocator, ignore: Ignore) !Tree {
     var tree = Tree.init(a);
 
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
     const tmp = arena.allocator();
+
+    const ignores = try ignoreSet(tmp, ignore);
 
     var stack: std.ArrayList([]const u8) = .empty;
     try stack.append(tmp, "");
@@ -56,7 +68,7 @@ pub fn capture(a: std.mem.Allocator) !Tree {
                 try std.fmt.allocPrint(a, "{s}/{s}", .{ dir_rel, entry.name });
 
             if (entry.kind == .directory) {
-                if (!ignored(entry.name)) try stack.append(tmp, rel);
+                if (!ignores.contains(entry.name)) try stack.append(tmp, rel);
                 continue;
             }
 

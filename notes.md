@@ -33,16 +33,6 @@ A definite research about the best approach to a clean rendering method is requi
 I suggest the above structure, so we match the work we did for opencode. Basically the mistake here is assuming all providers use the same api for all models, which is not true. Not even for local envs.
 Another note here is that again, I'm shocked at how cumbersome it is to read and validate JSON.
 
-`src/snapshot.zig` - the list of ignored paths is meant to come from the config, not this incomplete hardcoded list.
-
-```json
-{
-    // ... other fields
-    snapshotIgnoreDirs: ["./zig-out", "./.zig-cache"] // list of paths, each line like a gitignore line.
-    snapshotUsesGitignore: true, // merges the list above with gitignore, no dupes!
-}
-```
-
 `src/main.zig` - has some headless concerns mixed into the entry point of the app. Worth considering extracting headless into `src/headless.zig`. Single concern files are easier to make a mental model around.
 
 `src/diff.zig` - We are rendering a whole header with index and divider, just to strip it in the TUI. Seems counter productive.

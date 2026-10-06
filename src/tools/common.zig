@@ -14,6 +14,8 @@ pub const Context = struct {
     cancel: *const std.atomic.Value(bool),
     supports_images: bool,
     on_output: ?OutputFn = null,
+    snapshot_ignore_dirs: []const []const u8 = &.{},
+    snapshot_uses_gitignore: bool = false,
 };
 
 pub const FileDiff = struct {

@@ -34,6 +34,8 @@ pub const Config = struct {
     thinking_effort: ?[]const u8,
     theme: []const u8,
     custom_providers: []const CustomProvider,
+    snapshot_ignore_dirs: []const []const u8,
+    snapshot_uses_gitignore: bool,
 };
 
 const File = struct {
@@ -47,6 +49,8 @@ const File = struct {
     @"thinkingEffort": ?[]const u8 = null,
     @"customProviders": ?[]const CustomProvider = null,
     theme: ?[]const u8 = null,
+    @"snapshotIgnoreDirs": ?[]const []const u8 = null,
+    @"snapshotUsesGitignore": ?bool = null,
 };
 
 fn configDir(a: std.mem.Allocator) []const u8 {
@@ -105,6 +109,8 @@ fn readInto(a: std.mem.Allocator, path: []const u8, required: bool, cfg: *Config
     if (file.@"customProviders") |v| cfg.custom_providers = v;
     if (file.@"thinkingEffort") |v| cfg.thinking_effort = v;
     if (file.theme) |v| cfg.theme = v;
+    if (file.@"snapshotIgnoreDirs") |v| cfg.snapshot_ignore_dirs = v;
+    if (file.@"snapshotUsesGitignore") |v| cfg.snapshot_uses_gitignore = v;
 }
 
 pub const Update = struct {
@@ -152,5 +158,7 @@ fn defaults(a: std.mem.Allocator) !Config {
         .thinking_effort = null,
         .theme = theme.default_id,
         .custom_providers = &.{},
+        .snapshot_ignore_dirs = &.{},
+        .snapshot_uses_gitignore = false,
     };
 }

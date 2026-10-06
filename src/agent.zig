@@ -4,6 +4,7 @@ const api = @import("api.zig");
 const tools = @import("tools/index.zig");
 const common = @import("tools/common.zig");
 const session = @import("session.zig");
+const config = @import("config.zig");
 const util = @import("util.zig");
 
 pub const Phase = enum { preparing, waiting_model, streaming, running_tool, pausing, idle };
@@ -58,6 +59,7 @@ pub const Options = struct {
     supports_images: bool,
     session: *session.Session,
     cancel: *const std.atomic.Value(bool),
+    config: *const config.Config,
 };
 
 const StreamCtx = struct { listener: Listener, started: bool = false };
@@ -214,6 +216,8 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
                 .cancel = opts.cancel,
                 .supports_images = opts.supports_images,
                 .on_output = .{ .ctx = &stream_ctx.listener, .on_chunk = onToolOutput },
+                .snapshot_ignore_dirs = opts.config.snapshot_ignore_dirs,
+                .snapshot_uses_gitignore = opts.config.snapshot_uses_gitignore,
             });
 
             const tool_message = types.Message{ .tool_result = .{

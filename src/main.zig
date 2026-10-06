@@ -172,6 +172,7 @@ fn run() !u8 {
         .supports_images = supports_images,
         .session = &sess,
         .cancel = &cancel,
+        .config = &cfg,
     };
 
     if (args.print) |print_text| {
