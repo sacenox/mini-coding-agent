@@ -1,6 +1,6 @@
 const std = @import("std");
 const platform = @import("../platform.zig");
-const util = @import("../util.zig");
+const filesystem = @import("../filesystem.zig");
 const diff = @import("../diff.zig");
 const common = @import("common.zig");
 
@@ -38,7 +38,7 @@ fn ignoreSet(tmp: std.mem.Allocator, ignore: Ignore) !std.StringHashMap(void) {
     var list: std.ArrayList([]const u8) = .empty;
     try list.appendSlice(tmp, ignore.dirs);
     if (ignore.uses_gitignore) {
-        if (util.readFileAlloc(tmp, ".gitignore", 1 << 20)) |text| {
+        if (filesystem.readFileAlloc(tmp, ".gitignore", 1 << 20)) |text| {
             var it = std.mem.tokenizeScalar(u8, text, '\n');
             while (it.next()) |line| try list.append(tmp, line);
         } else |_| {}
@@ -136,13 +136,13 @@ fn diffOne(a: std.mem.Allocator, path: []const u8, before: ?FileState, after: ?F
         const af = after.?;
         if (af.kind == .link) return .{ .path = path, .note = "symlink created" };
         if (af.content == null) return .{ .path = path, .note = noteFor(a, af.kind, "created") };
-        return .{ .path = path, .patch = try diff.unified(a, path, "", af.content.?) };
+        return .{ .path = path, .patch = try diff.unified(a, "", af.content.?) };
     }
     if (after == null) {
         const bf = before.?;
         if (bf.kind == .link) return .{ .path = path, .note = "symlink removed" };
         if (bf.content == null) return .{ .path = path, .note = noteFor(a, bf.kind, "deleted") };
-        return .{ .path = path, .patch = try diff.unified(a, path, bf.content.?, "") };
+        return .{ .path = path, .patch = try diff.unified(a, bf.content.?, "") };
     }
     const bf = before.?;
     const af = after.?;
@@ -151,7 +151,7 @@ fn diffOne(a: std.mem.Allocator, path: []const u8, before: ?FileState, after: ?F
     }
     if (bf.content != null and af.content != null) {
         if (std.mem.eql(u8, bf.content.?, af.content.?)) return null;
-        return .{ .path = path, .patch = try diff.unified(a, path, bf.content.?, af.content.?) };
+        return .{ .path = path, .patch = try diff.unified(a, bf.content.?, af.content.?) };
     }
     if (sameStat(bf, af)) return null;
     return .{ .path = path, .note = noteFor(a, if (af.content == null) af.kind else bf.kind, "changed") };

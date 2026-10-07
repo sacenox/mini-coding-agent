@@ -1,6 +1,6 @@
 const std = @import("std");
 const platform = @import("platform.zig");
-const util = @import("util.zig");
+const filesystem = @import("filesystem.zig");
 const config = @import("config.zig");
 
 const Skill = struct { name: []const u8, description: []const u8, path: []const u8 };
@@ -27,10 +27,10 @@ fn frontmatter(text: []const u8) Frontmatter {
 fn discoverSkills(a: std.mem.Allocator, dirs: []const []const u8) ![]Skill {
     var skills: std.ArrayList(Skill) = .empty;
     for (dirs) |root| {
-        for (util.listDir(a, root)) |entry| {
-            const path = util.join(a, &.{ root, entry, "SKILL.md" }) catch continue;
-            if (!util.fileExists(path)) continue;
-            const text = util.readFileAlloc(a, path, 1 << 20) catch continue;
+        for (filesystem.listDir(a, root)) |entry| {
+            const path = filesystem.join(a, &.{ root, entry, "SKILL.md" }) catch continue;
+            if (!filesystem.fileExists(path)) continue;
+            const text = filesystem.readFileAlloc(a, path, 1 << 20) catch continue;
             const meta = frontmatter(text);
             const name = meta.name orelse continue;
             try skills.append(a, .{
@@ -46,7 +46,7 @@ fn discoverSkills(a: std.mem.Allocator, dirs: []const []const u8) ![]Skill {
 fn agentFiles(a: std.mem.Allocator) ![]const []const u8 {
     var roots: std.ArrayList([]const u8) = .empty;
     if (platform.home()) |h| {
-        const agents = util.join(a, &.{ h, ".agents" }) catch "";
+        const agents = filesystem.join(a, &.{ h, ".agents" }) catch "";
         if (agents.len > 0) try roots.append(a, agents);
     }
     const cwd = try std.process.currentPathAlloc(platform.io, a);
@@ -54,8 +54,8 @@ fn agentFiles(a: std.mem.Allocator) ![]const []const u8 {
     var found: std.ArrayList([]const u8) = .empty;
     for (roots.items) |root| {
         for ([_][]const u8{ "AGENTS.md", "CLAUDE.md" }) |name| {
-            const path = try util.join(a, &.{ root, name });
-            if (util.fileExists(path)) try found.append(a, path);
+            const path = try filesystem.join(a, &.{ root, name });
+            if (filesystem.fileExists(path)) try found.append(a, path);
         }
     }
     return found.items;
@@ -89,7 +89,7 @@ pub fn buildSystemPrompt(a: std.mem.Allocator, cfg: *const config.Config) !Built
         const files = try agentFiles(a);
         loaded.agent_files = files.len;
         for (files) |path| {
-            const text = try util.readFileAlloc(a, path, 1 << 24);
+            const text = try filesystem.readFileAlloc(a, path, 1 << 24);
             try sections.append(a, try std.fmt.allocPrint(a, "## {s}\n\n{s}", .{
                 path,
                 std.mem.trim(u8, text, " \t\r\n"),

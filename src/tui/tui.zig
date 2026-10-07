@@ -1,6 +1,6 @@
 const std = @import("std");
 const platform = @import("../platform.zig");
-const util = @import("../util.zig");
+const time = @import("../time.zig");
 const config = @import("../config.zig");
 const session_mod = @import("../session.zig");
 const types = @import("../types.zig");
@@ -10,427 +10,29 @@ const tools_index = @import("../tools/index.zig");
 const common = @import("../tools/common.zig");
 const render = @import("render.zig");
 const theme = @import("theme.zig");
-const highlight = @import("highlight.zig");
 const styles = @import("styles.zig");
 const term = @import("term.zig");
+const input = @import("input.zig");
 const editor_mod = @import("editor.zig");
 const stream = @import("stream.zig");
 const complete = @import("complete.zig");
+const commands = @import("commands.zig");
+const usage_mod = @import("usage.zig");
+const diff_view = @import("diff_view.zig");
+const tool_view = @import("tool_view.zig");
+const screen = @import("screen.zig");
 
 const SPINNER = "⠀⠁⠂⠃⠄⠅⠆⠇⡀⡁⡂⡃⡄⡅⡆⡇⠈⠉⠊⠋⠌⠍⠎⠏⡈⡉⡊⡋⡌⡍⡎⡏⠐⠑⠒⠓⠔⠕⠖⠗⡐⡑⡒⡓⡔⡕⡖⡗⠘⠙⠚⠛⠜⠝⠞⠟⡘⡙⡚⡛⡜⡝⡞⡟⠠⠡⠢⠣⠤⠥⠦⠧⡠⡡⡢⡣⡤⡥⡦⡧⠨⠩⠪⠫⠬⠭⠮⠯⡨⡩⡪⡫⡬⡭⡮⡯⠰⠱⠲⠳⠴⠵⠶⠷⡰⡱⡲⡳⡴⡵⡶⡷⠸⠹⠺⠻⠼⠽⠾⠿⡸⡹⡺⡻⡼⡽⡾⡿⢀⢁⢂⢃⢄⢅⢆⢇⣀⣁⣂⣃⣄⣅⣆⣇⢈⢉⢊⢋⢌⢍⢎⢏⣈⣉⣊⣋⣌⣍⣎⣏⢐⢑⢒⢓⢔⢕⢖⢗⣐⣑⣒⣓⣔⣕⣖⣗⢘⢙⢚⢛⢜⢝⢞⢟⣘⣙⣚⣛⣜⣝⣞⣟⢠⢡⢢⢣⢤⢥⢦⢧⣠⣡⣢⣣⣤⣥⣦⣧⢨⢩⢪⢫⢬⢭⢮⢯⣨⣩⣪⣫⣬⣭⣮⣯⢰⢱⢲⢳⢴⢵⢶⢷⣰⣱⣲⣳⣴⣵⣶⣷⢸⢹⢺⢻⢼⢽⢾⢿⣸⣹⣺⣻⣼⣽⣾⣿";
 const SPINNER_MS = 120;
 const BODY_PREFIX = " | ";
 const ERROR_PREFIX = " ! ";
 
-const MAX_BODY_ROWS = 12;
-const ELIDED_HEAD = 4;
-const ELIDED_TAIL = 4;
-
 const physicalRows = render.physicalRows;
 const rowsForCells = render.rowsForCells;
 
-const PendingCall = struct { name: []const u8, summary: []const u8 };
+const PendingCall = tool_view.PendingCall;
 
-const STATE_WIDTH = "running".len;
-const STATE_PAD = std.fmt.comptimePrint("{{s: <{d}}}", .{STATE_WIDTH});
-
-fn paintRow(a: std.mem.Allocator, line: []const u8) []const u8 {
-    return std.fmt.allocPrint(a, "{s}{s}\x1b[K", .{ theme.SGR_PLAIN, line }) catch line;
-}
-
-fn styleLine(a: std.mem.Allocator, line: stream.BodyLine) []const u8 {
-    const safe = render.sanitize(a, line.text);
-    const expanded = render.expandTabs(a, safe, 4);
-    if (expanded.len == 0) return "";
-    const row_bg = if (line.bg) |bg| theme.sgrBg(a, bg) else theme.SGR_NORMAL_BG;
-    const styled = if (line.style) |s| styles.styledWith(a, .{
-        .fg = s.fg,
-        .bg = line.bg orelse theme.current.bg,
-        .bold = s.bold,
-        .italic = s.italic,
-        .underline = s.underline,
-    }, expanded) else expanded;
-    return std.fmt.allocPrint(a, "{s}{s}{s}", .{ row_bg, styled, row_bg }) catch expanded;
-}
-
-fn plainRows(a: std.mem.Allocator, lines: []const stream.BodyLine) []const []const u8 {
-    var out: std.ArrayList([]const u8) = .empty;
-    for (lines) |line| out.append(a, styleLine(a, line)) catch {};
-    return out.items;
-}
-
-fn bodyRows(a: std.mem.Allocator, lines: []const stream.BodyLine, width: usize) []const []const u8 {
-    const rows = plainRows(a, lines);
-    var height: usize = 0;
-    for (rows) |r| height += physicalRows(r, width);
-    if (height <= MAX_BODY_ROWS or rows.len <= ELIDED_HEAD + ELIDED_TAIL) return rows;
-    const tail_at = rows.len - ELIDED_TAIL;
-    var shown: usize = 0;
-    var head: usize = 0;
-    while (head < tail_at) : (head += 1) {
-        const h = physicalRows(rows[head], width);
-        if (shown + h + ELIDED_TAIL > MAX_BODY_ROWS - 1) break;
-        shown += h;
-    }
-    var out: std.ArrayList([]const u8) = .empty;
-    for (rows[0..head]) |r| out.append(a, r) catch {};
-    const hidden_rows: usize = blk: {
-        var n = height;
-        for (rows[0..head]) |r| n -= physicalRows(r, width);
-        for (rows[tail_at..]) |r| n -= physicalRows(r, width);
-        break :blk n;
-    };
-    out.append(a, styles.dim(a, std.fmt.allocPrint(a, "... {d} lines not shown ...", .{hidden_rows}) catch "")) catch {};
-    for (rows[tail_at..]) |r| out.append(a, r) catch {};
-    return out.items;
-}
-
-fn callHead(a: std.mem.Allocator, name: []const u8) []const u8 {
-    return styles.teal(a, std.fmt.allocPrint(a, "-> {s}", .{name}) catch "->");
-}
-
-fn callRows(a: std.mem.Allocator, call: PendingCall, running: bool) []const []const u8 {
-    const padded = std.fmt.allocPrint(a, STATE_PAD, .{if (running) "running" else "queued"}) catch "";
-    const word = if (running) styles.teal(a, padded) else styles.dim(a, padded);
-    const head = callHead(a, call.name);
-    const text = render.expandTabs(a, render.sanitize(a, call.summary), 4);
-    var out: std.ArrayList([]const u8) = .empty;
-    out.append(a, std.fmt.allocPrint(a, "{s} {s} {s}", .{ word, head, text }) catch text) catch {};
-    return out.items;
-}
-
-fn collapseWs(a: std.mem.Allocator, s: []const u8) []const u8 {
-    var out: std.ArrayList(u8) = .empty;
-    var i: usize = 0;
-    while (i < s.len) {
-        if (s[i] == '\n' or s[i] == '\r') {
-            if (out.items.len > 0 and out.items[out.items.len - 1] != ' ') out.append(a, ' ') catch {};
-            i += 1;
-            while (i < s.len and (s[i] == ' ' or s[i] == '\t' or s[i] == '\n' or s[i] == '\r')) i += 1;
-            continue;
-        }
-        out.append(a, s[i]) catch {};
-        i += 1;
-    }
-    return out.items;
-}
-
-fn callSummary(a: std.mem.Allocator, name: []const u8, args_json: []const u8) []const u8 {
-    const parsed = std.json.parseFromSliceLeaky(std.json.Value, a, args_json, .{}) catch return args_json;
-    if (parsed == .object) {
-        if (std.mem.eql(u8, name, "bash")) {
-            if (parsed.object.get("command")) |c| if (c == .string) return collapseWs(a, c.string);
-        }
-        if (std.mem.eql(u8, name, "edit") or std.mem.eql(u8, name, "read")) {
-            if (parsed.object.get("path")) |p| if (p == .string) return p.string;
-        }
-    }
-    return args_json;
-}
-
-fn isEditHeader(line: []const u8) bool {
-    return std.mem.startsWith(u8, line, "Index: ") or std.mem.startsWith(u8, line, "--- ") or
-        std.mem.startsWith(u8, line, "+++ ") or (line.len >= 3 and line[0] == '=' and line[1] == '=' and line[2] == '=');
-}
-
-fn diffHunk() theme.Style {
-    return .{ .fg = theme.current.prompt };
-}
-
-const DiffKind = enum { hunk, add, del, ctx, note };
-
-fn diffKindOf(kind: []const u8) ?DiffKind {
-    if (std.mem.eql(u8, kind, "location")) return .hunk;
-    if (std.mem.eql(u8, kind, "addition")) return .add;
-    if (std.mem.eql(u8, kind, "deletion")) return .del;
-    if (std.mem.eql(u8, kind, "context")) return .ctx;
-    if (highlight.isDiffLineKind(kind)) return .note;
-    return null;
-}
-
-fn prefixKind(line: []const u8) DiffKind {
-    if (std.mem.startsWith(u8, line, "@@")) return .hunk;
-    if (std.mem.startsWith(u8, line, "+")) return .add;
-    if (std.mem.startsWith(u8, line, "-")) return .del;
-    if (std.mem.startsWith(u8, line, " ")) return .ctx;
-    return .note;
-}
-
-fn langFor(path: []const u8) []const u8 {
-    const ext = std.fs.path.extension(path);
-    const named = [_]struct { ext: []const u8, lang: []const u8 }{
-        .{ .ext = ".js", .lang = "js" },
-        .{ .ext = ".jsx", .lang = "jsx" },
-        .{ .ext = ".mjs", .lang = "js" },
-        .{ .ext = ".cjs", .lang = "js" },
-        .{ .ext = ".ts", .lang = "ts" },
-        .{ .ext = ".tsx", .lang = "tsx" },
-        .{ .ext = ".py", .lang = "py" },
-        .{ .ext = ".go", .lang = "go" },
-        .{ .ext = ".zig", .lang = "zig" },
-    };
-    for (named) |entry| {
-        if (std.ascii.eqlIgnoreCase(ext, entry.ext)) return entry.lang;
-    }
-    return "";
-}
-
-fn rebaseSpans(a: std.mem.Allocator, spans: []const highlight.Span, lo: u32, hi: u32) []const highlight.Span {
-    var out: std.ArrayList(highlight.Span) = .empty;
-    for (spans) |s| {
-        const start = @max(s.start, lo);
-        const end = @min(s.end, hi);
-        if (end <= start) continue;
-        out.append(a, .{ .start = start - lo, .end = end - lo, .style = s.style }) catch {};
-    }
-    return out.items;
-}
-
-fn diffLines(a: std.mem.Allocator, path: []const u8, lines: []const []const u8) []const stream.BodyLine {
-    var joined: std.ArrayList(u8) = .empty;
-    var starts = a.alloc(u32, lines.len) catch return &.{};
-    for (lines, 0..) |l, i| {
-        if (i > 0) joined.append(a, '\n') catch {};
-        starts[i] = @intCast(joined.items.len);
-        joined.appendSlice(a, l) catch {};
-    }
-    const nodes = highlight.diffSpans(a, joined.items);
-    std.mem.sort(highlight.NodeSpan, nodes, {}, struct {
-        fn lt(_: void, x: highlight.NodeSpan, y: highlight.NodeSpan) bool {
-            return x.start < y.start;
-        }
-    }.lt);
-
-    var code: std.ArrayList(u8) = .empty;
-    var kinds = a.alloc(DiffKind, lines.len) catch return &.{};
-    var los = a.alloc(u32, lines.len) catch return &.{};
-    var his = a.alloc(u32, lines.len) catch return &.{};
-    var cursor: usize = 0;
-    for (lines, 0..) |l, i| {
-        while (cursor < nodes.len and nodes[cursor].end <= starts[i]) cursor += 1;
-        const parsed: ?DiffKind = if (cursor < nodes.len and nodes[cursor].start == starts[i])
-            diffKindOf(nodes[cursor].kind)
-        else
-            null;
-        const kind = parsed orelse prefixKind(l);
-        kinds[i] = kind;
-        los[i] = 0;
-        his[i] = 0;
-        if (kind != .add and kind != .del and kind != .ctx) continue;
-        const content = l[1..];
-        los[i] = @intCast(code.items.len);
-        code.appendSlice(a, content) catch {};
-        code.append(a, '\n') catch {};
-        his[i] = @intCast(code.items.len - 1);
-    }
-
-    const spans = highlight.spansFor(a, langFor(path), code.items);
-
-    var out: std.ArrayList(stream.BodyLine) = .empty;
-    for (lines, 0..) |l, i| {
-        switch (kinds[i]) {
-            .hunk => out.append(a, .{ .text = l, .style = diffHunk() }) catch {},
-            .note => out.append(a, .{ .text = l, .style = .{ .fg = theme.current.comment } }) catch {},
-            .ctx => out.append(a, .{ .text = l, .style = .{ .fg = theme.current.comment } }) catch {},
-            .add, .del => {
-                const bg = if (kinds[i] == .add) theme.current.diff_add else theme.current.diff_delete;
-                const content = l[1..];
-                const painted = highlight.paint(a, content, rebaseSpans(a, spans, los[i], his[i]), .{ .bg = bg });
-                out.append(a, .{
-                    .text = std.fmt.allocPrint(a, "{c}{s}", .{ l[0], painted }) catch l,
-                    .bg = bg,
-                }) catch {};
-            },
-        }
-    }
-    return out.items;
-}
-
-fn diffRows(a: std.mem.Allocator, diffs: []const common.FileDiff) []const stream.BodyLine {
-    var out: std.ArrayList(stream.BodyLine) = .empty;
-    for (diffs) |d| {
-        out.append(a, .{ .text = d.path, .style = .{ .fg = theme.current.prompt } }) catch {};
-        if (d.patch) |patch| {
-            const trimmed = std.mem.trimEnd(u8, patch, " \t\r\n");
-            var it = std.mem.splitScalar(u8, trimmed, '\n');
-            var header = true;
-            var body: std.ArrayList([]const u8) = .empty;
-            while (it.next()) |l| {
-                if (header and isEditHeader(l)) continue;
-                header = false;
-                body.append(a, l) catch {};
-            }
-            out.appendSlice(a, diffLines(a, d.path, body.items)) catch {};
-        } else if (d.note) |note| {
-            out.append(a, .{ .text = note, .style = .{ .fg = theme.current.comment } }) catch {};
-        }
-    }
-    return out.items;
-}
-
-fn callBody(a: std.mem.Allocator, name: []const u8, summary: []const u8) stream.BodyLine {
-    const body = if (std.mem.eql(u8, name, "bash"))
-        highlight.highlightOn(a, "bash", summary, .{})
-    else
-        summary;
-    return .{ .text = std.fmt.allocPrint(a, "{s}  {s}", .{ callHead(a, name), body }) catch summary };
-}
-
-fn resultLines(a: std.mem.Allocator, name: []const u8, text: []const u8, is_error: bool) []const stream.BodyLine {
-    const trimmed = std.mem.trimEnd(u8, text, " \t\r\n");
-    var lines: std.ArrayList([]const u8) = .empty;
-    var it = std.mem.splitScalar(u8, trimmed, '\n');
-    while (it.next()) |l| lines.append(a, l) catch {};
-    if (std.mem.eql(u8, name, "bash")) {
-        if (lines.items.len > 0 and std.mem.startsWith(u8, lines.items[lines.items.len - 1], "exit code: ")) {
-            const exit = lines.items[lines.items.len - 1]["exit code: ".len..];
-            _ = lines.pop();
-            if (is_error) lines.append(a, styles.red(a, std.fmt.allocPrint(a, "exit {s}", .{exit}) catch "exit")) catch {};
-        }
-    } else if (std.mem.eql(u8, name, "edit")) {
-        const verb = if (std.mem.startsWith(u8, lines.items[0], "edited "))
-            "edited "
-        else if (std.mem.startsWith(u8, lines.items[0], "created "))
-            "created "
-        else
-            "";
-        if (verb.len > 0) {
-            const path = lines.items[0][verb.len..];
-            _ = lines.orderedRemove(0);
-            while (lines.items.len > 0 and isEditHeader(lines.items[0])) _ = lines.orderedRemove(0);
-            return diffLines(a, path, lines.items);
-        }
-    }
-    var out: std.ArrayList(stream.BodyLine) = .empty;
-    for (lines.items) |l| out.append(a, .{ .text = l }) catch {};
-    return out.items;
-}
-
-fn estimateTextTokens(text: []const u8) u64 {
-    return (text.len + 3) / 4;
-}
-
-fn estimateMessageTokens(m: types.Message) u64 {
-    return switch (m) {
-        .user => |u| estimateTextTokens(u.content),
-        .tool_result => |t| estimateTextTokens(t.text),
-        .assistant => |am| blk: {
-            var chars: usize = 0;
-            for (am.content.items) |b| switch (b) {
-                .text => |t| chars += t.len,
-                .thinking => |t| chars += t.text.len,
-                .tool_call => |tc| chars += tc.name.len + tc.arguments.len,
-            };
-            break :blk (chars + 3) / 4;
-        },
-    };
-}
-
-fn estimateContextTokens(messages: []const types.Message, system_prompt: []const u8, tools_json: []const u8) u64 {
-    var last_idx: ?usize = null;
-    var usage: u64 = 0;
-    for (messages, 0..) |m, i| {
-        if (m != .assistant) continue;
-        const am = m.assistant;
-        if (am.stop_reason == .aborted or am.stop_reason == .err) continue;
-        if (am.usage.total_tokens == 0) continue;
-        usage = am.usage.total_tokens;
-        last_idx = i;
-    }
-    if (last_idx) |idx| {
-        var trailing: u64 = 0;
-        for (messages[idx + 1 ..]) |m| trailing += estimateMessageTokens(m);
-        return usage + trailing;
-    }
-    var total: u64 = 0;
-    for (messages) |m| total += estimateMessageTokens(m);
-    return total + estimateTextTokens(system_prompt) + estimateTextTokens(tools_json);
-}
-
-fn formatTokens(a: std.mem.Allocator, n: u64) []const u8 {
-    if (n < 1000) return std.fmt.allocPrint(a, "{d}", .{n}) catch "";
-    const millions = n >= 1_000_000;
-    const div: f64 = if (millions) 1_000_000.0 else 1000.0;
-    const unit: []const u8 = if (millions) "M" else "k";
-    var buf: [64]u8 = undefined;
-    var num = std.fmt.bufPrint(&buf, "{d:.[1]}", .{ @as(f64, @floatFromInt(n)) / div, if (millions) @as(usize, 2) else 1 }) catch return unit;
-    while (num.len > 0 and num[num.len - 1] == '0') num = num[0 .. num.len - 1];
-    if (num.len > 0 and num[num.len - 1] == '.') num = num[0 .. num.len - 1];
-    return std.fmt.allocPrint(a, "{s}{s}", .{ num, unit }) catch unit;
-}
-
-fn contextUsageLine(a: std.mem.Allocator, used: u64, model: *const types.Model) []const u8 {
-    const cw = @max(model.context_window, 1);
-    const percent = @as(f64, @floatFromInt(used)) / @as(f64, @floatFromInt(cw)) * 100.0;
-    const sizes = std.fmt.allocPrint(a, "{s}/{s}", .{ formatTokens(a, used), formatTokens(a, cw) }) catch "";
-    if (used + model.max_tokens > cw) return styles.red(a, std.fmt.allocPrint(a, "ctx full · {s}", .{sizes}) catch "ctx full");
-    const text = std.fmt.allocPrint(a, "ctx {s} · {d}%", .{ sizes, @as(u64, @intFromFloat(percent + 0.5)) }) catch "ctx";
-    return if (percent >= 85) styles.yellow(a, text) else styles.dim(a, text);
-}
-
-const LiveRegion = struct {
-    widths: std.ArrayList(usize) = .empty,
-    caret_line: usize = 0,
-    caret_cell: usize = 0,
-    drawn: bool = false,
-
-    fn remember(self: *LiveRegion, lines: []const []const u8, caret_line: usize, caret_cell: usize) void {
-        self.widths.clearRetainingCapacity();
-        for (lines) |line| self.widths.append(platform.gpa, render.displayWidth(line)) catch {};
-        self.caret_line = caret_line;
-        self.caret_cell = caret_cell;
-        self.drawn = true;
-    }
-
-    fn caretCell(self: *LiveRegion, width: usize) usize {
-        const w = if (self.caret_line < self.widths.items.len) self.widths.items[self.caret_line] else 0;
-        if (self.caret_cell > 0 and self.caret_cell == w and self.caret_cell % width == 0) return self.caret_cell - 1;
-        return self.caret_cell;
-    }
-
-    fn caretRow(self: *LiveRegion, width: usize) usize {
-        var row: usize = 0;
-        const lines = @min(self.caret_line, self.widths.items.len);
-        for (self.widths.items[0..lines]) |cells| row += rowsForCells(cells, width);
-        return row + self.caretCell(width) / width;
-    }
-
-    fn totalRows(self: *LiveRegion, width: usize) usize {
-        var row: usize = 0;
-        for (self.widths.items) |cells| row += rowsForCells(cells, width);
-        return row;
-    }
-
-    fn erase(self: *LiveRegion, a: std.mem.Allocator, width: usize) []const u8 {
-        if (!self.drawn) return "";
-        const up = self.caretRow(width);
-        var out: std.ArrayList(u8) = .empty;
-        if (up > 0) out.appendSlice(a, std.fmt.allocPrint(a, "\x1b[{d}A", .{up}) catch "") catch {};
-        out.appendSlice(a, "\r") catch {};
-        out.appendSlice(a, theme.SGR_PLAIN) catch {};
-        out.appendSlice(a, "\x1b[J") catch {};
-        return out.items;
-    }
-
-    fn draw(self: *LiveRegion, a: std.mem.Allocator, width: usize, lines: []const []const u8, caret_line: usize, caret_cell: usize, above: []const u8) []const u8 {
-        var out: std.ArrayList(u8) = .empty;
-        out.appendSlice(a, self.erase(a, width)) catch {};
-        out.appendSlice(a, above) catch {};
-        for (lines, 0..) |line, i| {
-            if (i > 0) out.appendSlice(a, "\r\n") catch {};
-            out.appendSlice(a, line) catch {};
-        }
-        self.remember(lines, caret_line, caret_cell);
-        const end_row = self.totalRows(width) - 1;
-        const caret_row = self.caretRow(width);
-        const up = if (end_row > caret_row) end_row - caret_row else 0;
-        if (up > 0) out.appendSlice(a, std.fmt.allocPrint(a, "\x1b[{d}A", .{up}) catch "") catch {};
-        out.appendSlice(a, "\r") catch {};
-        const col = self.caretCell(width) % width;
-        if (col > 0) out.appendSlice(a, std.fmt.allocPrint(a, "\x1b[{d}C", .{col}) catch "") catch {};
-        return out.items;
-    }
-};
+const Command = commands.Command;
 
 var resize_flag = std.atomic.Value(bool).init(false);
 var exit_flag = std.atomic.Value(bool).init(false);
@@ -450,7 +52,7 @@ const Tui = struct {
     tool_names: []const config.ToolName,
     term: term.Terminal = .{},
     editor: editor_mod.Editor,
-    live: LiveRegion = .{},
+    live: screen.LiveRegion = .{},
     messages: std.ArrayList(types.Message) = .empty,
     arena: std.heap.ArenaAllocator,
     a: std.mem.Allocator,
@@ -461,8 +63,8 @@ const Tui = struct {
 
     input_bytes: std.ArrayList(u8) = .empty,
     input_batch: std.ArrayList(u8) = .empty,
-    keys: std.ArrayList(term.Key) = .empty,
-    parser: term.Parser = .{},
+    keys: std.ArrayList(input.Key) = .empty,
+    parser: input.Parser = .{},
     stdin_closed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     eof_sent: bool = false,
     key_mutex: std.Io.Mutex = .init,
@@ -485,10 +87,7 @@ const Tui = struct {
     steering_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     abort: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
-    scroll: std.ArrayList(u8) = .empty,
-    wrote: bool = false,
-    last_blank: bool = false,
-    separator: bool = false,
+    scrollback: screen.Scrollback = .{},
 
     reply: stream.MarkdownStream,
     activity: stream.TailStream,
@@ -538,6 +137,8 @@ const Tui = struct {
         self.editor.s = self.s;
         self.reply = stream.MarkdownStream.init(self.a);
         self.activity = stream.TailStream.init(self.a);
+        self.scrollback.a = self.a;
+        self.scrollback.scratch = self.sa;
     }
 
     fn resetScratch(self: *Tui) void {
@@ -547,31 +148,18 @@ const Tui = struct {
     }
 
     fn push(self: *Tui, line: []const u8) void {
-        const clean = render.sanitize(self.sa, line);
-        const blank = clean.len == 0 or (self.separator and self.wrote);
-        self.separator = false;
-        if (blank and self.wrote and !self.last_blank) {
-            self.scroll.appendSlice(self.a, paintRow(self.sa, "")) catch {};
-            self.scroll.appendSlice(self.a, "\r\n") catch {};
-            self.last_blank = true;
-        }
-        if (clean.len != 0) {
-            self.scroll.appendSlice(self.a, paintRow(self.sa, clean)) catch {};
-            self.scroll.appendSlice(self.a, "\r\n") catch {};
-            self.wrote = true;
-            self.last_blank = false;
-        }
+        self.scrollback.push(line);
         self.dirty = true;
     }
 
-    fn commitLines(self: *Tui, lines: []const stream.BodyLine) void {
-        for (lines) |line| self.push(styleLine(self.sa, line));
+    fn commitLines(self: *Tui, lines: []const render.BodyLine) void {
+        self.scrollback.commitLines(lines);
+        self.dirty = true;
     }
 
     fn note(self: *Tui, line: []const u8) void {
-        self.separator = true;
-        self.push(line);
-        self.separator = true;
+        self.scrollback.note(line);
+        self.dirty = true;
     }
 
     fn fail(self: *Tui, comptime fmt: []const u8, args: anytype) void {
@@ -579,16 +167,12 @@ const Tui = struct {
     }
 
     fn commitUser(self: *Tui, text: []const u8) void {
-        self.separator = true;
-        var it = std.mem.splitScalar(u8, text, '\n');
-        var lines: std.ArrayList(stream.BodyLine) = .empty;
-        while (it.next()) |l| lines.append(self.s, .{ .text = l, .style = .{ .fg = theme.current.prompt } }) catch {};
-        self.commitLines(lines.items);
-        self.separator = true;
+        self.scrollback.commitUser(text);
+        self.dirty = true;
     }
 
     fn pushBanner(self: *Tui) void {
-        self.separator = true;
+        self.scrollback.separator = true;
         const model = self.opts.model;
         self.push(if (model) |m|
             if (m.effort.len == 0)
@@ -601,15 +185,15 @@ const Tui = struct {
         self.push(std.fmt.allocPrint(self.s, "{d} agent files · {d} skills", .{
             loaded.agent_files, loaded.skills,
         }) catch "resources");
-        self.separator = true;
+        self.scrollback.separator = true;
     }
 
     fn statusLine(self: *Tui) []const u8 {
         const model = self.opts.model orelse return styles.dim(self.s, "no model configured");
         self.messages_mutex.lockUncancelable(platform.io);
-        const used = estimateContextTokens(self.messages.items, self.opts.system_prompt, self.opts.tools_json);
+        const used = usage_mod.estimateContextTokens(self.messages.items, self.opts.system_prompt, self.opts.tools_json);
         self.messages_mutex.unlock(platform.io);
-        const usage = contextUsageLine(self.s, used, model);
+        const usage = usage_mod.contextUsageLine(self.s, used, model);
         if (self.paused or self.phase == .pausing) {
             return std.fmt.allocPrint(self.s, "{s} · {s}", .{ styles.dim(self.s, "paused - type steering, Enter to submit"), usage }) catch usage;
         }
@@ -624,7 +208,7 @@ const Tui = struct {
             .running_tool => std.fmt.allocPrint(self.s, "running {s}", .{self.detail orelse "tool"}) catch "running tool",
             else => "idle",
         };
-        const elapsed = @max(0, @divFloor(util.nowMs() - self.turn_start, 1000));
+        const elapsed = @max(0, @divFloor(time.nowMs() - self.turn_start, 1000));
         const ch = spinnerChar(self.frame);
         return std.fmt.allocPrint(self.s, "{s} · {s}", .{ styles.dim(self.s, std.fmt.allocPrint(self.s, "{s} {s} · {d}s", .{ ch, label, elapsed }) catch label), usage }) catch usage;
     }
@@ -646,7 +230,7 @@ const Tui = struct {
         var out: std.ArrayList([]const u8) = .empty;
         var used: usize = 0;
         for (self.pending_calls.items, 0..) |call, i| {
-            for (callRows(self.s, call, i == 0 and self.phase == .running_tool)) |row| {
+            for (tool_view.callRows(self.s, call, i == 0 and self.phase == .running_tool)) |row| {
                 const h = physicalRows(row, width);
                 if (used + h > budget and out.items.len > 0) break;
                 used += h;
@@ -665,7 +249,7 @@ const Tui = struct {
 
         var inflight = self.reply.pending();
         if (inflight.len == 0) inflight = self.activity.pending();
-        const rows = plainRows(self.s, inflight);
+        const rows = render.plainRows(self.s, inflight);
 
         const status_rows = physicalRows(status, width);
         const room = if (height > status_rows + 1) height - status_rows - 1 else 0;
@@ -692,9 +276,9 @@ const Tui = struct {
         const caret_line = lines.items.len + ed.cursor_row;
         for (ed.rows) |r| lines.append(self.s, r) catch {};
 
-        const frame_text = self.live.draw(self.s, width, lines.items, caret_line, ed.cursor_col, self.scroll.items);
+        const frame_text = self.live.draw(self.s, width, lines.items, caret_line, ed.cursor_col, self.scrollback.buf.items);
         self.term.write(frame_text);
-        self.scroll.clearRetainingCapacity();
+        self.scrollback.clear();
         _ = self.sarena.reset(.retain_capacity);
         self.sa = self.sarena.allocator();
     }
@@ -728,7 +312,7 @@ const Tui = struct {
                 self.activity.reset();
                 self.pending_calls.append(self.a, .{
                     .name = self.a.dupe(u8, tc.name) catch "",
-                    .summary = callSummary(self.a, tc.name, tc.arguments),
+                    .summary = tool_view.callSummary(self.a, tc.name, tc.arguments),
                 }) catch {};
             },
             .tool_call_start => |name| self.keepName(&self.writing_tool, name),
@@ -741,7 +325,7 @@ const Tui = struct {
             .err => |m| self.endTurn(styles.red(self.s, std.fmt.allocPrint(self.s, "! {s}", .{m}) catch "! error")),
             .no_model => self.endTurn(styles.red(self.s, "! no model configured")),
             .cancelled => self.endTurn(styles.red(self.s, "! cancelled")),
-            .complete => self.endTurn(styles.dim(self.s, std.fmt.allocPrint(self.s, "[complete · {d}s]", .{@max(0, @divFloor(util.nowMs() - self.turn_start, 1000))}) catch "[complete]")),
+            .complete => self.endTurn(styles.dim(self.s, std.fmt.allocPrint(self.s, "[complete · {d}s]", .{@max(0, @divFloor(time.nowMs() - self.turn_start, 1000))}) catch "[complete]")),
         }
         self.dirty = true;
     }
@@ -770,39 +354,39 @@ const Tui = struct {
     }
 
     fn commitToolResult(self: *Tui, name: []const u8, text: []const u8, is_error: bool, diffs: []const common.FileDiff, body: ?[]const u8) void {
-        self.separator = true;
+        self.scrollback.separator = true;
         const shown = render.stripAnsi(self.s, text);
         if (self.pending_calls.items.len > 0) {
             const call = self.pending_calls.orderedRemove(0);
-            self.commitLines(&.{callBody(self.s, call.name, call.summary)});
+            self.commitLines(&.{tool_view.callBody(self.s, call.name, call.summary)});
         }
         const width = @max(self.term.width() - BODY_PREFIX.len, 1);
-        const lines: []const stream.BodyLine = if (!is_error and body != null)
+        const lines: []const render.BodyLine = if (!is_error and body != null)
             &.{.{ .text = body.? }}
         else
-            resultLines(self.s, name, shown, is_error);
-        const rows = if (std.mem.eql(u8, name, "edit")) plainRows(self.s, lines) else bodyRows(self.s, lines, width);
+            tool_view.resultLines(self.s, name, shown, is_error);
+        const rows = if (std.mem.eql(u8, name, "edit")) render.plainRows(self.s, lines) else render.bodyRows(self.s, lines, width);
         for (rows, 0..) |row, i| {
             const prefix = if (is_error and i == rows.len - 1) styles.red(self.s, ERROR_PREFIX) else styles.dim(self.s, BODY_PREFIX);
             self.push(std.fmt.allocPrint(self.s, "{s}{s}", .{ prefix, row }) catch row);
         }
         if (diffs.len > 0) {
-            for (plainRows(self.s, diffRows(self.s, diffs))) |row| {
+            for (render.plainRows(self.s, diff_view.diffRows(self.s, diffs))) |row| {
                 self.push(std.fmt.allocPrint(self.s, "{s}{s}", .{ styles.dim(self.s, BODY_PREFIX), row }) catch row);
             }
         }
-        self.separator = true;
+        self.scrollback.separator = true;
     }
 
     fn flushCalls(self: *Tui) void {
         for (self.pending_calls.items) |call| {
-            self.separator = true;
-            self.commitLines(&.{callBody(self.s, call.name, call.summary)});
+            self.scrollback.separator = true;
+            self.commitLines(&.{tool_view.callBody(self.s, call.name, call.summary)});
         }
         self.pending_calls.clearRetainingCapacity();
     }
 
-    fn handleKey(self: *Tui, key: term.Key) void {
+    fn handleKey(self: *Tui, key: input.Key) void {
         self.resetScratch();
         if (key == .eof) {
             if (!self.active and !self.command_active and self.editor.contents().len == 0) self.exit();
@@ -836,7 +420,7 @@ const Tui = struct {
             return;
         }
         if (key == .tab) {
-            if (completeCommand(self.editor.contents())) |text| {
+            if (commands.completeCommand(self.editor.contents())) |text| {
                 self.editor.setText(text);
             } else {
                 _ = self.editor.completeWord(completePathStep);
@@ -869,14 +453,14 @@ const Tui = struct {
         }
         if (self.command_active) return;
         if (std.mem.trim(u8, text, " \t\r\n").len == 0) return;
-        if (findCommand(text)) |found| {
+        if (commands.findCommand(text)) |found| {
             self.editor.clear();
             self.runCommand(found);
             self.dirty = true;
             return;
         }
         self.editor.clear();
-        const message = types.Message{ .user = .{ .content = self.a.dupe(u8, text) catch text, .timestamp = util.nowMs() } };
+        const message = types.Message{ .user = .{ .content = self.a.dupe(u8, text) catch text, .timestamp = time.nowMs() } };
         self.messages_mutex.lockUncancelable(platform.io);
         self.messages.append(platform.gpa, message) catch {
             self.messages_mutex.unlock(platform.io);
@@ -899,7 +483,7 @@ const Tui = struct {
         self.turn_done.store(false, .seq_cst);
         self.phase = .preparing;
         self.keepName(&self.detail, null);
-        self.turn_start = util.nowMs();
+        self.turn_start = time.nowMs();
         self.frame = 0;
         const t = std.Thread.spawn(.{}, turnThread, .{self}) catch return;
         t.detach();
@@ -943,11 +527,11 @@ const Tui = struct {
         for (keys) |row| width = @max(width, row[0].len);
         self.note("commands");
         for (Command.all) |c| {
-            self.push(helpRow(self.s, std.fmt.allocPrint(self.s, "/{s}", .{c.wire()}) catch c.wire(), c.summary(), width));
+            self.push(commands.helpRow(self.s, std.fmt.allocPrint(self.s, "/{s}", .{c.wire()}) catch c.wire(), c.summary(), width));
         }
         self.push("");
         self.push("keybindings");
-        for (keys) |row| self.push(helpRow(self.s, row[0], row[1], width));
+        for (keys) |row| self.push(commands.helpRow(self.s, row[0], row[1], width));
     }
 
     fn newSession(self: *Tui) void {
@@ -1006,12 +590,12 @@ const Tui = struct {
         self.prompt_answer = "";
         self.prompt_ready.store(false, .seq_cst);
         self.command_active = true;
-        self.separator = true;
+        self.scrollback.separator = true;
         self.push(message);
         for (options, 0..) |o, i| {
             self.push(std.fmt.allocPrint(self.s, "  {d}. {s}", .{ i + 1, o }) catch o);
         }
-        self.separator = true;
+        self.scrollback.separator = true;
     }
 
     fn answerPrompt(self: *Tui) void {
@@ -1086,19 +670,11 @@ const Tui = struct {
         self.steering_ready.store(true, .seq_cst);
         const width = @max(self.term.width(), 1);
         self.term.write(self.live.erase(self.a, width));
-        self.term.write(self.scroll.items);
+        self.term.write(self.scrollback.buf.items);
         self.term.stop();
         self.opts.session.close();
     }
 };
-
-fn helpRow(a: std.mem.Allocator, key: []const u8, description: []const u8, width: usize) []const u8 {
-    var padded: std.ArrayList(u8) = .empty;
-    padded.appendSlice(a, key) catch {};
-    var i = key.len;
-    while (i < width) : (i += 1) padded.append(a, ' ') catch {};
-    return std.fmt.allocPrint(a, "  {s}  {s}", .{ styles.dim(a, padded.items), description }) catch key;
-}
 
 fn matchOption(answer: []const u8, options: []const []const u8, ids: []const []const u8) ?[]const u8 {
     const n = std.fmt.parseInt(usize, answer, 10) catch {
@@ -1116,51 +692,6 @@ fn matchOption(answer: []const u8, options: []const []const u8, ids: []const []c
 
 fn completePathStep(word: []const u8) ?[]const u8 {
     return complete.completePath(word);
-}
-
-const Command = enum {
-    help,
-    new,
-    provider,
-    model,
-    thinking,
-
-    fn wire(self: Command) []const u8 {
-        return @tagName(self);
-    }
-
-    fn summary(self: Command) []const u8 {
-        return switch (self) {
-            .help => "list commands and keybindings",
-            .new => "start a new session",
-            .provider => "choose the provider and model",
-            .model => "choose a model for the current provider",
-            .thinking => "set the thinking level",
-        };
-    }
-
-    const all = [_]Command{ .help, .new, .provider, .model, .thinking };
-};
-
-fn findCommand(text: []const u8) ?Command {
-    if (text.len == 0 or text[0] != '/') return null;
-    var i: usize = 1;
-    while (i < text.len and text[i] != ' ' and text[i] != '\t' and text[i] != '\n') i += 1;
-    return std.meta.stringToEnum(Command, text[1..i]);
-}
-
-fn completeCommand(draft: []const u8) ?[]const u8 {
-    if (draft.len == 0 or draft[0] != '/') return null;
-    if (std.mem.indexOfAny(u8, draft, " \t\n") != null) return null;
-    const typed = draft[1..];
-    var matched: ?[]const u8 = null;
-    for (Command.all) |c| {
-        if (!std.mem.startsWith(u8, c.wire(), typed)) continue;
-        matched = if (matched) |have| complete.commonPrefix(have, c.wire()) else c.wire();
-    }
-    const name = matched orelse return null;
-    if (name.len <= typed.len) return null;
-    return std.fmt.allocPrint(platform.gpa, "/{s}", .{name}) catch null;
 }
 
 fn inputThread(self: *Tui) void {
@@ -1260,8 +791,8 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
     self.pushBanner();
     self.draw();
 
-    const input = std.Thread.spawn(.{}, inputThread, .{self}) catch return;
-    input.detach();
+    const stdin_thread = std.Thread.spawn(.{}, inputThread, .{self}) catch return;
+    stdin_thread.detach();
 
     while (!self.closed) {
         self.key_mutex.lockUncancelable(platform.io);
@@ -1271,10 +802,10 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
         const keys = &self.keys;
         if (self.input_batch.items.len > 0) {
             self.parser.feed(platform.gpa, self.input_batch.items, keys);
-            self.last_input_ms = util.nowMs();
+            self.last_input_ms = time.nowMs();
         }
         self.input_batch.clearRetainingCapacity();
-        const now_early = util.nowMs();
+        const now_early = time.nowMs();
         switch (self.parser.pending()) {
             .escape => if (now_early - self.last_input_ms > 30) self.parser.flushEscape(platform.gpa, keys),
             .sequence => if (now_early - self.last_input_ms > 150) self.parser.flushSequence(),
@@ -1314,7 +845,7 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
         }
         if (exit_flag.swap(false, .seq_cst)) self.exit();
 
-        const now = util.nowMs();
+        const now = time.nowMs();
         if (self.active and now - self.last_frame_ms >= SPINNER_MS) {
             self.frame += 1;
             self.last_frame_ms = now;

@@ -129,7 +129,7 @@ fn addRange(w: *std.Io.Writer, start: usize, count: usize) !void {
     }
 }
 
-pub fn unified(a: std.mem.Allocator, path: []const u8, before: []const u8, after: []const u8) ![]u8 {
+pub fn unified(a: std.mem.Allocator, before: []const u8, after: []const u8) ![]u8 {
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
     const tmp = arena.allocator();
@@ -149,7 +149,6 @@ pub fn unified(a: std.mem.Allocator, path: []const u8, before: []const u8, after
 
     var out: std.Io.Writer.Allocating = .init(a);
     const w = &out.writer;
-    try w.print("Index: {s}\n===================================================================\n--- {s}\n+++ {s}\n", .{ path, path, path });
 
     var i: usize = 0;
     while (i < ops.len) {

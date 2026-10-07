@@ -1,6 +1,5 @@
 const std = @import("std");
 const platform = @import("platform.zig");
-const util = @import("util.zig");
 const config = @import("config.zig");
 const prompt = @import("prompt.zig");
 const models = @import("models.zig");
@@ -10,6 +9,7 @@ const agent = @import("agent.zig");
 const tools = @import("tools/index.zig");
 const tui = @import("tui/tui.zig");
 const term = @import("tui/term.zig");
+const headless = @import("headless.zig");
 
 pub const panic = std.debug.FullPanic(panicRestore);
 
@@ -26,10 +26,6 @@ pub const debug = struct {
 };
 
 var cancel = std.atomic.Value(bool).init(false);
-
-fn onSignal(_: std.posix.SIG) callconv(.c) void {
-    cancel.store(true, .release);
-}
 
 const ParsedArgs = struct { print: ?[]const u8 = null, config: ?[]const u8 = null };
 
@@ -56,70 +52,6 @@ fn parseArgs(a: std.mem.Allocator) !ParsedArgs {
         }
     }
     return result;
-}
-
-const PrintCtx = struct { failed: bool = false };
-
-fn printEvent(ctx: *anyopaque, event: agent.Event) void {
-    const pc: *PrintCtx = @ptrCast(@alignCast(ctx));
-    switch (event) {
-        .tool_call => |call| platform.printErr("[tool] {s}\n", .{call.name}),
-        .tool_output => |chunk| platform.writeErr(chunk),
-        .no_model => {
-            pc.failed = true;
-            platform.printErr("[error] no model configured; add \"provider\" and \"model\" to {s}\n", .{config.configPath(platform.gpa)});
-        },
-        .err => |message| {
-            pc.failed = true;
-            platform.printErr("[error] {s}\n", .{message});
-        },
-        .cancelled => {
-            pc.failed = true;
-            platform.printErr("[cancelled]\n", .{});
-        },
-        else => {},
-    }
-}
-
-fn runPrint(a: std.mem.Allocator, prompt_text: []const u8, opts: agent.Options) u8 {
-    var messages: std.ArrayList(types.Message) = .empty;
-    const user = types.Message{ .user = .{ .content = prompt_text, .timestamp = util.nowMs() } };
-    messages.append(a, user) catch {
-        platform.printErr("[error] out of memory\n", .{});
-        return 1;
-    };
-    opts.session.appendMessage(a, user) catch |e| {
-        platform.printErr("[error] {s}\n", .{@errorName(e)});
-        return 1;
-    };
-
-    const act = std.posix.Sigaction{
-        .handler = .{ .handler = onSignal },
-        .mask = std.posix.sigemptyset(),
-        .flags = 0,
-    };
-    std.posix.sigaction(std.posix.SIG.INT, &act, null);
-    std.posix.sigaction(std.posix.SIG.TERM, &act, null);
-
-    var pc = PrintCtx{};
-    agent.runTurn(opts, &messages, null, .{ .ctx = &pc, .on_event = printEvent });
-    opts.session.close();
-    if (pc.failed) return 1;
-
-    var i = messages.items.len;
-    const last = while (i > 0) {
-        i -= 1;
-        if (messages.items[i] == .assistant) break messages.items[i].assistant;
-    } else return 0;
-    const text = types.assistantText(a, last) catch {
-        platform.printErr("[error] out of memory\n", .{});
-        return 1;
-    };
-    if (text.len > 0) {
-        platform.writeOut(text);
-        if (text[text.len - 1] != '\n') platform.writeOut("\n");
-    }
-    return 0;
 }
 
 pub fn main(init: std.process.Init) void {
@@ -180,7 +112,7 @@ fn run() !u8 {
             platform.printErr("[error] no model configured; add \"provider\" and \"model\" to {s}\n", .{config.configPath(a)});
             return 1;
         }
-        return runPrint(a, print_text, opts);
+        return headless.run(a, print_text, opts);
     }
 
     const stdin_tty = std.Io.File.stdin().isTty(platform.io) catch false;

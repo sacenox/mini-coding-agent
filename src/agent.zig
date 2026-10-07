@@ -6,7 +6,7 @@ const tools = @import("tools/index.zig");
 const common = @import("tools/common.zig");
 const session = @import("session.zig");
 const config = @import("config.zig");
-const util = @import("util.zig");
+const time = @import("time.zig");
 
 pub const Phase = enum { preparing, waiting_model, streaming, running_tool, pausing, idle };
 
@@ -102,7 +102,7 @@ fn pushMessage(opts: Options, messages: *std.ArrayList(types.Message), message: 
 
 fn steer(opts: Options, messages: *std.ArrayList(types.Message), content: []const u8) !void {
     if (content.len == 0) return;
-    const message = types.Message{ .user = .{ .content = content, .timestamp = util.nowMs() } };
+    const message = types.Message{ .user = .{ .content = content, .timestamp = time.nowMs() } };
     try pushMessage(opts, messages, message);
     try opts.session.appendMessage(opts.a, message);
 }
@@ -259,7 +259,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
                 .text = if (result) |r| r.text else "aborted",
                 .images = if (result) |r| r.images else &.{},
                 .is_error = if (result) |r| r.is_error else true,
-                .timestamp = util.nowMs(),
+                .timestamp = time.nowMs(),
             } };
             pushMessage(opts, messages, tool_message) catch {
                 listener.emit(.{ .err = "out of memory" });

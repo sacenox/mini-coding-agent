@@ -1,7 +1,7 @@
 const std = @import("std");
 const types = @import("types.zig");
 const http = @import("http.zig");
-const util = @import("util.zig");
+const time = @import("time.zig");
 
 pub const Event = union(enum) {
     text: []const u8,
@@ -166,7 +166,7 @@ fn newAssistant(req: Request) types.AssistantMessage {
         .api = req.model.api,
         .provider = req.model.provider,
         .model = req.model.id,
-        .timestamp = util.nowMs(),
+        .timestamp = time.nowMs(),
     };
 }
 

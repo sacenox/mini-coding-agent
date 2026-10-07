@@ -1,6 +1,6 @@
 const std = @import("std");
 const render = @import("render.zig");
-const term = @import("term.zig");
+const input = @import("input.zig");
 
 const TAB = 4;
 
@@ -110,16 +110,16 @@ pub const Editor = struct {
         self.col = 0;
     }
 
-    pub fn setText(self: *Editor, input: []const u8) void {
+    pub fn setText(self: *Editor, draft: []const u8) void {
         self.lines = .empty;
-        var it = std.mem.splitScalar(u8, input, '\n');
+        var it = std.mem.splitScalar(u8, draft, '\n');
         while (it.next()) |line| self.lines.append(self.a, self.a.dupe(u8, line) catch "") catch {};
         if (self.lines.items.len == 0) self.lines.append(self.a, "") catch {};
         self.row = self.lines.items.len - 1;
         self.col = cpLen(self.lines.items[self.row]);
     }
 
-    pub fn handle(self: *Editor, key: term.Key) Action {
+    pub fn handle(self: *Editor, key: input.Key) Action {
         switch (key) {
             .submit => return .submit,
             .newline => {
@@ -266,9 +266,9 @@ pub const Editor = struct {
         };
     }
 
-    fn insert(self: *Editor, input: []const u8) void {
+    fn insert(self: *Editor, draft: []const u8) void {
         const current = self.lines.items[self.row];
-        var parts = std.mem.splitScalar(u8, input, '\n');
+        var parts = std.mem.splitScalar(u8, draft, '\n');
         const first = parts.next() orelse "";
         var rest: std.ArrayList([]const u8) = .empty;
         while (parts.next()) |p| rest.append(self.a, p) catch {};

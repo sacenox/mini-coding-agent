@@ -1,6 +1,6 @@
 const std = @import("std");
 const platform = @import("../platform.zig");
-const util = @import("../util.zig");
+const text = @import("../text.zig");
 const common = @import("common.zig");
 const snapshot = @import("snapshot.zig");
 
@@ -21,14 +21,14 @@ const Acc = struct {
 
     fn append(self: *Acc, chunk: []const u8) !void {
         if (self.on_output) |cb| cb.call(chunk);
-        var text = chunk;
+        var rest = chunk;
         if (self.head.items.len < max_head) {
-            const take = @min(max_head - self.head.items.len, text.len);
-            try self.head.appendSlice(self.a, text[0..take]);
-            text = text[take..];
+            const take = @min(max_head - self.head.items.len, rest.len);
+            try self.head.appendSlice(self.a, rest[0..take]);
+            rest = rest[take..];
         }
-        if (text.len == 0) return;
-        try self.tail.appendSlice(self.a, text);
+        if (rest.len == 0) return;
+        try self.tail.appendSlice(self.a, rest);
         if (self.tail.items.len > max_tail) {
             self.truncated = true;
             const drop = self.tail.items.len - max_tail;
@@ -150,7 +150,7 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
         "unknown";
 
     const raw_body = acc.body(scratch) catch return fail(a, "bash failed: out of memory", .{});
-    const body = util.utf8Clean(scratch, raw_body) catch return fail(a, "bash failed: out of memory", .{});
+    const body = text.utf8Clean(scratch, raw_body) catch return fail(a, "bash failed: out of memory", .{});
     var out: std.ArrayList(u8) = .empty;
     out.appendSlice(a, body) catch return fail(a, "bash failed: out of memory", .{});
     if (body.len > 0 and body[body.len - 1] != '\n') out.append(a, '\n') catch return fail(a, "bash failed: out of memory", .{});

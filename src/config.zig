@@ -1,6 +1,6 @@
 const std = @import("std");
 const platform = @import("platform.zig");
-const util = @import("util.zig");
+const filesystem = @import("filesystem.zig");
 const theme = @import("tui/theme.zig");
 
 pub const ToolName = enum { edit, read, bash };
@@ -55,20 +55,20 @@ const File = struct {
 
 fn configDir(a: std.mem.Allocator) []const u8 {
     const base = platform.getEnv("XDG_CONFIG_HOME") orelse
-        util.join(a, &.{ platform.home() orelse "", ".config" }) catch "";
-    return util.join(a, &.{ base, "mini-coding-agent" }) catch "mini-coding-agent";
+        filesystem.join(a, &.{ platform.home() orelse "", ".config" }) catch "";
+    return filesystem.join(a, &.{ base, "mini-coding-agent" }) catch "mini-coding-agent";
 }
 
 pub fn configPath(a: std.mem.Allocator) []const u8 {
-    return util.join(a, &.{ configDir(a), "config.json" }) catch "config.json";
+    return filesystem.join(a, &.{ configDir(a), "config.json" }) catch "config.json";
 }
 
 fn sessionsDir(a: std.mem.Allocator) []const u8 {
     const state = platform.getEnv("XDG_STATE_HOME") orelse blk: {
         const home = platform.home() orelse return "sessions";
-        break :blk util.join(a, &.{ home, ".local/state" }) catch return "sessions";
+        break :blk filesystem.join(a, &.{ home, ".local/state" }) catch return "sessions";
     };
-    return util.join(a, &.{ state, "mini-coding-agent/sessions" }) catch "sessions";
+    return filesystem.join(a, &.{ state, "mini-coding-agent/sessions" }) catch "sessions";
 }
 
 pub fn load(a: std.mem.Allocator, override: ?[]const u8) !Config {
@@ -83,7 +83,7 @@ pub fn load(a: std.mem.Allocator, override: ?[]const u8) !Config {
 }
 
 fn readInto(a: std.mem.Allocator, path: []const u8, required: bool, cfg: *Config) !void {
-    const text = util.readFileAlloc(a, path, 1 << 20) catch |e| switch (e) {
+    const text = filesystem.readFileAlloc(a, path, 1 << 20) catch |e| switch (e) {
         error.FileNotFound => {
             if (!required) return;
             platform.printErr("config {s}: no such file\n", .{path});
@@ -126,7 +126,7 @@ pub fn save(a: std.mem.Allocator, cfg: *const Config, update: Update) !void {
 
     const path = cfg.path;
     var root: std.json.Value = .{ .object = std.json.ObjectMap.empty };
-    if (util.readFileAlloc(tmp, path, 1 << 20)) |text| {
+    if (filesystem.readFileAlloc(tmp, path, 1 << 20)) |text| {
         const parsed = std.json.parseFromSliceLeaky(std.json.Value, tmp, text, .{}) catch
             return error.InvalidConfig;
         if (parsed != .object) return error.InvalidConfig;
@@ -141,7 +141,7 @@ pub fn save(a: std.mem.Allocator, cfg: *const Config, update: Update) !void {
         return error.OutOfMemory;
     const out = try std.fmt.allocPrint(tmp, "{s}\n", .{json_text});
     const temp = try std.fmt.allocPrint(tmp, "{s}.tmp", .{path});
-    try util.writeFile(temp, out);
+    try filesystem.writeFile(temp, out);
     try std.Io.Dir.cwd().rename(temp, std.Io.Dir.cwd(), path, platform.io);
 }
 

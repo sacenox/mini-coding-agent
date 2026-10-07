@@ -1,6 +1,8 @@
 const std = @import("std");
 const platform = @import("platform.zig");
-const util = @import("util.zig");
+const time = @import("time.zig");
+const filesystem = @import("filesystem.zig");
+const text = @import("text.zig");
 const types = @import("types.zig");
 
 const alphabet = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -168,13 +170,13 @@ pub const Session = struct {
 
     pub fn appendMessage(self: *Session, scratch: std.mem.Allocator, message: types.Message) !void {
         if (self.closed) return;
-        try self.ensure(if (message == .user) util.slugify(self.a, message.user.content) else "session");
+        try self.ensure(if (message == .user) text.slugify(self.a, message.user.content) else "session");
 
         var arena = std.heap.ArenaAllocator.init(scratch);
         defer arena.deinit();
         const a = arena.allocator();
         const line = try stringify(a, MessageLine{
-            .at = util.isoAlloc(a),
+            .at = time.isoAlloc(a),
             .message = try messageRecord(a, message),
         });
         try self.commitLine(scratch, line);
@@ -188,7 +190,7 @@ pub const Session = struct {
         defer arena.deinit();
         const a = arena.allocator();
         const line = try stringify(a, RequestLine{
-            .at = util.isoAlloc(a),
+            .at = time.isoAlloc(a),
             .provider = req.provider,
             .model = req.model,
             .api = req.api,
@@ -220,19 +222,19 @@ pub const Session = struct {
         if (self.file != null) return;
         std.Io.Dir.cwd().createDirPath(platform.io, self.sessions_dir) catch {};
         var stamp_buf: [15]u8 = undefined;
-        const stamp = util.stamp(&stamp_buf, util.nowMs());
+        const stamp = time.stamp(&stamp_buf, time.nowMs());
 
         var attempt: usize = 0;
         while (attempt < 16) : (attempt += 1) {
             var id_buf: [6]u8 = undefined;
             shortId(&id_buf);
             const name = try std.fmt.allocPrint(self.a, "{s}-{s}-{s}", .{ stamp, title, &id_buf });
-            const dir = try util.join(self.a, &.{ self.sessions_dir, name });
+            const dir = try filesystem.join(self.a, &.{ self.sessions_dir, name });
             std.Io.Dir.cwd().createDir(platform.io, dir, .default_dir) catch |e| switch (e) {
                 error.PathAlreadyExists => continue,
                 else => return e,
             };
-            const log_path = try util.join(self.a, &.{ dir, "session.jsonl" });
+            const log_path = try filesystem.join(self.a, &.{ dir, "session.jsonl" });
             const file = try std.Io.Dir.cwd().createFile(platform.io, log_path, .{ .truncate = false });
             self.id = name;
             self.file = file;
@@ -242,7 +244,7 @@ pub const Session = struct {
             try w.writeAll(try stringify(self.a, HeaderLine{
                 .id = name,
                 .cwd = self.cwd,
-                .createdAt = util.isoAlloc(self.a),
+                .createdAt = time.isoAlloc(self.a),
                 .title = title,
             }));
             try w.writeByte('\n');
@@ -260,10 +262,14 @@ pub const Session = struct {
 
     fn shortId(buf: *[6]u8) void {
         var bytes: [6]u8 = undefined;
-        util.randomBytes(&bytes);
+        randomBytes(&bytes);
         for (bytes, 0..) |b, i| buf[i] = alphabet[b % 36];
     }
 };
+
+fn randomBytes(buf: []u8) void {
+    std.Io.random(platform.io, buf);
+}
 
 fn messageRecord(a: std.mem.Allocator, message: types.Message) !MessageRecord {
     switch (message) {

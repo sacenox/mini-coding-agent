@@ -3,11 +3,7 @@ const theme = @import("theme.zig");
 const highlight = @import("highlight.zig");
 const render = @import("render.zig");
 
-pub const BodyLine = struct {
-    text: []const u8,
-    style: ?theme.Style = null,
-    bg: ?[]const u8 = null,
-};
+const BodyLine = render.BodyLine;
 
 fn isFenceOpen(line: []const u8) ?struct { marker: []const u8, info: []const u8 } {
     var i: usize = 0;

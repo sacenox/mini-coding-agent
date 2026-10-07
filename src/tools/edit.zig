@@ -1,5 +1,6 @@
 const std = @import("std");
-const util = @import("../util.zig");
+const filesystem = @import("../filesystem.zig");
+const text = @import("../text.zig");
 const platform = @import("../platform.zig");
 const diff = @import("../diff.zig");
 const common = @import("common.zig");
@@ -21,18 +22,18 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
     const path = args.path;
 
     if (args.oldText.len == 0) {
-        if (util.fileExists(path)) return fail(a, "edit failed: {s} already exists", .{path});
+        if (filesystem.fileExists(path)) return fail(a, "edit failed: {s} already exists", .{path});
         if (ctx.cancel.load(.acquire)) return fail(a, "edit cancelled", .{});
         writeFile(path, args.newText) catch |e| return fail(a, "edit failed: {s}: {s}", .{ path, @errorName(e) });
-        const cleaned = util.utf8Clean(scratch, args.newText) catch return fail(a, "edit failed: out of memory", .{});
-        const patch = diff.unified(scratch, path, "", cleaned) catch return fail(a, "edit failed: out of memory", .{});
+        const cleaned = text.utf8Clean(scratch, args.newText) catch return fail(a, "edit failed: out of memory", .{});
+        const patch = diff.unified(scratch, "", cleaned) catch return fail(a, "edit failed: out of memory", .{});
         return .{
             .text = std.fmt.allocPrint(a, "created {s}\n{s}", .{ path, patch }) catch "created",
             .is_error = false,
         };
     }
 
-    const before = util.readFileAlloc(scratch, path, 1 << 30) catch |e| {
+    const before = filesystem.readFileAlloc(scratch, path, 1 << 30) catch |e| {
         return fail(a, "edit failed: {s}: {s}", .{ path, @errorName(e) });
     };
     const at = std.mem.indexOf(u8, before, args.oldText) orelse
@@ -49,9 +50,9 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
         return fail(a, "edit failed: out of memory", .{});
     if (ctx.cancel.load(.acquire)) return fail(a, "edit cancelled", .{});
     writeFile(path, after) catch |e| return fail(a, "edit failed: {s}: {s}", .{ path, @errorName(e) });
-    const clean_before = util.utf8Clean(scratch, before) catch return fail(a, "edit failed: out of memory", .{});
-    const clean_after = util.utf8Clean(scratch, after) catch return fail(a, "edit failed: out of memory", .{});
-    const patch = diff.unified(scratch, path, clean_before, clean_after) catch return fail(a, "edit failed: out of memory", .{});
+    const clean_before = text.utf8Clean(scratch, before) catch return fail(a, "edit failed: out of memory", .{});
+    const clean_after = text.utf8Clean(scratch, after) catch return fail(a, "edit failed: out of memory", .{});
+    const patch = diff.unified(scratch, clean_before, clean_after) catch return fail(a, "edit failed: out of memory", .{});
     return .{
         .text = std.fmt.allocPrint(a, "edited {s}\n{s}", .{ path, patch }) catch "edited",
         .is_error = false,

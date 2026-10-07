@@ -1,5 +1,6 @@
 const std = @import("std");
-const util = @import("../util.zig");
+const filesystem = @import("../filesystem.zig");
+const text = @import("../text.zig");
 const types = @import("../types.zig");
 const common = @import("common.zig");
 
@@ -31,26 +32,26 @@ fn mimeFor(path: []const u8) ?[]const u8 {
     return null;
 }
 
-fn advance(text: []const u8, pos: usize, n: usize) ?usize {
+fn advance(content: []const u8, pos: usize, n: usize) ?usize {
     var p = pos;
     var left = n;
     while (left > 0) : (left -= 1) {
-        const nl = std.mem.indexOfScalarPos(u8, text, p, '\n') orelse return null;
+        const nl = std.mem.indexOfScalarPos(u8, content, p, '\n') orelse return null;
         p = nl + 1;
     }
     return p;
 }
 
-fn lineSlice(text: []const u8, offset: usize, range: ?usize) ?[]const u8 {
-    const start = advance(text, 0, offset - 1) orelse return null;
-    if (offset > 1 and start >= text.len) return null;
-    if (range) |r| if (advance(text, start, r)) |end| return text[start..end];
-    return text[start..];
+fn lineSlice(content: []const u8, offset: usize, range: ?usize) ?[]const u8 {
+    const start = advance(content, 0, offset - 1) orelse return null;
+    if (offset > 1 and start >= content.len) return null;
+    if (range) |r| if (advance(content, start, r)) |end| return content[start..end];
+    return content[start..];
 }
 
-fn countLines(text: []const u8) usize {
-    if (text.len == 0) return 0;
-    return std.mem.count(u8, text, "\n") + @intFromBool(text[text.len - 1] != '\n');
+fn countLines(content: []const u8) usize {
+    if (content.len == 0) return 0;
+    return std.mem.count(u8, content, "\n") + @intFromBool(content[content.len - 1] != '\n');
 }
 
 fn bodyLine(a: std.mem.Allocator, args: Args, lines: usize, truncated: bool) ?[]const u8 {
@@ -79,7 +80,7 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
     if (args.offset) |o| if (o < 1) return fail(a, "read failed: offset must be at least 1", .{});
     if (args.range) |r| if (r < 1) return fail(a, "read failed: range must be at least 1", .{});
 
-    const data = util.readFileAlloc(a, path, 1 << 30) catch |e|
+    const data = filesystem.readFileAlloc(a, path, 1 << 30) catch |e|
         return fail(a, "read failed: {s}: {s}", .{ path, @errorName(e) });
 
     if (mimeFor(path)) |mime| {
@@ -108,9 +109,9 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
         return fail(a, "read failed: {s} is binary; use bash (file, xxd)", .{path});
     }
 
-    const text = util.utf8Clean(a, data) catch return fail(a, "read failed: out of memory", .{});
+    const content = text.utf8Clean(a, data) catch return fail(a, "read failed: out of memory", .{});
     const offset = args.offset orelse 1;
-    const slice = lineSlice(text, offset, args.range) orelse
+    const slice = lineSlice(content, offset, args.range) orelse
         return fail(a, "read failed: {s} has fewer than {d} lines", .{ path, offset });
 
     var sent = slice;

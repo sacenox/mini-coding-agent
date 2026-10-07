@@ -1,4 +1,6 @@
 const std = @import("std");
+const theme = @import("theme.zig");
+const styles = @import("styles.zig");
 const wcwidth = @import("width.zig");
 
 pub const nextCluster = wcwidth.nextCluster;
@@ -200,3 +202,65 @@ pub fn wrapLine(a: std.mem.Allocator, text: []const u8, width: usize) []const []
     rows.append(a, current.items) catch {};
     return rows.items;
 }
+
+pub const BodyLine = struct {
+    text: []const u8,
+    style: ?theme.Style = null,
+    bg: ?[]const u8 = null,
+};
+
+const max_body_rows = 12;
+const elided_head = 4;
+const elided_tail = 4;
+
+pub fn paintRow(a: std.mem.Allocator, line: []const u8) []const u8 {
+    return std.fmt.allocPrint(a, "{s}{s}\x1b[K", .{ theme.SGR_PLAIN, line }) catch line;
+}
+
+pub fn styleLine(a: std.mem.Allocator, line: BodyLine) []const u8 {
+    const safe = sanitize(a, line.text);
+    const expanded = expandTabs(a, safe, 4);
+    if (expanded.len == 0) return "";
+    const row_bg = if (line.bg) |bg| theme.sgrBg(a, bg) else theme.SGR_NORMAL_BG;
+    const styled = if (line.style) |s| styles.styledWith(a, .{
+        .fg = s.fg,
+        .bg = line.bg orelse theme.current.bg,
+        .bold = s.bold,
+        .italic = s.italic,
+        .underline = s.underline,
+    }, expanded) else expanded;
+    return std.fmt.allocPrint(a, "{s}{s}{s}", .{ row_bg, styled, row_bg }) catch expanded;
+}
+
+pub fn plainRows(a: std.mem.Allocator, lines: []const BodyLine) []const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    for (lines) |line| out.append(a, styleLine(a, line)) catch {};
+    return out.items;
+}
+
+pub fn bodyRows(a: std.mem.Allocator, lines: []const BodyLine, width: usize) []const []const u8 {
+    const rows = plainRows(a, lines);
+    var height: usize = 0;
+    for (rows) |r| height += physicalRows(r, width);
+    if (height <= max_body_rows or rows.len <= elided_head + elided_tail) return rows;
+    const tail_at = rows.len - elided_tail;
+    var shown: usize = 0;
+    var head: usize = 0;
+    while (head < tail_at) : (head += 1) {
+        const h = physicalRows(rows[head], width);
+        if (shown + h + elided_tail > max_body_rows - 1) break;
+        shown += h;
+    }
+    var out: std.ArrayList([]const u8) = .empty;
+    for (rows[0..head]) |r| out.append(a, r) catch {};
+    const hidden_rows: usize = blk: {
+        var n = height;
+        for (rows[0..head]) |r| n -= physicalRows(r, width);
+        for (rows[tail_at..]) |r| n -= physicalRows(r, width);
+        break :blk n;
+    };
+    out.append(a, styles.dim(a, std.fmt.allocPrint(a, "... {d} lines not shown ...", .{hidden_rows}) catch "")) catch {};
+    for (rows[tail_at..]) |r| out.append(a, r) catch {};
+    return out.items;
+}
+
