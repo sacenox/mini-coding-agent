@@ -208,8 +208,8 @@ pub const Editor = struct {
                 cps += 1;
             }
             var m: usize = 0;
-            while (m < cps) : (m += 1) out.append(self.s, col) catch {};
             col += advance;
+            while (m < cps) : (m += 1) out.append(self.s, col) catch {};
             i += cluster.text.len;
         }
         if (out.items.len == 0) out.append(self.s, 0) catch {};
