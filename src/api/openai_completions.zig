@@ -11,6 +11,7 @@ const ToolCall = struct {
 const Assistant = struct {
     role: []const u8 = "assistant",
     content: []const u8,
+    reasoning_content: ?[]const u8 = null,
     tool_calls: ?[]const ToolCall = null,
 };
 
@@ -109,11 +110,14 @@ fn buildMessages(a: std.mem.Allocator, req: api.Request) ![]const Message {
             .user => |u| try out.append(a, .{ .user = .{ .content = u.content } }),
             .assistant => |am| {
                 var calls: std.ArrayList(ToolCall) = .empty;
+                var thinking: std.ArrayList(u8) = .empty;
                 for (am.content.items) |block| {
                     if (toolCall(block)) |c| try calls.append(a, c);
+                    if (block == .thinking) try thinking.appendSlice(a, block.thinking.text);
                 }
                 try out.append(a, .{ .assistant = .{
                     .content = try types.assistantText(a, am),
+                    .reasoning_content = if (thinking.items.len > 0) thinking.items else null,
                     .tool_calls = if (calls.items.len > 0) calls.items else null,
                 } });
             },

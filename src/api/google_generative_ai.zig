@@ -4,6 +4,7 @@ const types = @import("../types.zig");
 
 const Part = struct {
     text: ?[]const u8 = null,
+    thought: ?bool = null,
     inlineData: ?struct { mimeType: []const u8, data: []const u8 } = null,
     functionCall: ?struct { name: []const u8, args: api.Raw } = null,
     thoughtSignature: ?[]const u8 = null,
@@ -55,7 +56,11 @@ fn contentParts(a: std.mem.Allocator, msg: types.Message) ![]const Part {
                     },
                     .thoughtSignature = c.thought_signature,
                 }),
-                .thinking => {},
+                .thinking => |t| try parts.append(a, .{
+                    .text = t.text,
+                    .thought = true,
+                    .thoughtSignature = t.signature,
+                }),
             };
             return parts.items;
         },
@@ -182,6 +187,7 @@ const State = struct {
     msg: *types.AssistantMessage,
     text: std.ArrayList(u8) = .empty,
     reasoning: std.ArrayList(u8) = .empty,
+    signature: ?[]const u8 = null,
     calls: std.ArrayList(api.Call) = .empty,
     usage: types.Usage = .{},
     finish: ?[]const u8 = null,
@@ -204,6 +210,7 @@ const State = struct {
                         try addCall(st, part);
                         continue;
                     }
+                    try api.keepString(&st.signature, st.req.pers, part.thoughtSignature);
                     const text = part.text orelse continue;
                     if (part.thought orelse false) {
                         try st.reasoning.appendSlice(st.req.pers, text);
@@ -246,7 +253,7 @@ fn addCall(st: *State, part: Chunk.Piece) !void {
 
 fn finalize(st: *State) !void {
     const a = st.req.pers;
-    try api.appendParts(st.msg, a, st.reasoning.items, null, st.text.items);
+    try api.appendParts(st.msg, a, st.reasoning.items, st.signature, st.text.items);
 
     const has_calls = try api.appendCalls(st.msg, st.sink, a, st.calls.items, st.failed);
 

@@ -10,8 +10,11 @@ const InputItem = struct {
     name: ?[]const u8 = null,
     arguments: ?[]const u8 = null,
     output: ?[]const u8 = null,
+    summary: ?[]const SummaryPart = null,
+    encrypted_content: ?[]const u8 = null,
 
     const ContentPart = struct { type: []const u8 = "input_text", text: []const u8 };
+    const SummaryPart = struct { type: []const u8 = "summary_text", text: []const u8 };
 };
 
 const Body = struct {
@@ -52,7 +55,16 @@ fn buildInput(a: std.mem.Allocator, req: api.Request) ![]const InputItem {
                         .name = c.name,
                         .arguments = api.argumentsOrObject(c.arguments),
                     }),
-                    .thinking => {},
+                    .thinking => |t| {
+                        const enc = t.signature orelse continue;
+                        const summary = try a.alloc(InputItem.SummaryPart, if (t.text.len > 0) 1 else 0);
+                        if (t.text.len > 0) summary[0] = .{ .text = t.text };
+                        try out.append(a, .{
+                            .type = "reasoning",
+                            .encrypted_content = enc,
+                            .summary = summary,
+                        });
+                    },
                 };
             },
         }
@@ -99,6 +111,7 @@ const Chunk = struct {
         call_id: ?[]const u8 = null,
         name: ?[]const u8 = null,
         arguments: ?[]const u8 = null,
+        encrypted_content: ?[]const u8 = null,
     };
 
     const Response = struct {
@@ -129,6 +142,7 @@ const State = struct {
     msg: *types.AssistantMessage,
     text: std.ArrayList(u8) = .empty,
     reasoning: std.ArrayList(u8) = .empty,
+    encrypted: ?[]const u8 = null,
     calls: std.ArrayList(api.Call) = .empty,
     usage: types.Usage = .{},
     status: ?[]const u8 = null,
@@ -204,6 +218,10 @@ const State = struct {
 
         if (std.mem.eql(u8, event_type, "response.output_item.done")) {
             const item = chunk.item orelse return;
+            if (std.mem.eql(u8, item.type orelse "", "reasoning")) {
+                try api.keepString(&st.encrypted, st.req.pers, item.encrypted_content);
+                return;
+            }
             if (!std.mem.eql(u8, item.type orelse "", "function_call")) return;
             const index = streamIndex(chunk, st.calls.items.len);
             if (index >= st.calls.items.len) return;
@@ -250,7 +268,13 @@ const State = struct {
 
 fn finalize(st: *State) !void {
     const a = st.req.pers;
-    try api.appendParts(st.msg, a, st.reasoning.items, null, st.text.items);
+    if (st.reasoning.items.len > 0 or st.encrypted != null) {
+        try st.msg.content.append(a, .{ .thinking = .{
+            .text = st.reasoning.items,
+            .signature = st.encrypted,
+        } });
+    }
+    if (st.text.items.len > 0) try st.msg.content.append(a, .{ .text = st.text.items });
 
     const has_calls = try api.appendCalls(st.msg, st.sink, a, st.calls.items, st.failed);
 
