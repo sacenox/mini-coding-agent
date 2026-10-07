@@ -7,8 +7,6 @@ These are **my** notes. Use your own file for your notes...
 
 ## Notes
 
-**weird rendering when deleting characters** in the editor when line wrapping/multiline is involved. Hard to repro consistently, but when a editor is multiline deleting a word across lines, breaks in weird ways.
-
 `src/config.zig` - When we fixed the issue with the model specific api being at provider level for opencode in a recent commit, apparently we didn't do it for custom providers. Again, the models need to carry the metadata, the provider is just a label grouping.
 
 ```jsonc

@@ -382,11 +382,17 @@ const LiveRegion = struct {
         self.drawn = true;
     }
 
+    fn caretCell(self: *LiveRegion, width: usize) usize {
+        const w = if (self.caret_line < self.widths.items.len) self.widths.items[self.caret_line] else 0;
+        if (self.caret_cell > 0 and self.caret_cell == w and self.caret_cell % width == 0) return self.caret_cell - 1;
+        return self.caret_cell;
+    }
+
     fn caretRow(self: *LiveRegion, width: usize) usize {
         var row: usize = 0;
         const lines = @min(self.caret_line, self.widths.items.len);
         for (self.widths.items[0..lines]) |cells| row += rowsForCells(cells, width);
-        return row + self.caret_cell / width;
+        return row + self.caretCell(width) / width;
     }
 
     fn totalRows(self: *LiveRegion, width: usize) usize {
@@ -420,7 +426,7 @@ const LiveRegion = struct {
         const up = if (end_row > caret_row) end_row - caret_row else 0;
         if (up > 0) out.appendSlice(a, std.fmt.allocPrint(a, "\x1b[{d}A", .{up}) catch "") catch {};
         out.appendSlice(a, "\r") catch {};
-        const col = caret_cell % width;
+        const col = self.caretCell(width) % width;
         if (col > 0) out.appendSlice(a, std.fmt.allocPrint(a, "\x1b[{d}C", .{col}) catch "") catch {};
         return out.items;
     }
