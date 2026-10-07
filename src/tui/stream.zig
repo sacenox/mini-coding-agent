@@ -1,6 +1,7 @@
 const std = @import("std");
 const theme = @import("theme.zig");
 const highlight = @import("highlight.zig");
+const render = @import("render.zig");
 
 pub const BodyLine = struct {
     text: []const u8,
@@ -181,7 +182,8 @@ pub const TailStream = struct {
     pub fn pending(self: *TailStream) []BodyLine {
         var out: std.ArrayList(BodyLine) = .empty;
         if (self.rest.items.len > 0) {
-            out.append(self.a, .{ .text = self.rest.items, .style = .{ .fg = theme.current.comment } }) catch {};
+            const text = render.stripAnsi(self.a, self.rest.items);
+            out.append(self.a, .{ .text = text, .style = .{ .fg = theme.current.comment } }) catch {};
         }
         return out.items;
     }

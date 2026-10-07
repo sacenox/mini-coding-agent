@@ -765,6 +765,7 @@ const Tui = struct {
 
     fn commitToolResult(self: *Tui, name: []const u8, text: []const u8, is_error: bool, diffs: []const common.FileDiff, body: ?[]const u8) void {
         self.separator = true;
+        const shown = render.stripAnsi(self.s, text);
         if (self.pending_calls.items.len > 0) {
             const call = self.pending_calls.orderedRemove(0);
             self.commitLines(&.{callBody(self.s, call.name, call.summary)});
@@ -773,7 +774,7 @@ const Tui = struct {
         const lines: []const stream.BodyLine = if (!is_error and body != null)
             &.{.{ .text = body.? }}
         else
-            resultLines(self.s, name, text, is_error);
+            resultLines(self.s, name, shown, is_error);
         const rows = if (std.mem.eql(u8, name, "edit")) plainRows(self.s, lines) else bodyRows(self.s, lines, width);
         for (rows, 0..) |row, i| {
             const prefix = if (is_error and i == rows.len - 1) styles.red(self.s, ERROR_PREFIX) else styles.dim(self.s, BODY_PREFIX);

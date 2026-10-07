@@ -115,6 +115,44 @@ pub fn sanitize(a: std.mem.Allocator, text: []const u8) []const u8 {
     return out.items;
 }
 
+pub fn stripAnsi(a: std.mem.Allocator, text: []const u8) []const u8 {
+    if (std.mem.indexOfScalar(u8, text, 0x1b) == null) return text;
+    var out: std.ArrayList(u8) = .empty;
+    var i: usize = 0;
+    while (i < text.len) {
+        if (text[i] != 0x1b) {
+            out.append(a, text[i]) catch {};
+            i += 1;
+            continue;
+        }
+        i += 1;
+        if (i >= text.len) break;
+        if (text[i] == '[') {
+            i += 1;
+            while (i < text.len and (text[i] < 0x40 or text[i] > 0x7e)) i += 1;
+            if (i < text.len) i += 1;
+            continue;
+        }
+        if (text[i] == ']') {
+            i += 1;
+            while (i < text.len) {
+                if (text[i] == 0x07) {
+                    i += 1;
+                    break;
+                }
+                if (text[i] == 0x1b and i + 1 < text.len and text[i + 1] == '\\') {
+                    i += 2;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        i += 1;
+    }
+    return out.items;
+}
+
 pub fn expandTabs(a: std.mem.Allocator, text: []const u8, size: usize) []const u8 {
     if (std.mem.indexOfScalar(u8, text, '\t') == null) return text;
     var out: std.ArrayList(u8) = .empty;
