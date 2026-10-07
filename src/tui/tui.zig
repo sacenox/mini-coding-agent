@@ -22,59 +22,68 @@ const SPINNER_MS = 120;
 const BODY_PREFIX = " | ";
 const ERROR_PREFIX = " ! ";
 
-const HISTORY_LINES = 1000;
-
 const MAX_BODY_ROWS = 12;
 const ELIDED_HEAD = 4;
 const ELIDED_TAIL = 4;
+
+fn physicalRows(line: []const u8, width: usize) usize {
+    return rowsForCells(render.displayWidth(line), width);
+}
+
+fn rowsForCells(cells: usize, width: usize) usize {
+    if (cells == 0) return 1;
+    return (cells + width - 1) / width;
+}
 
 const PendingCall = struct { name: []const u8, summary: []const u8 };
 
 const STATE_WIDTH = "running".len;
 const STATE_PAD = std.fmt.comptimePrint("{{s: <{d}}}", .{STATE_WIDTH});
 
-fn paintRow(a: std.mem.Allocator, line: []const u8) []const u8 {
-    return std.fmt.allocPrint(a, "{s}{s}\x1b[K", .{ theme.SGR_PLAIN, line }) catch line;
-}
-
-fn styleRow(a: std.mem.Allocator, line: stream.BodyLine, width: usize) []const []const u8 {
+fn styleLine(a: std.mem.Allocator, line: stream.BodyLine) []const u8 {
     const safe = render.sanitize(a, line.text);
     const expanded = render.expandTabs(a, safe, 4);
-    const wrapped = render.wrapLine(a, expanded, width);
-    var out: std.ArrayList([]const u8) = .empty;
-    for (wrapped) |row| {
-        if (row.len == 0) {
-            out.append(a, "") catch {};
-            continue;
-        }
-        const row_bg = if (line.bg) |bg| theme.sgrBg(a, bg) else theme.SGR_NORMAL_BG;
-        const styled = if (line.style) |s| styles.styledWith(a, .{
-            .fg = s.fg,
-            .bg = line.bg orelse theme.current.bg,
-            .bold = s.bold,
-            .italic = s.italic,
-            .underline = s.underline,
-        }, row) else row;
-        out.append(a, std.fmt.allocPrint(a, "{s}{s}{s}", .{ row_bg, styled, row_bg }) catch row) catch {};
-    }
-    return out.items;
+    if (expanded.len == 0) return "";
+    const row_bg = if (line.bg) |bg| theme.sgrBg(a, bg) else theme.SGR_NORMAL_BG;
+    const styled = if (line.style) |s| styles.styledWith(a, .{
+        .fg = s.fg,
+        .bg = line.bg orelse theme.current.bg,
+        .bold = s.bold,
+        .italic = s.italic,
+        .underline = s.underline,
+    }, expanded) else expanded;
+    return std.fmt.allocPrint(a, "{s}{s}{s}", .{ row_bg, styled, row_bg }) catch expanded;
 }
 
-fn renderRows(a: std.mem.Allocator, lines: []const stream.BodyLine, width: usize) []const []const u8 {
+fn plainRows(a: std.mem.Allocator, lines: []const stream.BodyLine) []const []const u8 {
     var out: std.ArrayList([]const u8) = .empty;
-    for (lines) |line| {
-        for (styleRow(a, line, width)) |row| out.append(a, row) catch {};
-    }
+    for (lines) |line| out.append(a, styleLine(a, line)) catch {};
     return out.items;
 }
 
 fn bodyRows(a: std.mem.Allocator, lines: []const stream.BodyLine, width: usize) []const []const u8 {
-    const rows = renderRows(a, lines, width);
-    if (rows.len <= MAX_BODY_ROWS) return rows;
+    const rows = plainRows(a, lines);
+    var height: usize = 0;
+    for (rows) |r| height += physicalRows(r, width);
+    if (height <= MAX_BODY_ROWS or rows.len <= ELIDED_HEAD + ELIDED_TAIL) return rows;
+    const tail_at = rows.len - ELIDED_TAIL;
+    var shown: usize = 0;
+    var head: usize = 0;
+    while (head < tail_at) : (head += 1) {
+        const h = physicalRows(rows[head], width);
+        if (shown + h + ELIDED_TAIL > MAX_BODY_ROWS - 1) break;
+        shown += h;
+    }
     var out: std.ArrayList([]const u8) = .empty;
-    for (rows[0..ELIDED_HEAD]) |r| out.append(a, r) catch {};
-    out.append(a, styles.dim(a, std.fmt.allocPrint(a, "... {d} lines not shown ...", .{rows.len - ELIDED_HEAD - ELIDED_TAIL}) catch "")) catch {};
-    for (rows[rows.len - ELIDED_TAIL ..]) |r| out.append(a, r) catch {};
+    for (rows[0..head]) |r| out.append(a, r) catch {};
+    const hidden_rows: usize = blk: {
+        var n = height;
+        for (rows[0..head]) |r| n -= physicalRows(r, width);
+        for (rows[tail_at..]) |r| n -= physicalRows(r, width);
+        break :blk n;
+    };
+    out.append(a, styles.dim(a, std.fmt.allocPrint(a, "... {d} lines not shown ...", .{hidden_rows}) catch "")) catch {};
+    for (rows[tail_at..]) |r| out.append(a, r) catch {};
     return out.items;
 }
 
@@ -82,12 +91,14 @@ fn callHead(a: std.mem.Allocator, name: []const u8) []const u8 {
     return styles.teal(a, std.fmt.allocPrint(a, "-> {s}", .{name}) catch "->");
 }
 
-fn callRows(a: std.mem.Allocator, width: usize, call: PendingCall, running: bool) []const []const u8 {
+fn callRows(a: std.mem.Allocator, call: PendingCall, running: bool) []const []const u8 {
     const padded = std.fmt.allocPrint(a, STATE_PAD, .{if (running) "running" else "queued"}) catch "";
     const word = if (running) styles.teal(a, padded) else styles.dim(a, padded);
     const head = callHead(a, call.name);
     const text = render.expandTabs(a, render.sanitize(a, call.summary), 4);
-    return render.wrapLine(a, std.fmt.allocPrint(a, "{s} {s} {s}", .{ word, head, text }) catch text, width);
+    var out: std.ArrayList([]const u8) = .empty;
+    out.append(a, std.fmt.allocPrint(a, "{s} {s} {s}", .{ word, head, text }) catch text) catch {};
+    return out.items;
 }
 
 fn collapseWs(a: std.mem.Allocator, s: []const u8) []const u8 {
@@ -365,36 +376,59 @@ fn contextUsageLine(a: std.mem.Allocator, used: u64, model: *const types.Model) 
 }
 
 const LiveRegion = struct {
-    rows: usize = 0,
-    cursor_up: usize = 0,
+    widths: std.ArrayList(usize) = .empty,
+    caret_line: usize = 0,
+    caret_cell: usize = 0,
+    drawn: bool = false,
 
-    fn clear(self: *LiveRegion, a: std.mem.Allocator) []const u8 {
-        if (self.rows == 0) return "";
+    fn remember(self: *LiveRegion, lines: []const []const u8, caret_line: usize, caret_cell: usize) void {
+        self.widths.clearRetainingCapacity();
+        for (lines) |line| self.widths.append(platform.gpa, render.displayWidth(line)) catch {};
+        self.caret_line = caret_line;
+        self.caret_cell = caret_cell;
+        self.drawn = true;
+    }
+
+    fn caretRow(self: *LiveRegion, width: usize) usize {
+        var row: usize = 0;
+        const lines = @min(self.caret_line, self.widths.items.len);
+        for (self.widths.items[0..lines]) |cells| row += rowsForCells(cells, width);
+        return row + self.caret_cell / width;
+    }
+
+    fn totalRows(self: *LiveRegion, width: usize) usize {
+        var row: usize = 0;
+        for (self.widths.items) |cells| row += rowsForCells(cells, width);
+        return row;
+    }
+
+    fn erase(self: *LiveRegion, a: std.mem.Allocator, width: usize) []const u8 {
+        if (!self.drawn) return "";
+        const up = self.caretRow(width);
         var out: std.ArrayList(u8) = .empty;
-        if (self.cursor_up > 0) out.appendSlice(a, std.fmt.allocPrint(a, "\x1b[{d}B", .{self.cursor_up}) catch "") catch {};
-        if (self.rows > 1) out.appendSlice(a, std.fmt.allocPrint(a, "\x1b[{d}A", .{self.rows - 1}) catch "") catch {};
+        if (up > 0) out.appendSlice(a, std.fmt.allocPrint(a, "\x1b[{d}A", .{up}) catch "") catch {};
         out.appendSlice(a, "\r") catch {};
         out.appendSlice(a, theme.SGR_PLAIN) catch {};
         out.appendSlice(a, "\x1b[J") catch {};
-        self.rows = 0;
-        self.cursor_up = 0;
         return out.items;
     }
 
-    fn draw(self: *LiveRegion, a: std.mem.Allocator, lines: []const []const u8, cursor_row: usize, cursor_col: usize, above: []const u8) []const u8 {
+    fn draw(self: *LiveRegion, a: std.mem.Allocator, width: usize, lines: []const []const u8, caret_line: usize, caret_cell: usize, above: []const u8) []const u8 {
         var out: std.ArrayList(u8) = .empty;
-        out.appendSlice(a, self.clear(a)) catch {};
+        out.appendSlice(a, self.erase(a, width)) catch {};
         out.appendSlice(a, above) catch {};
         for (lines, 0..) |line, i| {
             if (i > 0) out.appendSlice(a, "\r\n") catch {};
             out.appendSlice(a, line) catch {};
         }
-        const up = if (lines.len > 0 and lines.len - 1 > cursor_row) lines.len - 1 - cursor_row else 0;
+        self.remember(lines, caret_line, caret_cell);
+        const end_row = self.totalRows(width) - 1;
+        const caret_row = self.caretRow(width);
+        const up = if (end_row > caret_row) end_row - caret_row else 0;
         if (up > 0) out.appendSlice(a, std.fmt.allocPrint(a, "\x1b[{d}A", .{up}) catch "") catch {};
         out.appendSlice(a, "\r") catch {};
-        if (cursor_col > 0) out.appendSlice(a, std.fmt.allocPrint(a, "\x1b[{d}G", .{cursor_col + 1}) catch "") catch {};
-        self.rows = lines.len;
-        self.cursor_up = up;
+        const col = caret_cell % width;
+        if (col > 0) out.appendSlice(a, std.fmt.allocPrint(a, "\x1b[{d}C", .{col}) catch "") catch {};
         return out.items;
     }
 };
@@ -452,7 +486,6 @@ const Tui = struct {
     abort: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     scroll: std.ArrayList(u8) = .empty,
-    history: std.ArrayList([]const u8) = .empty,
     wrote: bool = false,
     last_blank: bool = false,
     separator: bool = false,
@@ -518,17 +551,13 @@ const Tui = struct {
         const blank = clean.len == 0 or (self.separator and self.wrote);
         self.separator = false;
         if (blank and self.wrote and !self.last_blank) {
-            self.history.append(platform.gpa, "") catch {};
-            self.capHistory();
-            self.scroll.appendSlice(self.a, paintRow(self.sa, "")) catch {};
+            self.scroll.appendSlice(self.a, theme.SGR_PLAIN) catch {};
             self.scroll.appendSlice(self.a, "\r\n") catch {};
             self.last_blank = true;
         }
         if (clean.len != 0) {
-            if (platform.gpa.dupe(u8, clean)) |owned| {
-                if (self.history.append(platform.gpa, owned)) |_| self.capHistory() else |_| platform.gpa.free(owned);
-            } else |_| {}
-            self.scroll.appendSlice(self.a, paintRow(self.sa, clean)) catch {};
+            self.scroll.appendSlice(self.a, clean) catch {};
+            self.scroll.appendSlice(self.a, theme.SGR_PLAIN) catch {};
             self.scroll.appendSlice(self.a, "\r\n") catch {};
             self.wrote = true;
             self.last_blank = false;
@@ -536,32 +565,8 @@ const Tui = struct {
         self.dirty = true;
     }
 
-    fn capHistory(self: *Tui) void {
-        while (self.history.items.len > HISTORY_LINES) {
-            const old = self.history.orderedRemove(0);
-            if (old.len > 0) platform.gpa.free(old);
-        }
-    }
-
-    fn reflow(self: *Tui) void {
-        self.term.refreshSize();
-        self.live.rows = 0;
-        self.live.cursor_up = 0;
-        self.scroll.clearRetainingCapacity();
-        self.term.write("\x1b[2J\x1b[3J\x1b[H");
-        const width = @max(self.term.width(), 1);
-        for (self.history.items) |line| {
-            for (render.wrapLine(self.s, line, width)) |row| {
-                self.scroll.appendSlice(self.a, paintRow(self.sa, row)) catch {};
-                self.scroll.appendSlice(self.a, "\r\n") catch {};
-            }
-        }
-        self.dirty = true;
-    }
-
     fn commitLines(self: *Tui, lines: []const stream.BodyLine) void {
-        const width = @max(self.term.width(), 1);
-        for (renderRows(self.s, lines, width)) |row| self.push(row);
+        for (lines) |line| self.push(styleLine(self.sa, line));
     }
 
     fn note(self: *Tui, line: []const u8) void {
@@ -638,14 +643,15 @@ const Tui = struct {
     fn queueRows(self: *Tui, width: usize, budget: usize) []const []const u8 {
         if (budget == 0) return &.{};
         var out: std.ArrayList([]const u8) = .empty;
+        var used: usize = 0;
         for (self.pending_calls.items, 0..) |call, i| {
-            for (callRows(self.s, width, call, i == 0 and self.phase == .running_tool)) |row| out.append(self.s, row) catch {};
+            for (callRows(self.s, call, i == 0 and self.phase == .running_tool)) |row| {
+                const h = physicalRows(row, width);
+                if (used + h > budget and out.items.len > 0) break;
+                used += h;
+                out.append(self.s, row) catch {};
+            }
         }
-        if (out.items.len <= budget) return out.items;
-        const keep = budget - 1;
-        const hidden = out.items.len - keep;
-        out.shrinkRetainingCapacity(keep);
-        out.append(self.s, styles.dim(self.s, std.fmt.allocPrint(self.s, "... {d} more lines ...", .{hidden}) catch "...")) catch {};
         return out.items;
     }
 
@@ -654,33 +660,38 @@ const Tui = struct {
         self.resetScratch();
         const width = @max(self.term.width(), 1);
         const height = @max(self.term.height() - 1, 1);
-        const status = render.wrapLine(self.s, self.statusLine(), width);
+        const status = self.statusLine();
 
         var inflight = self.reply.pending();
         if (inflight.len == 0) inflight = self.activity.pending();
-        const rows = renderRows(self.s, inflight, width);
+        const rows = plainRows(self.s, inflight);
 
-        const room = if (height > status.len + 1) height - status.len - 1 else 0;
+        const status_rows = physicalRows(status, width);
+        const room = if (height > status_rows + 1) height - status_rows - 1 else 0;
         const queue = self.queueRows(width, room);
-        const keep = @min(rows.len, room - queue.len);
-        const body = rows[rows.len - keep ..];
-        const ed = self.editor.layout(width, @max(height - status.len - queue.len - body.len, 1));
+        var queue_height: usize = 0;
+        for (queue) |r| queue_height += physicalRows(r, width);
+        const body_budget = if (room > queue_height) room - queue_height else 0;
+        var body_start = rows.len;
+        var body_used: usize = 0;
+        while (body_start > 0) {
+            const h = physicalRows(rows[body_start - 1], width);
+            if (body_used + h > body_budget) break;
+            body_used += h;
+            body_start -= 1;
+        }
+        const body = rows[body_start..];
+        const editor_budget = height -| (status_rows + queue_height + body_used);
+        const ed = self.editor.layout(width, @max(editor_budget, 1));
 
         var lines: std.ArrayList([]const u8) = .empty;
-        for (body) |r| lines.append(self.s, paintRow(self.s, r)) catch {};
-        for (queue) |r| lines.append(self.s, paintRow(self.s, r)) catch {};
-        for (status) |r| lines.append(self.s, paintRow(self.s, r)) catch {};
-        for (ed.rows) |r| lines.append(self.s, paintRow(self.s, r)) catch {};
-        var cursor_row = body.len + queue.len + status.len + ed.cursor_row;
-        if (cursor_row >= lines.items.len and lines.items.len > 0) cursor_row = lines.items.len - 1;
+        for (body) |r| lines.append(self.s, r) catch {};
+        for (queue) |r| lines.append(self.s, r) catch {};
+        lines.append(self.s, status) catch {};
+        const caret_line = lines.items.len + ed.cursor_row;
+        for (ed.rows) |r| lines.append(self.s, r) catch {};
 
-        const scroll = self.scroll.items;
-        const reanchor = scroll.len > 0 and self.live.rows >= self.term.height() - 1;
-        const above = if (reanchor)
-            std.fmt.allocPrint(self.s, "{s}\r\n", .{scroll}) catch scroll
-        else
-            scroll;
-        const frame_text = self.live.draw(self.s, lines.items, cursor_row, ed.cursor_col, above);
+        const frame_text = self.live.draw(self.s, width, lines.items, caret_line, ed.cursor_col, self.scroll.items);
         self.term.write(frame_text);
         self.scroll.clearRetainingCapacity();
         _ = self.sarena.reset(.retain_capacity);
@@ -768,13 +779,13 @@ const Tui = struct {
             &.{.{ .text = body.? }}
         else
             resultLines(self.s, name, text, is_error);
-        const rows = if (std.mem.eql(u8, name, "edit")) renderRows(self.s, lines, width) else bodyRows(self.s, lines, width);
+        const rows = if (std.mem.eql(u8, name, "edit")) plainRows(self.s, lines) else bodyRows(self.s, lines, width);
         for (rows, 0..) |row, i| {
             const prefix = if (is_error and i == rows.len - 1) styles.red(self.s, ERROR_PREFIX) else styles.dim(self.s, BODY_PREFIX);
             self.push(std.fmt.allocPrint(self.s, "{s}{s}", .{ prefix, row }) catch row);
         }
         if (diffs.len > 0) {
-            for (renderRows(self.s, diffRows(self.s, diffs), width)) |row| {
+            for (plainRows(self.s, diffRows(self.s, diffs))) |row| {
                 self.push(std.fmt.allocPrint(self.s, "{s}{s}", .{ styles.dim(self.s, BODY_PREFIX), row }) catch row);
             }
         }
@@ -1066,7 +1077,8 @@ const Tui = struct {
         self.closed = true;
         self.abort.store(true, .seq_cst);
         self.steering_ready.store(true, .seq_cst);
-        self.term.write(self.live.clear(self.a));
+        const width = @max(self.term.width(), 1);
+        self.term.write(self.live.erase(self.a, width));
         self.term.write(self.scroll.items);
         self.term.stop();
         self.opts.session.close();
@@ -1288,7 +1300,10 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
             self.dirty = true;
         }
 
-        if (resize_flag.swap(false, .seq_cst)) self.reflow();
+        if (resize_flag.swap(false, .seq_cst)) {
+            self.term.refreshSize();
+            self.dirty = true;
+        }
         if (exit_flag.swap(false, .seq_cst)) self.exit();
 
         const now = util.nowMs();

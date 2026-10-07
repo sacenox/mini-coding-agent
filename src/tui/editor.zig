@@ -4,6 +4,12 @@ const term = @import("term.zig");
 
 const TAB = 4;
 
+fn physicalRows(line: []const u8, width: usize) usize {
+    const cells = render.displayWidth(line);
+    if (cells == 0) return 1;
+    return (cells + width - 1) / width;
+}
+
 fn isSpace(cp: u21) bool {
     return cp == ' ' or cp == '\t' or cp == '\n' or cp == '\r' or cp == 0x0b or cp == 0x0c or cp == 0xa0;
 }
@@ -82,7 +88,6 @@ pub const Editor = struct {
     lines: std.ArrayList([]const u8) = .empty,
     row: usize = 0,
     col: usize = 0,
-    scroll: usize = 0,
     width: usize = 80,
     a: std.mem.Allocator,
     s: std.mem.Allocator = undefined,
@@ -107,7 +112,6 @@ pub const Editor = struct {
         self.lines.append(self.a, "") catch {};
         self.row = 0;
         self.col = 0;
-        self.scroll = 0;
     }
 
     pub fn setText(self: *Editor, input: []const u8) void {
@@ -117,7 +121,6 @@ pub const Editor = struct {
         if (self.lines.items.len == 0) self.lines.append(self.a, "") catch {};
         self.row = self.lines.items.len - 1;
         self.col = cpLen(self.lines.items[self.row]);
-        self.scroll = 0;
     }
 
     pub fn handle(self: *Editor, key: term.Key) Action {
@@ -194,14 +197,22 @@ pub const Editor = struct {
         out.append(self.s, 0) catch {};
         var col: usize = 0;
         var i: usize = 0;
-        while (i < line.len) {
-            const n = std.unicode.utf8ByteSequenceLength(line[i]) catch 1;
-            const len = @min(@as(usize, n), line.len - i);
-            const cp = std.unicode.utf8Decode(line[i .. i + len]) catch line[i];
-            col += if (cp == '\t') TAB - (col % TAB) else render.charWidth(cp);
-            out.append(self.s, col) catch {};
-            i += len;
+        while (render.nextCluster(line, i)) |cluster| {
+            const tab = cluster.text.len == 1 and cluster.text[0] == '\t';
+            const advance = if (tab) TAB - (col % TAB) else cluster.width;
+            var cps: usize = 0;
+            var j: usize = 0;
+            while (j < cluster.text.len) {
+                const n = std.unicode.utf8ByteSequenceLength(cluster.text[j]) catch 1;
+                j += @min(@as(usize, n), cluster.text.len - j);
+                cps += 1;
+            }
+            var m: usize = 0;
+            while (m < cps) : (m += 1) out.append(self.s, col) catch {};
+            col += advance;
+            i += cluster.text.len;
         }
+        if (out.items.len == 0) out.append(self.s, 0) catch {};
         return out.items;
     }
 
@@ -215,42 +226,47 @@ pub const Editor = struct {
     fn caret(self: *Editor) struct { row: usize, col: usize } {
         const width = @max(self.width, 1);
         const line = self.lines.items[self.row];
-        const expanded = render.expandTabs(self.s, line, TAB);
-        const chunks = render.wrapLine(self.s, expanded, width);
         const cell = self.cells(line)[self.col];
-        const row = cell / width;
-        if (row >= chunks.len) return .{ .row = chunks.len - 1, .col = render.displayWidth(chunks[chunks.len - 1]) };
-        return .{ .row = row, .col = cell - row * width };
+        const rows = render.wrapLine(self.s, render.expandTabs(self.s, line, TAB), width);
+        var used: usize = 0;
+        for (rows, 0..) |r, i| {
+            const w = render.displayWidth(r);
+            if (cell < used + w) return .{ .row = i, .col = cell - used };
+            used += w;
+        }
+        const last = render.displayWidth(rows[rows.len - 1]);
+        return .{ .row = rows.len - 1, .col = @min(last, width - 1) };
     }
 
     pub fn layout(self: *Editor, width: usize, max_rows: usize) Render {
         self.width = @max(1, width);
-        var rows: std.ArrayList([]const u8) = .empty;
-        var cursor_row: usize = 0;
-        var cursor_col: usize = 0;
-        for (self.lines.items, 0..) |line, li| {
-            const expanded = render.expandTabs(self.s, line, TAB);
-            const chunks = render.wrapLine(self.s, expanded, self.width);
-            if (li == self.row) {
-                const ct = self.caret();
-                cursor_row = rows.items.len + ct.row;
-                cursor_col = ct.col;
-            }
-            for (chunks) |c| rows.append(self.s, c) catch {};
-        }
         const view = @max(1, max_rows);
-        if (cursor_row < self.scroll) {
-            self.scroll = cursor_row;
-        } else if (cursor_row >= self.scroll + view) {
-            self.scroll = cursor_row - view + 1;
+        const n = self.lines.items.len;
+        const heights = self.s.alloc(usize, n) catch return .{ .rows = &.{}, .cursor_row = 0, .cursor_col = 0 };
+        var caret_line: usize = 0;
+        var caret_cell: usize = 0;
+        for (self.lines.items, 0..) |line, i| {
+            heights[i] = physicalRows(render.expandTabs(self.s, line, TAB), self.width);
+            if (i == self.row) {
+                caret_line = i;
+                caret_cell = self.cells(line)[self.col];
+            }
         }
-        const max_scroll = if (rows.items.len > view) rows.items.len - view else 0;
-        self.scroll = @min(self.scroll, max_scroll);
-        const end = @min(self.scroll + view, rows.items.len);
+        var start = caret_line;
+        var used = heights[caret_line];
+        while (start > 0 and used + heights[start - 1] <= view) {
+            start -= 1;
+            used += heights[start];
+        }
+        var end = caret_line + 1;
+        while (end < n and used + heights[end] <= view) {
+            used += heights[end];
+            end += 1;
+        }
         return .{
-            .rows = rows.items[self.scroll..end],
-            .cursor_row = cursor_row - self.scroll,
-            .cursor_col = cursor_col,
+            .rows = self.lines.items[start..end],
+            .cursor_row = caret_line - start,
+            .cursor_col = caret_cell,
         };
     }
 
