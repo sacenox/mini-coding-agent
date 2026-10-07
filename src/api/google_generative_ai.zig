@@ -5,7 +5,8 @@ const types = @import("../types.zig");
 const Part = struct {
     text: ?[]const u8 = null,
     inlineData: ?struct { mimeType: []const u8, data: []const u8 } = null,
-    functionCall: ?struct { name: []const u8, args: api.Raw, thoughtSignature: ?[]const u8 = null } = null,
+    functionCall: ?struct { name: []const u8, args: api.Raw } = null,
+    thoughtSignature: ?[]const u8 = null,
     functionResponse: ?struct {
         name: []const u8,
         response: Response,
@@ -47,11 +48,13 @@ fn contentParts(a: std.mem.Allocator, msg: types.Message) ![]const Part {
             var parts: std.ArrayList(Part) = .empty;
             for (am.content.items) |block| switch (block) {
                 .text => |t| try parts.append(a, textPart(t)),
-                .tool_call => |c| try parts.append(a, .{ .functionCall = .{
-                    .name = c.name,
-                    .args = .{ .bytes = api.argumentsOrObject(c.arguments) },
+                .tool_call => |c| try parts.append(a, .{
+                    .functionCall = .{
+                        .name = c.name,
+                        .args = .{ .bytes = api.argumentsOrObject(c.arguments) },
+                    },
                     .thoughtSignature = c.thought_signature,
-                } }),
+                }),
                 .thinking => {},
             };
             return parts.items;

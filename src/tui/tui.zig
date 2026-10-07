@@ -34,6 +34,10 @@ const PendingCall = struct { name: []const u8, summary: []const u8 };
 const STATE_WIDTH = "running".len;
 const STATE_PAD = std.fmt.comptimePrint("{{s: <{d}}}", .{STATE_WIDTH});
 
+fn paintRow(a: std.mem.Allocator, line: []const u8) []const u8 {
+    return std.fmt.allocPrint(a, "{s}{s}\x1b[K", .{ theme.SGR_PLAIN, line }) catch line;
+}
+
 fn styleLine(a: std.mem.Allocator, line: stream.BodyLine) []const u8 {
     const safe = render.sanitize(a, line.text);
     const expanded = render.expandTabs(a, safe, 4);
@@ -456,6 +460,7 @@ const Tui = struct {
     stdin_closed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     eof_sent: bool = false,
     key_mutex: std.Io.Mutex = .init,
+    messages_mutex: std.Io.Mutex = .init,
     events: std.ArrayList(agent.Event) = .empty,
     batch: std.ArrayList(agent.Event) = .empty,
     event_mutex: std.Io.Mutex = .init,
@@ -540,13 +545,12 @@ const Tui = struct {
         const blank = clean.len == 0 or (self.separator and self.wrote);
         self.separator = false;
         if (blank and self.wrote and !self.last_blank) {
-            self.scroll.appendSlice(self.a, theme.SGR_PLAIN) catch {};
+            self.scroll.appendSlice(self.a, paintRow(self.sa, "")) catch {};
             self.scroll.appendSlice(self.a, "\r\n") catch {};
             self.last_blank = true;
         }
         if (clean.len != 0) {
-            self.scroll.appendSlice(self.a, clean) catch {};
-            self.scroll.appendSlice(self.a, theme.SGR_PLAIN) catch {};
+            self.scroll.appendSlice(self.a, paintRow(self.sa, clean)) catch {};
             self.scroll.appendSlice(self.a, "\r\n") catch {};
             self.wrote = true;
             self.last_blank = false;
@@ -596,7 +600,9 @@ const Tui = struct {
 
     fn statusLine(self: *Tui) []const u8 {
         const model = self.opts.model orelse return styles.dim(self.s, "no model configured");
+        self.messages_mutex.lockUncancelable(platform.io);
         const used = estimateContextTokens(self.messages.items, self.opts.system_prompt, self.opts.tools_json);
+        self.messages_mutex.unlock(platform.io);
         const usage = contextUsageLine(self.s, used, model);
         if (self.paused or self.phase == .pausing) {
             return std.fmt.allocPrint(self.s, "{s} · {s}", .{ styles.dim(self.s, "paused - type steering, Enter to submit"), usage }) catch usage;
@@ -864,10 +870,13 @@ const Tui = struct {
         }
         self.editor.clear();
         const message = types.Message{ .user = .{ .content = self.a.dupe(u8, text) catch text, .timestamp = util.nowMs() } };
+        self.messages_mutex.lockUncancelable(platform.io);
         self.messages.append(platform.gpa, message) catch {
+            self.messages_mutex.unlock(platform.io);
             self.fail("! out of memory", .{});
             return;
         };
+        self.messages_mutex.unlock(platform.io);
         self.opts.session.appendMessage(platform.gpa, message) catch |e| {
             self.fail("! {s}", .{@errorName(e)});
             return;
@@ -938,7 +947,9 @@ const Tui = struct {
         self.opts.session.close();
         const cwd = std.process.currentPathAlloc(platform.io, self.a) catch ".";
         self.opts.session.* = session_mod.Session.init(self.a, self.cfg.sessions_dir, cwd);
+        self.messages_mutex.lockUncancelable(platform.io);
         self.messages.clearRetainingCapacity();
+        self.messages_mutex.unlock(platform.io);
         self.dirty = true;
     }
 
@@ -1161,6 +1172,7 @@ fn inputThread(self: *Tui) void {
 fn turnThread(self: *Tui) void {
     var o = self.opts.*;
     o.cancel = &self.abort;
+    o.messages_mutex = &self.messages_mutex;
     agent.runTurn(o, &self.messages, .{
         .ctx = self,
         .is_pause_requested = Tui.isPauseRequested,

@@ -1,6 +1,7 @@
 const std = @import("std");
 const types = @import("types.zig");
 const api = @import("api.zig");
+const platform = @import("platform.zig");
 const tools = @import("tools/index.zig");
 const common = @import("tools/common.zig");
 const session = @import("session.zig");
@@ -60,7 +61,16 @@ pub const Options = struct {
     session: *session.Session,
     cancel: *const std.atomic.Value(bool),
     config: *const config.Config,
+    messages_mutex: ?*std.Io.Mutex = null,
 };
+
+fn lockMessages(opts: Options) void {
+    if (opts.messages_mutex) |m| m.lockUncancelable(platform.io);
+}
+
+fn unlockMessages(opts: Options) void {
+    if (opts.messages_mutex) |m| m.unlock(platform.io);
+}
 
 const StreamCtx = struct { listener: Listener, started: bool = false };
 
@@ -84,10 +94,16 @@ fn onToolOutput(ctx: *anyopaque, chunk: []const u8) void {
     listener.emit(.{ .tool_output = chunk });
 }
 
+fn pushMessage(opts: Options, messages: *std.ArrayList(types.Message), message: types.Message) !void {
+    lockMessages(opts);
+    defer unlockMessages(opts);
+    try messages.append(opts.a, message);
+}
+
 fn steer(opts: Options, messages: *std.ArrayList(types.Message), content: []const u8) !void {
     if (content.len == 0) return;
     const message = types.Message{ .user = .{ .content = content, .timestamp = util.nowMs() } };
-    try messages.append(opts.a, message);
+    try pushMessage(opts, messages, message);
     try opts.session.appendMessage(opts.a, message);
 }
 
@@ -177,7 +193,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
         };
 
         if (cancelled(opts, listener)) return;
-        messages.append(opts.a, .{ .assistant = assistant }) catch {
+        pushMessage(opts, messages, .{ .assistant = assistant }) catch {
             listener.emit(.{ .err = "out of memory" });
             return;
         };
@@ -245,7 +261,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
                 .is_error = if (result) |r| r.is_error else true,
                 .timestamp = util.nowMs(),
             } };
-            messages.append(opts.a, tool_message) catch {
+            pushMessage(opts, messages, tool_message) catch {
                 listener.emit(.{ .err = "out of memory" });
                 return;
             };
