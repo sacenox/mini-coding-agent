@@ -128,8 +128,8 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
             .name = model_id,
             .api = @tagName(p.api),
             .provider = provider_id,
-            .base_url = p.@"baseUrl",
-            .api_key = firstEnv(p.@"envKeys"),
+            .base_url = p.baseUrl,
+            .api_key = firstEnv(p.envKeys),
             .effort = cfg.thinking_effort orelse "",
             .supports_images = true,
             .context_window = 200_000,
@@ -162,7 +162,7 @@ pub fn providers(a: std.mem.Allocator, cfg: *const config.Config) []ProviderEntr
         out.append(a, .{ .id = b.id, .name = b.id, .key_present = firstEnv(b.env_keys) != null }) catch {};
     }
     for (cfg.custom_providers) |p| {
-        out.append(a, .{ .id = p.id, .name = p.name orelse p.id, .key_present = p.@"envKeys".len == 0 or firstEnv(p.@"envKeys") != null }) catch {};
+        out.append(a, .{ .id = p.id, .name = p.name orelse p.id, .key_present = p.envKeys.len == 0 or firstEnv(p.envKeys) != null }) catch {};
     }
     return out.toOwnedSlice(a) catch &.{};
 }

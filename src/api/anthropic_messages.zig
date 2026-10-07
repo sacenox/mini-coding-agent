@@ -5,26 +5,26 @@ const types = @import("../types.zig");
 const anthropic_version = "2023-06-01";
 
 const ImageSource = struct {
-    @"type": []const u8 = "base64",
-    @"media_type": []const u8,
+    type: []const u8 = "base64",
+    media_type: []const u8,
     data: []const u8,
 };
 
 const ImageBlock = struct {
-    @"type": []const u8 = "image",
+    type: []const u8 = "image",
     source: ImageSource,
 };
 
-const TextBlock = struct { @"type": []const u8 = "text", text: []const u8 };
+const TextBlock = struct { type: []const u8 = "text", text: []const u8 };
 
 const ThinkingBlock = struct {
-    @"type": []const u8 = "thinking",
+    type: []const u8 = "thinking",
     thinking: []const u8,
     signature: []const u8,
 };
 
 const ToolUseBlock = struct {
-    @"type": []const u8 = "tool_use",
+    type: []const u8 = "tool_use",
     id: []const u8,
     name: []const u8,
     input: api.Raw,
@@ -42,9 +42,9 @@ const ResultContent = union(enum) {
 };
 
 const ToolResultBlock = struct {
-    @"type": []const u8 = "tool_result",
-    @"tool_use_id": []const u8,
-    @"is_error": ?bool = null,
+    type: []const u8 = "tool_result",
+    tool_use_id: []const u8,
+    is_error: ?bool = null,
     content: Content,
     const Content = union(enum) {
         text: []const u8,
@@ -72,11 +72,6 @@ const AssistantBlock = union(enum) {
     }
 };
 
-const UserMessage = struct {
-    role: []const u8 = "user",
-    content: []const ResultContent,
-};
-
 const AssistantMessage = struct {
     role: []const u8 = "assistant",
     content: []const AssistantBlock,
@@ -94,11 +89,11 @@ const Message = union(enum) {
     }
 };
 
-const Thinking = struct { @"type": []const u8 = "enabled", @"budget_tokens": u64 };
+const Thinking = struct { type: []const u8 = "enabled", budget_tokens: u64 };
 
 const Body = struct {
     model: []const u8,
-    @"max_tokens": u64,
+    max_tokens: u64,
     stream: bool = true,
     system: ?[]const u8 = null,
     thinking: ?Thinking = null,
@@ -126,7 +121,7 @@ fn resultContent(a: std.mem.Allocator, t: types.ToolResultMessage) !ToolResultBl
     var parts: std.ArrayList(ResultContent) = .empty;
     try parts.append(a, .{ .text = .{ .text = t.text } });
     for (t.images) |img| {
-        try parts.append(a, .{ .image = .{ .source = .{ .@"media_type" = img.mime_type, .data = img.data } } });
+        try parts.append(a, .{ .image = .{ .source = .{ .media_type = img.mime_type, .data = img.data } } });
     }
     return .{ .parts = parts.items };
 }
@@ -162,8 +157,8 @@ fn buildMessages(a: std.mem.Allocator, req: api.Request) ![]const Message {
             while (i < req.messages.len and req.messages[i] == .tool_result) : (i += 1) {
                 const t = req.messages[i].tool_result;
                 try blocks.append(a, .{
-                    .@"tool_use_id" = t.tool_call_id,
-                    .@"is_error" = if (t.is_error) true else null,
+                    .tool_use_id = t.tool_call_id,
+                    .is_error = if (t.is_error) true else null,
                     .content = try resultContent(a, t),
                 });
             }
@@ -193,9 +188,9 @@ fn buildBody(req: api.Request) ![]u8 {
     if (budget > 0 and max_tokens <= budget) max_tokens = budget + 4096;
     const body = Body{
         .model = req.model.id,
-        .@"max_tokens" = max_tokens,
+        .max_tokens = max_tokens,
         .system = if (req.system_prompt.len > 0) req.system_prompt else null,
-        .thinking = if (budget > 0) .{ .@"budget_tokens" = budget } else null,
+        .thinking = if (budget > 0) .{ .budget_tokens = budget } else null,
         .messages = try buildMessages(a, req),
         .tools = if (req.tools_json.len > 0) .{ .a = a, .json = req.tools_json, .form = .{
             .open = "[",
@@ -218,11 +213,11 @@ const Block = struct {
 };
 
 const Chunk = struct {
-    @"type": ?[]const u8 = null,
+    type: ?[]const u8 = null,
     @"error": ?api.ErrField = null,
     index: ?i64 = null,
     message: ?MessageStart = null,
-    @"content_block": ?BlockStart = null,
+    content_block: ?BlockStart = null,
     delta: ?Delta = null,
     usage: ?Usage = null,
 
@@ -232,27 +227,27 @@ const Chunk = struct {
     };
 
     const BlockStart = struct {
-        @"type": ?[]const u8 = null,
+        type: ?[]const u8 = null,
         id: ?[]const u8 = null,
         name: ?[]const u8 = null,
         data: ?[]const u8 = null,
     };
 
     const Delta = struct {
-        @"type": ?[]const u8 = null,
+        type: ?[]const u8 = null,
         text: ?[]const u8 = null,
         thinking: ?[]const u8 = null,
         signature: ?[]const u8 = null,
-        @"partial_json": ?[]const u8 = null,
-        @"stop_reason": ?[]const u8 = null,
+        partial_json: ?[]const u8 = null,
+        stop_reason: ?[]const u8 = null,
     };
 
     const Usage = struct {
-        @"input_tokens": api.Count = .{},
-        @"output_tokens": api.Count = .{},
-        @"cache_read_input_tokens": api.Count = .{},
-        @"cache_creation_input_tokens": api.Count = .{},
-        @"output_tokens_details": ?struct { @"thinking_tokens": api.Count = .{} } = null,
+        input_tokens: api.Count = .{},
+        output_tokens: api.Count = .{},
+        cache_read_input_tokens: api.Count = .{},
+        cache_creation_input_tokens: api.Count = .{},
+        output_tokens_details: ?struct { thinking_tokens: api.Count = .{} } = null,
     };
 };
 
@@ -269,34 +264,30 @@ const State = struct {
     failed: bool = false,
 
     pub fn handle(st: *State, chunk: Chunk) !void {
-        const event_type = chunk.@"type" orelse "";
+        const event_type = chunk.type orelse "";
 
         if (std.mem.eql(u8, event_type, "error")) {
             const message = if (chunk.@"error") |e| e.message orelse "stream: provider error" else "stream: provider error";
-            if (st.stream_error == null) st.stream_error = try st.req.pers.dupe(u8, message);
+            try api.keepString(&st.stream_error, st.req.pers, message);
             return;
         }
 
         if (std.mem.eql(u8, event_type, "message_start")) {
             const message = chunk.message orelse return;
-            if (st.msg.response_id == null) {
-                if (message.id) |id| {
-                    if (id.len > 0) st.msg.response_id = try st.req.pers.dupe(u8, id);
-                }
-            }
+            try api.keepString(&st.msg.response_id, st.req.pers, message.id);
             if (message.usage) |u| {
-                st.usage.input = u.@"input_tokens".value;
-                st.usage.output = u.@"output_tokens".value;
-                st.usage.cache_read = u.@"cache_read_input_tokens".value;
-                st.usage.cache_write = u.@"cache_creation_input_tokens".value;
+                st.usage.input = u.input_tokens.value;
+                st.usage.output = u.output_tokens.value;
+                st.usage.cache_read = u.cache_read_input_tokens.value;
+                st.usage.cache_write = u.cache_creation_input_tokens.value;
             }
             return;
         }
 
         if (std.mem.eql(u8, event_type, "content_block_start")) {
             const block = try api.blockAt(Block, &st.blocks, st.req.pers, chunk.index orelse -1);
-            const cb = chunk.@"content_block" orelse return;
-            const bt = cb.@"type" orelse "";
+            const cb = chunk.content_block orelse return;
+            const bt = cb.type orelse "";
             if (std.mem.eql(u8, bt, "tool_use")) {
                 block.kind = .tool;
                 block.call = st.calls.items.len;
@@ -323,7 +314,7 @@ const State = struct {
             const delta = chunk.delta orelse return;
             const block = &st.blocks.items[@intCast(idx)];
             const call = if (block.kind == .tool) &st.calls.items[block.call] else null;
-            const dt = delta.@"type" orelse "";
+            const dt = delta.type orelse "";
             if (std.mem.eql(u8, dt, "text_delta")) {
                 if (delta.text) |s| {
                     try block.text.appendSlice(st.req.pers, s);
@@ -338,7 +329,7 @@ const State = struct {
                 if (delta.signature) |s| try block.signature.appendSlice(st.req.pers, s);
             } else if (std.mem.eql(u8, dt, "input_json_delta")) {
                 if (call) |c| {
-                    if (delta.@"partial_json") |s| try c.args.appendSlice(st.req.pers, s);
+                    if (delta.partial_json) |s| try c.args.appendSlice(st.req.pers, s);
                 }
             }
             return;
@@ -346,16 +337,16 @@ const State = struct {
 
         if (std.mem.eql(u8, event_type, "message_delta")) {
             if (chunk.delta) |delta| {
-                if (delta.@"stop_reason") |s| {
+                if (delta.stop_reason) |s| {
                     if (s.len > 0) st.stop_reason = try st.req.pers.dupe(u8, s);
                 }
             }
             if (chunk.usage) |u| {
-                st.usage.input = u.@"input_tokens".value;
-                st.usage.output = u.@"output_tokens".value;
-                st.usage.cache_read = u.@"cache_read_input_tokens".value;
-                st.usage.cache_write = u.@"cache_creation_input_tokens".value;
-                if (u.@"output_tokens_details") |d| st.usage.reasoning = d.@"thinking_tokens".value;
+                st.usage.input = u.input_tokens.value;
+                st.usage.output = u.output_tokens.value;
+                st.usage.cache_read = u.cache_read_input_tokens.value;
+                st.usage.cache_write = u.cache_creation_input_tokens.value;
+                if (u.output_tokens_details) |d| st.usage.reasoning = d.thinking_tokens.value;
             }
             return;
         }

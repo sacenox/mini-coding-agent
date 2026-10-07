@@ -1,5 +1,15 @@
 const std = @import("std");
 
+pub const Raw = struct {
+    bytes: []const u8 = "",
+
+    pub fn jsonStringify(self: Raw, jws: anytype) !void {
+        try jws.beginWriteRaw();
+        try jws.writer.writeAll(self.bytes);
+        jws.endWriteRaw();
+    }
+};
+
 pub const Usage = struct {
     input: u64 = 0,
     output: u64 = 0,
@@ -30,6 +40,10 @@ pub const StopReason = enum {
             .err => "error",
             .aborted => "aborted",
         };
+    }
+
+    pub fn jsonStringify(self: StopReason, jws: anytype) !void {
+        try jws.write(self.wire());
     }
 };
 

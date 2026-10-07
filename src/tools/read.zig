@@ -20,10 +20,7 @@ const max_text_chars = 100_000;
 const max_image_base64_bytes = 5 * 1024 * 1024;
 
 fn fail(a: std.mem.Allocator, comptime fmt: []const u8, args: anytype) common.Result {
-    return .{
-        .text = std.fmt.allocPrint(a, fmt, args) catch "read failed",
-        .is_error = true,
-    };
+    return common.fail(a, "read failed", fmt, args);
 }
 
 fn mimeFor(path: []const u8) ?[]const u8 {

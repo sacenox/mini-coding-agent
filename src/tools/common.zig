@@ -31,3 +31,10 @@ pub const Result = struct {
     diffs: []const FileDiff = &.{},
     body: ?[]const u8 = null,
 };
+
+pub fn fail(a: std.mem.Allocator, fallback: []const u8, comptime fmt: []const u8, args: anytype) Result {
+    return .{
+        .text = std.fmt.allocPrint(a, fmt, args) catch fallback,
+        .is_error = true,
+    };
+}

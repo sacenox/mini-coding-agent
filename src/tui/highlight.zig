@@ -242,7 +242,7 @@ fn eventLess(_: void, x: Event, y: Event) bool {
     return x.order < y.order;
 }
 
-fn paint(a: std.mem.Allocator, text: []const u8, spans: []const Span, base: theme.Style) []u8 {
+pub fn paint(a: std.mem.Allocator, text: []const u8, spans: []const Span, base: theme.Style) []u8 {
     var events: std.ArrayList(Event) = .empty;
     for (spans, 0..) |span, i| {
         if (span.end <= span.start) continue;
@@ -295,10 +295,6 @@ fn emit(a: std.mem.Allocator, out: *std.ArrayList(u8), active: *std.ArrayList(us
     at.* = end;
 }
 
-pub fn paintOn(a: std.mem.Allocator, text: []const u8, spans: []const Span, base: theme.Style) []u8 {
-    return paint(a, text, spans, base);
-}
-
 fn syntaxFor(g: *Grammars, lang: []const u8) ?*Syntax {
     if (std.mem.eql(u8, lang, "js") or std.mem.eql(u8, lang, "javascript") or std.mem.eql(u8, lang, "jsx")) return &g.javascript;
     if (std.mem.eql(u8, lang, "ts") or std.mem.eql(u8, lang, "typescript")) return &g.typescript;
@@ -334,12 +330,12 @@ pub fn highlightOn(a: std.mem.Allocator, info: []const u8, text: []const u8, bas
 pub const NodeSpan = struct { start: u32, end: u32, kind: []const u8 };
 
 const diff_line_kinds = [_][]const u8{
-    "file_change", "binary_change", "index",   "similarity", "dissimilarity",
+    "file_change", "binary_change", "index",    "similarity", "dissimilarity",
     "old_file",    "new_file",      "location", "addition",   "deletion",
     "change",      "context",       "comment",  "special",    "unrecognized",
 };
 
-fn isDiffLineKind(kind: []const u8) bool {
+pub fn isDiffLineKind(kind: []const u8) bool {
     for (diff_line_kinds) |k| {
         if (std.mem.eql(u8, kind, k)) return true;
     }

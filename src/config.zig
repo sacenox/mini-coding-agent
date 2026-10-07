@@ -15,10 +15,10 @@ pub const Api = enum {
 pub const CustomProvider = struct {
     id: []const u8,
     name: ?[]const u8 = null,
-    @"baseUrl": []const u8,
+    baseUrl: []const u8,
     api: Api,
     models: []const []const u8,
-    @"envKeys": []const []const u8 = &.{},
+    envKeys: []const []const u8 = &.{},
     headers: ?std.json.ArrayHashMap([]const u8) = null,
 };
 
@@ -39,18 +39,18 @@ pub const Config = struct {
 };
 
 const File = struct {
-    @"sessionsDir": ?[]const u8 = null,
-    @"systemPrompt": ?[]const u8 = null,
-    @"discoverAgentFiles": ?bool = null,
-    @"skillsDirs": ?[]const []const u8 = null,
+    sessionsDir: ?[]const u8 = null,
+    systemPrompt: ?[]const u8 = null,
+    discoverAgentFiles: ?bool = null,
+    skillsDirs: ?[]const []const u8 = null,
     tools: ?[]const ToolName = null,
     provider: ?[]const u8 = null,
     model: ?[]const u8 = null,
-    @"thinkingEffort": ?[]const u8 = null,
-    @"customProviders": ?[]const CustomProvider = null,
+    thinkingEffort: ?[]const u8 = null,
+    customProviders: ?[]const CustomProvider = null,
     theme: ?[]const u8 = null,
-    @"snapshotIgnoreDirs": ?[]const []const u8 = null,
-    @"snapshotUsesGitignore": ?bool = null,
+    snapshotIgnoreDirs: ?[]const []const u8 = null,
+    snapshotUsesGitignore: ?bool = null,
 };
 
 fn configDir(a: std.mem.Allocator) []const u8 {
@@ -99,18 +99,18 @@ fn readInto(a: std.mem.Allocator, path: []const u8, required: bool, cfg: *Config
         return error.InvalidConfig;
     };
 
-    if (file.@"sessionsDir") |v| cfg.sessions_dir = v;
-    if (file.@"systemPrompt") |v| cfg.system_prompt = v;
+    if (file.sessionsDir) |v| cfg.sessions_dir = v;
+    if (file.systemPrompt) |v| cfg.system_prompt = v;
     if (file.provider) |v| cfg.provider = v;
     if (file.model) |v| cfg.model = v;
-    if (file.@"discoverAgentFiles") |v| cfg.discover_agent_files = v;
-    if (file.@"skillsDirs") |v| cfg.skills_dirs = v;
+    if (file.discoverAgentFiles) |v| cfg.discover_agent_files = v;
+    if (file.skillsDirs) |v| cfg.skills_dirs = v;
     if (file.tools) |v| cfg.tools = v;
-    if (file.@"customProviders") |v| cfg.custom_providers = v;
-    if (file.@"thinkingEffort") |v| cfg.thinking_effort = v;
+    if (file.customProviders) |v| cfg.custom_providers = v;
+    if (file.thinkingEffort) |v| cfg.thinking_effort = v;
     if (file.theme) |v| cfg.theme = v;
-    if (file.@"snapshotIgnoreDirs") |v| cfg.snapshot_ignore_dirs = v;
-    if (file.@"snapshotUsesGitignore") |v| cfg.snapshot_uses_gitignore = v;
+    if (file.snapshotIgnoreDirs) |v| cfg.snapshot_ignore_dirs = v;
+    if (file.snapshotUsesGitignore) |v| cfg.snapshot_uses_gitignore = v;
 }
 
 pub const Update = struct {

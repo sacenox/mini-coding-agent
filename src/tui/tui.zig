@@ -26,14 +26,8 @@ const MAX_BODY_ROWS = 12;
 const ELIDED_HEAD = 4;
 const ELIDED_TAIL = 4;
 
-fn physicalRows(line: []const u8, width: usize) usize {
-    return rowsForCells(render.displayWidth(line), width);
-}
-
-fn rowsForCells(cells: usize, width: usize) usize {
-    if (cells == 0) return 1;
-    return (cells + width - 1) / width;
-}
+const physicalRows = render.physicalRows;
+const rowsForCells = render.rowsForCells;
 
 const PendingCall = struct { name: []const u8, summary: []const u8 };
 
@@ -146,12 +140,7 @@ fn diffKindOf(kind: []const u8) ?DiffKind {
     if (std.mem.eql(u8, kind, "addition")) return .add;
     if (std.mem.eql(u8, kind, "deletion")) return .del;
     if (std.mem.eql(u8, kind, "context")) return .ctx;
-    if (std.mem.eql(u8, kind, "special") or std.mem.eql(u8, kind, "change") or
-        std.mem.eql(u8, kind, "comment") or std.mem.eql(u8, kind, "unrecognized") or
-        std.mem.eql(u8, kind, "old_file") or std.mem.eql(u8, kind, "new_file") or
-        std.mem.eql(u8, kind, "index") or std.mem.eql(u8, kind, "file_change") or
-        std.mem.eql(u8, kind, "binary_change") or std.mem.eql(u8, kind, "similarity") or
-        std.mem.eql(u8, kind, "dissimilarity")) return .note;
+    if (highlight.isDiffLineKind(kind)) return .note;
     return null;
 }
 
@@ -242,7 +231,7 @@ fn diffLines(a: std.mem.Allocator, path: []const u8, lines: []const []const u8) 
             .add, .del => {
                 const bg = if (kinds[i] == .add) theme.current.diff_add else theme.current.diff_delete;
                 const content = l[1..];
-                const painted = highlight.paintOn(a, content, rebaseSpans(a, spans, los[i], his[i]), .{ .bg = bg });
+                const painted = highlight.paint(a, content, rebaseSpans(a, spans, los[i], his[i]), .{ .bg = bg });
                 out.append(a, .{
                     .text = std.fmt.allocPrint(a, "{c}{s}", .{ l[0], painted }) catch l,
                     .bg = bg,

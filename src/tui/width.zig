@@ -145,13 +145,3 @@ pub fn nextCluster(text: []const u8, i: usize) ?Cluster {
     }
     return .{ .text = text[i..end], .width = clusterWidth(text[i..end]) };
 }
-
-pub fn displayWidth(text: []const u8) usize {
-    var width: usize = 0;
-    var i: usize = 0;
-    while (nextCluster(text, i)) |cluster| {
-        width += cluster.width;
-        i += cluster.text.len;
-    }
-    return width;
-}

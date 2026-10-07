@@ -11,10 +11,7 @@ const Args = struct {
 };
 
 fn fail(a: std.mem.Allocator, comptime fmt: []const u8, args: anytype) common.Result {
-    return .{
-        .text = std.fmt.allocPrint(a, fmt, args) catch "edit failed",
-        .is_error = true,
-    };
+    return common.fail(a, "edit failed", fmt, args);
 }
 
 pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const u8, ctx: common.Context) common.Result {

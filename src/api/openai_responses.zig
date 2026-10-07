@@ -2,25 +2,16 @@ const std = @import("std");
 const api = @import("../api.zig");
 const types = @import("../types.zig");
 
-const InputPart = struct {
-    @"type": []const u8,
-    text: ?[]const u8 = null,
-    role: ?[]const u8 = null,
-    content: ?[]const OutputPart = null,
-
-    const OutputPart = struct { @"type": []const u8, text: []const u8 };
-};
-
 const InputItem = struct {
-    @"type": []const u8,
+    type: []const u8,
     role: ?[]const u8 = null,
     content: ?[]const ContentPart = null,
-    @"call_id": ?[]const u8 = null,
+    call_id: ?[]const u8 = null,
     name: ?[]const u8 = null,
     arguments: ?[]const u8 = null,
     output: ?[]const u8 = null,
 
-    const ContentPart = struct { @"type": []const u8 = "input_text", text: []const u8 };
+    const ContentPart = struct { type: []const u8 = "input_text", text: []const u8 };
 };
 
 const Body = struct {
@@ -28,7 +19,7 @@ const Body = struct {
     stream: bool = true,
     store: bool = false,
     instructions: ?[]const u8 = null,
-    @"max_output_tokens": ?u64 = null,
+    max_output_tokens: ?u64 = null,
     reasoning: ?struct { effort: []const u8 } = null,
     input: []const InputItem,
     tools: ?api.Tools = null,
@@ -39,25 +30,25 @@ fn buildInput(a: std.mem.Allocator, req: api.Request) ![]const InputItem {
     for (req.messages) |msg| {
         switch (msg) {
             .tool_result => |t| try out.append(a, .{
-                .@"type" = "function_call_output",
-                .@"call_id" = t.tool_call_id,
+                .type = "function_call_output",
+                .call_id = t.tool_call_id,
                 .output = t.text,
             }),
             .user => |u| {
                 const content = try a.alloc(InputItem.ContentPart, 1);
                 content[0] = .{ .text = u.content };
-                try out.append(a, .{ .@"type" = "message", .role = "user", .content = content });
+                try out.append(a, .{ .type = "message", .role = "user", .content = content });
             },
             .assistant => |am| {
                 for (am.content.items) |block| switch (block) {
                     .text => |t| {
                         const content = try a.alloc(InputItem.ContentPart, 1);
-                        content[0] = .{ .@"type" = "output_text", .text = t };
-                        try out.append(a, .{ .@"type" = "message", .role = "assistant", .content = content });
+                        content[0] = .{ .type = "output_text", .text = t };
+                        try out.append(a, .{ .type = "message", .role = "assistant", .content = content });
                     },
                     .tool_call => |c| try out.append(a, .{
-                        .@"type" = "function_call",
-                        .@"call_id" = c.id,
+                        .type = "function_call",
+                        .call_id = c.id,
                         .name = c.name,
                         .arguments = api.argumentsOrObject(c.arguments),
                     }),
@@ -79,7 +70,7 @@ fn buildBody(req: api.Request) ![]u8 {
     const body = Body{
         .model = req.model.id,
         .instructions = if (req.system_prompt.len > 0) req.system_prompt else null,
-        .@"max_output_tokens" = max_tokens,
+        .max_output_tokens = max_tokens,
         .reasoning = if (effort) |e| .{ .effort = e } else null,
         .input = try buildInput(a, req),
         .tools = if (req.tools_json.len > 0) .{ .a = a, .json = req.tools_json, .form = .{
@@ -94,18 +85,18 @@ fn buildBody(req: api.Request) ![]u8 {
 }
 
 const Chunk = struct {
-    @"type": ?[]const u8 = null,
+    type: ?[]const u8 = null,
     message: ?[]const u8 = null,
     @"error": ?api.ErrField = null,
-    @"output_index": ?i64 = null,
+    output_index: ?i64 = null,
     delta: ?[]const u8 = null,
     arguments: ?[]const u8 = null,
     item: ?Item = null,
     response: ?Response = null,
 
     const Item = struct {
-        @"type": ?[]const u8 = null,
-        @"call_id": ?[]const u8 = null,
+        type: ?[]const u8 = null,
+        call_id: ?[]const u8 = null,
         name: ?[]const u8 = null,
         arguments: ?[]const u8 = null,
     };
@@ -113,21 +104,21 @@ const Chunk = struct {
     const Response = struct {
         id: ?[]const u8 = null,
         status: ?[]const u8 = null,
-        @"incomplete_details": ?struct { reason: ?[]const u8 = null } = null,
+        incomplete_details: ?struct { reason: ?[]const u8 = null } = null,
         usage: ?Usage = null,
         @"error": ?api.ErrField = null,
     };
 
     const Usage = struct {
-        @"input_tokens": api.Count = .{},
-        @"output_tokens": api.Count = .{},
-        @"total_tokens": api.Count = .{},
-        @"input_tokens_details": ?struct { @"cached_tokens": api.Count = .{} } = null,
+        input_tokens: api.Count = .{},
+        output_tokens: api.Count = .{},
+        total_tokens: api.Count = .{},
+        input_tokens_details: ?struct { cached_tokens: api.Count = .{} } = null,
     };
 };
 
 fn streamIndex(chunk: Chunk, fallback: usize) usize {
-    const v = chunk.@"output_index" orelse return fallback;
+    const v = chunk.output_index orelse return fallback;
     return if (v < 0 or v > api.max_stream_index) fallback else @intCast(v);
 }
 
@@ -146,32 +137,28 @@ const State = struct {
     failed: bool = false,
 
     pub fn handle(st: *State, chunk: Chunk) !void {
-        const event_type = chunk.@"type" orelse "";
+        const event_type = chunk.type orelse "";
 
         if (std.mem.eql(u8, event_type, "error")) {
             const message = chunk.message orelse
                 (if (chunk.@"error") |e| e.message orelse "stream: provider error" else "stream: provider error");
-            if (st.stream_error == null) st.stream_error = try st.req.pers.dupe(u8, message);
+            try api.keepString(&st.stream_error, st.req.pers, message);
             return;
         }
 
         if (std.mem.eql(u8, event_type, "response.created")) {
             if (chunk.response) |resp| {
-                if (st.msg.response_id == null) {
-                    if (resp.id) |id| {
-                        if (id.len > 0) st.msg.response_id = try st.req.pers.dupe(u8, id);
-                    }
-                }
+                try api.keepString(&st.msg.response_id, st.req.pers, resp.id);
             }
             return;
         }
 
         if (std.mem.eql(u8, event_type, "response.output_item.added")) {
             const item = chunk.item orelse return;
-            if (!std.mem.eql(u8, item.@"type" orelse "", "function_call")) return;
+            if (!std.mem.eql(u8, item.type orelse "", "function_call")) return;
             const index = streamIndex(chunk, st.calls.items.len);
             const call = try api.blockAt(api.Call, &st.calls, st.req.pers, @intCast(index));
-            if (item.@"call_id") |id| call.id = try st.req.pers.dupe(u8, id);
+            if (item.call_id) |id| call.id = try st.req.pers.dupe(u8, id);
             try call.announce(st.req.pers, st.sink, item.name orelse "");
             return;
         }
@@ -217,11 +204,11 @@ const State = struct {
 
         if (std.mem.eql(u8, event_type, "response.output_item.done")) {
             const item = chunk.item orelse return;
-            if (!std.mem.eql(u8, item.@"type" orelse "", "function_call")) return;
+            if (!std.mem.eql(u8, item.type orelse "", "function_call")) return;
             const index = streamIndex(chunk, st.calls.items.len);
             if (index >= st.calls.items.len) return;
             const call = &st.calls.items[index];
-            if (item.@"call_id") |id| call.id = try st.req.pers.dupe(u8, id);
+            if (item.call_id) |id| call.id = try st.req.pers.dupe(u8, id);
             if (item.name) |name| call.name = try st.req.pers.dupe(u8, name);
             if (!call.started and call.name.len > 0) {
                 call.started = true;
@@ -240,14 +227,14 @@ const State = struct {
             if (resp.status) |s| {
                 if (s.len > 0) st.status = try st.req.pers.dupe(u8, s);
             }
-            if (resp.@"incomplete_details") |details| {
+            if (resp.incomplete_details) |details| {
                 if (details.reason) |r| st.incomplete = try st.req.pers.dupe(u8, r);
             }
             if (resp.usage) |u| {
-                st.usage.input = u.@"input_tokens".value;
-                st.usage.output = u.@"output_tokens".value;
-                st.usage.total_tokens = u.@"total_tokens".value;
-                if (u.@"input_tokens_details") |d| st.usage.cache_read = d.@"cached_tokens".value;
+                st.usage.input = u.input_tokens.value;
+                st.usage.output = u.output_tokens.value;
+                st.usage.total_tokens = u.total_tokens.value;
+                if (u.input_tokens_details) |d| st.usage.cache_read = d.cached_tokens.value;
             }
             return;
         }
@@ -263,8 +250,7 @@ const State = struct {
 
 fn finalize(st: *State) !void {
     const a = st.req.pers;
-    if (st.reasoning.items.len > 0) try st.msg.content.append(a, .{ .thinking = .{ .text = st.reasoning.items } });
-    if (st.text.items.len > 0) try st.msg.content.append(a, .{ .text = st.text.items });
+    try api.appendParts(st.msg, a, st.reasoning.items, null, st.text.items);
 
     const has_calls = try api.appendCalls(st.msg, st.sink, a, st.calls.items, st.failed);
 

@@ -19,10 +19,12 @@ Verify against the real provider.  Use the `OPENCODE_API_KEY` environment
 variable and a scratch `XDG_CONFIG_HOME` with a `mini-coding-agent/config.json`
 that declares the provider under test.
 
-Every Zen/Go request needs the `x-opencode-session` header; set it via the custom
-provider's `headers`. Not every catalog model is enabled for the account (for
-example `claude-opus-5` is disabled and returns `Model access is disabled`).
-Run a real tool call, not just a text turn.
+Use these models:
+
+- `openai-completions` -> `opnecode-go/deepseek-v4.1-flash`
+- `openai-responses` -> `opencode-go/gpt-6-luna`
+- `anthropic-messages` -> `opencode-go/minimax-m3`
+- `google-generative-ai` -> `opencode/gemini-3.8-flash`
 
 ### Driving the TUI with kitty
 
@@ -31,7 +33,7 @@ window over remote control on a private socket, one window per run: it launches
 the app in a scratch cwd, waits for the banner, types the prompt, and
 screenshots the window at 15fps until the capture window ends or the app exits.
 
-    tools/stress.sh -C <scratch cwd> -o /tmp/mini-runs/<name> -d 300 -p '<prompt>'
+    tools/stress.sh -C <scratch cwd> -o /tmp/mini-runs/<name> -d 60 -p '<prompt>'
 
 Frames land in `frame-NNNNN.png`. At the end of a run the pane is written with
 its truecolor SGR to `final.txt` (scrollback) and `final-screen.txt` (live

@@ -4,11 +4,7 @@ const term = @import("term.zig");
 
 const TAB = 4;
 
-fn physicalRows(line: []const u8, width: usize) usize {
-    const cells = render.displayWidth(line);
-    if (cells == 0) return 1;
-    return (cells + width - 1) / width;
-}
+const physicalRows = render.physicalRows;
 
 fn isSpace(cp: u21) bool {
     return cp == ' ' or cp == '\t' or cp == '\n' or cp == '\r' or cp == 0x0b or cp == 0x0c or cp == 0xa0;

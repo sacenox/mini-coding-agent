@@ -1,7 +1,6 @@
 const std = @import("std");
 const wcwidth = @import("width.zig");
 
-pub const charWidth = wcwidth.charWidth;
 pub const nextCluster = wcwidth.nextCluster;
 
 pub fn displayWidth(text: []const u8) usize {
@@ -9,6 +8,15 @@ pub fn displayWidth(text: []const u8) usize {
     var i: usize = 0;
     while (nextPiece(text, &i)) |piece| width += piece.width;
     return width;
+}
+
+pub fn rowsForCells(cells: usize, width: usize) usize {
+    if (cells == 0) return 1;
+    return (cells + width - 1) / width;
+}
+
+pub fn physicalRows(line: []const u8, width: usize) usize {
+    return rowsForCells(displayWidth(line), width);
 }
 
 const Piece = struct { text: []const u8, width: usize, sgr: bool };
@@ -47,7 +55,7 @@ fn isSgrAt(text: []const u8, i: usize) ?usize {
     var j = i + 2;
     while (j < text.len and (text[j] == ';' or (text[j] >= '0' and text[j] <= '9'))) j += 1;
     if (j < text.len and text[j] == 'm') return j - i + 1;
-    if (j < text.len and text[j] == ':' ) {
+    if (j < text.len and text[j] == ':') {
         while (j < text.len and (text[j] == ':' or text[j] == ';' or (text[j] >= '0' and text[j] <= '9'))) j += 1;
         if (j < text.len and text[j] == 'm') return j - i + 1;
     }

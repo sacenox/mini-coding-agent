@@ -19,15 +19,7 @@ pub const Sink = struct {
     }
 };
 
-pub const Raw = struct {
-    bytes: []const u8 = "",
-
-    pub fn jsonStringify(self: Raw, jws: anytype) !void {
-        try jws.beginWriteRaw();
-        try jws.writer.writeAll(self.bytes);
-        jws.endWriteRaw();
-    }
-};
+pub const Raw = types.Raw;
 
 pub const ErrField = struct {
     message: ?[]const u8 = null,
@@ -268,6 +260,18 @@ pub fn appendCalls(msg: *types.AssistantMessage, sink: Sink, a: std.mem.Allocato
 
 pub fn argumentsOrObject(args: []const u8) []const u8 {
     return if (args.len > 0) args else "{}";
+}
+
+pub fn keepString(slot: *?[]const u8, a: std.mem.Allocator, value: ?[]const u8) !void {
+    if (slot.* != null) return;
+    const v = value orelse return;
+    if (v.len == 0) return;
+    slot.* = try a.dupe(u8, v);
+}
+
+pub fn appendParts(msg: *types.AssistantMessage, a: std.mem.Allocator, thinking: []const u8, signature: ?[]const u8, text: []const u8) !void {
+    if (thinking.len > 0) try msg.content.append(a, .{ .thinking = .{ .text = thinking, .signature = signature } });
+    if (text.len > 0) try msg.content.append(a, .{ .text = text });
 }
 
 pub fn finishUsage(msg: *types.AssistantMessage, model: *const types.Model, usage: types.Usage) void {

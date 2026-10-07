@@ -5,45 +5,8 @@ const types = @import("types.zig");
 
 const alphabet = "0123456789abcdefghijklmnopqrstuvwxyz";
 
-const Raw = struct {
-    bytes: []const u8 = "",
-    pub fn jsonStringify(self: Raw, jws: anytype) !void {
-        try jws.beginWriteRaw();
-        try jws.writer.writeAll(self.bytes);
-        jws.endWriteRaw();
-    }
-};
-
-const StopReason = enum {
-    pending,
-    stop,
-    length,
-    tool_use,
-    err,
-    aborted,
-
-    pub fn jsonStringify(self: StopReason, jws: anytype) !void {
-        try jws.write(@as([]const u8, switch (self) {
-            .pending => "pending",
-            .stop => "stop",
-            .length => "length",
-            .tool_use => "toolUse",
-            .err => "error",
-            .aborted => "aborted",
-        }));
-    }
-
-    fn fromWire(reason: types.StopReason) StopReason {
-        return switch (reason) {
-            .pending => .pending,
-            .stop => .stop,
-            .length => .length,
-            .tool_use => .tool_use,
-            .err => .err,
-            .aborted => .aborted,
-        };
-    }
-};
+const Raw = types.Raw;
+const StopReason = types.StopReason;
 
 const ThinkingBlock = struct {
     type: []const u8 = "thinking",
@@ -350,7 +313,7 @@ fn messageRecord(a: std.mem.Allocator, message: types.Message) !MessageRecord {
                         .total = .{ .value = m.usage.cost_total },
                     },
                 },
-                .stopReason = .fromWire(m.stop_reason),
+                .stopReason = m.stop_reason,
                 .timestamp = m.timestamp,
                 .responseId = m.response_id,
                 .responseModel = m.response_model,
