@@ -506,7 +506,7 @@ const Tui = struct {
             },
             .thinking => {
                 const m = self.opts.model orelse return self.fail("! no model configured", .{});
-                const levels = models_mod.supportedLevels(m.provider, m.id);
+                const levels = models_mod.supportedLevels(self.cfg, m.provider, m.id);
                 self.beginPrompt("Select a thinking level", levels, levels);
                 self.pending_command = .thinking;
             },
@@ -620,7 +620,7 @@ const Tui = struct {
                 const m = self.opts.model orelse return;
                 const updated = self.a.create(types.Model) catch return;
                 updated.* = m.*;
-                updated.effort = models_mod.clampNamed(m.provider, m.id, id);
+                updated.effort = models_mod.clampNamed(self.cfg, m.provider, m.id, id);
                 self.select(updated);
                 config.save(self.a, self.cfg, .{ .thinking_effort = id }) catch {};
             },

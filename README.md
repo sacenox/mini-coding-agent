@@ -77,9 +77,19 @@ A full example:
     {
       "id": "local",
       "name": "Local",
-      "baseUrl": "http://127.0.0.1:11434/v1",
-      "api": "openai-completions",
-      "models": ["qwen3-coder"],
+      "models": [
+        {
+          "id": "qwen3-coder",
+          "api": "openai-completions",
+          "baseUrl": "http://127.0.0.1:11434/v1",
+          "context": 32768,
+          "maxOutput": 8192,
+          "images": false,
+          "reasoning": true,
+          "effort": ["low", "high"],
+          "cost": [0, 0, 0]
+        }
+      ],
       "envKeys": ["LOCAL_API_KEY"],
       "headers": { "x-tenant": "mini" }
     }
@@ -111,11 +121,25 @@ A `customProvider` field:
 |---|---|---|
 | `id` | yes | the id `provider` selects |
 | `name` | no | display name; falls back to `id` |
-| `baseUrl` | yes | request base URL |
-| `api` | yes | one of `openai-completions`, `openai-responses`, `anthropic-messages`, `google-generative-ai` |
-| `models` | yes | non-empty list of model ids |
+| `models` | yes | non-empty list of model objects |
 | `envKeys` | no | environment variables searched, in order, for the API key |
 | `headers` | no | extra request headers |
+
+A `customProvider` model object; every model carries its own wire and metadata,
+so one provider may mix APIs and base URLs:
+
+| Field | Required | Meaning |
+|---|---|---|
+| `id` | yes | the id `model` selects |
+| `name` | no | display name; falls back to `id` |
+| `api` | yes | one of `openai-completions`, `openai-responses`, `anthropic-messages`, `google-generative-ai` |
+| `baseUrl` | yes | request base URL |
+| `context` | yes | context window in tokens |
+| `maxOutput` | yes | maximum output tokens |
+| `images` | yes | whether the model accepts image input |
+| `reasoning` | yes | whether the model reasons |
+| `effort` | no | accepted thinking levels; empty means the full ladder |
+| `cost` | yes | `[input, output, cache-read]` USD per million tokens |
 
 ## Environment
 

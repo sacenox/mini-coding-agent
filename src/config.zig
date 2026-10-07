@@ -12,12 +12,23 @@ pub const Api = enum {
     @"google-generative-ai",
 };
 
+pub const CustomModel = struct {
+    id: []const u8,
+    name: ?[]const u8 = null,
+    api: Api,
+    baseUrl: []const u8,
+    context: u64,
+    maxOutput: u64,
+    images: bool,
+    reasoning: bool,
+    effort: []const []const u8 = &.{},
+    cost: [3]f64,
+};
+
 pub const CustomProvider = struct {
     id: []const u8,
     name: ?[]const u8 = null,
-    baseUrl: []const u8,
-    api: Api,
-    models: []const []const u8,
+    models: []const CustomModel,
     envKeys: []const []const u8 = &.{},
     headers: ?std.json.ArrayHashMap([]const u8) = null,
 };
