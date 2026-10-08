@@ -12,7 +12,9 @@ Requires Zig 0.16.0.
 
     zig build
 
-The binary lands at `zig-out/bin/mini`.
+The binary lands at `zig-out/bin/mini`. `zig build run -- <args>` builds and
+runs it. Provider model metadata is embedded from `src/models_dev.json`; refresh
+it with `python3 tools/gen_models_dev.py`.
 
 ## Run
 
@@ -28,7 +30,8 @@ Arguments:
 | `-c`, `--config` | read a config file after the global one; its keys win |
 
 `-p` requires a model in the config. Without one it exits 1 and prints where
-the config lives. Interactive mode requires a TTY.
+the config lives. Interactive mode requires a TTY. In `-p` mode tool calls and
+tool output go to stderr, the assistant text to stdout; a failed turn exits 1.
 
 ## TUI commands
 
@@ -95,6 +98,7 @@ A full example:
       "models": [
         {
           "id": "qwen3-coder",
+          "name": "Qwen3 Coder",
           "api": "openai-completions",
           "baseUrl": "http://127.0.0.1:11434/v1",
           "context": 32768,

@@ -1,12 +1,14 @@
 # mini-coding-agent (`mini` for short)
 
-A fast, transparent, config-first terminal coding agent.
+A fast, transparent, config-first terminal coding agent written in Zig.
 
 The source code is the source of truth for behavior. If a fact can be learned
 by reading the code, it does not belong here; keep this file short.
 
 ## Guardrails
 
+- Minimalist by design.
+- Lightweight! Single binary, fast to boot and low memory usage.
 - No sandbox or permission layer. Tools run with the user's permissions;
   isolation is an environment concern (`nono`), not the agent's.
 - No loop limits. No max turns, tool calls, token budgets, or agent-imposed
@@ -17,8 +19,6 @@ by reading the code, it does not belong here; keep this file short.
 - Minimal context. The model sees the configured system prompt plus explicitly
   opted-in resource files — never reminders, hidden blocks, or harness
   meta-text.
-- Never invent a parallel model. Consume `pi-ai`'s `Message` and stream types
-  directly.
 - The agent never imports the TUI. Headless and TUI are two projections of the
   same agent events; the TUI owns no agent or provider semantics.
 - Sessions are append-only JSONL, one message per line, fsynced on write. Never
@@ -38,12 +38,11 @@ by reading the code, it does not belong here; keep this file short.
   plain-typed.
 - Ask before adding a dependency.
 - Do not add tests unless explicitly asked; verify manually.
-- Before finishing, review the diff against the guardrails, remove anything that
-  added scope, and report any requirement you could not satisfy.
+- We are the maintainers of this codebase, treat it with care and attention to detail.
 
 ## Verification
 
-**Do not stand up mock servers, fixture endpoints, replay files, or mock
+**Do not stand up mock servers, fixture endpoints, replay files, throwaway scripts, or mock
 terminals**; they prove nothing.
 
 Use a real bash call for headless runs, and the `tools/stress.sh` script for TUI
@@ -52,8 +51,7 @@ runs.
 ### Provider
 
 Verify against the real provider. Use the `OPENCODE_API_KEY` environment
-variable and a scratch `XDG_CONFIG_HOME` with a `mini-coding-agent/config.json`
-that declares the provider under test.
+variable and a `config.json` that declares the provider under test.
 
 Use these models:
 
@@ -76,3 +74,4 @@ its truecolor SGR to `final.txt` (scrollback) and `final-screen.txt` (live
 screen). The last line reports frames, wall time, and achieved fps; an
 `ended early: MINI-EXIT <n>` line means the app died, and `final.txt` holds the
 dump.
+Make sure to review both images and text, so you can inspect the TUI themeing.
