@@ -1,4 +1,5 @@
 const std = @import("std");
+const render = @import("render.zig");
 
 pub const Key = union(enum) {
     text: []const u8,
@@ -261,5 +262,5 @@ fn normalizePaste(a: std.mem.Allocator, text: []const u8) []const u8 {
             out.append(a, text[i]) catch {};
         }
     }
-    return out.items;
+    return render.stripAnsi(a, render.sanitize(a, out.items));
 }

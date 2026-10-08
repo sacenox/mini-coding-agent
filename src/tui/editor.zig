@@ -51,12 +51,6 @@ fn sub(a: std.mem.Allocator, line: []const u8, start: usize, end: usize) []const
     return a.dupe(u8, line[s..e]) catch "";
 }
 
-fn cat(a: std.mem.Allocator, parts: []const []const u8) []const u8 {
-    var out: std.ArrayList(u8) = .empty;
-    for (parts) |p| out.appendSlice(a, p) catch {};
-    return out.items;
-}
-
 fn wordStart(line: []const u8, col: usize) usize {
     var i = col;
     while (i > 0 and isSpace(cpAt(line, i - 1))) i -= 1;
@@ -80,32 +74,41 @@ pub const Render = struct {
 
 pub const Action = enum { submit, changed, none };
 
+const Line = std.ArrayList(u8);
+
 pub const Editor = struct {
-    lines: std.ArrayList([]const u8) = .empty,
+    lines: std.ArrayList(Line) = .empty,
     row: usize = 0,
     col: usize = 0,
     width: usize = 80,
-    a: std.mem.Allocator,
+    arena: std.heap.ArenaAllocator,
+    a: std.mem.Allocator = undefined,
     s: std.mem.Allocator = undefined,
 
-    pub fn init(a: std.mem.Allocator) Editor {
-        var e = Editor{ .a = a };
-        e.lines.append(a, "") catch {};
-        return e;
+    pub fn init(backing: std.mem.Allocator) Editor {
+        return .{ .arena = std.heap.ArenaAllocator.init(backing) };
+    }
+
+    pub fn bind(self: *Editor) void {
+        self.a = self.arena.allocator();
+        self.lines = .empty;
+        self.lines.append(self.a, .empty) catch {};
     }
 
     pub fn contents(self: *Editor) []const u8 {
         var out: std.ArrayList(u8) = .empty;
         for (self.lines.items, 0..) |line, i| {
             if (i > 0) out.append(self.a, '\n') catch {};
-            out.appendSlice(self.a, line) catch {};
+            out.appendSlice(self.a, line.items) catch {};
         }
         return out.items;
     }
 
     pub fn clear(self: *Editor) void {
+        _ = self.arena.reset(.retain_capacity);
+        self.a = self.arena.allocator();
         self.lines = .empty;
-        self.lines.append(self.a, "") catch {};
+        self.lines.append(self.a, .empty) catch {};
         self.row = 0;
         self.col = 0;
     }
@@ -113,10 +116,14 @@ pub const Editor = struct {
     pub fn setText(self: *Editor, draft: []const u8) void {
         self.lines = .empty;
         var it = std.mem.splitScalar(u8, draft, '\n');
-        while (it.next()) |line| self.lines.append(self.a, self.a.dupe(u8, line) catch "") catch {};
-        if (self.lines.items.len == 0) self.lines.append(self.a, "") catch {};
+        while (it.next()) |text| {
+            var line: Line = .empty;
+            line.appendSlice(self.a, text) catch {};
+            self.lines.append(self.a, line) catch {};
+        }
+        if (self.lines.items.len == 0) self.lines.append(self.a, .empty) catch {};
         self.row = self.lines.items.len - 1;
-        self.col = cpLen(self.lines.items[self.row]);
+        self.col = cpLen(self.lines.items[self.row].items);
     }
 
     pub fn handle(self: *Editor, key: input.Key) Action {
@@ -171,7 +178,7 @@ pub const Editor = struct {
                 return .changed;
             },
             .end => {
-                self.col = cpLen(self.lines.items[self.row]);
+                self.col = cpLen(self.lines.items[self.row].items);
                 return .changed;
             },
             .doc_start => {
@@ -181,7 +188,7 @@ pub const Editor = struct {
             },
             .doc_end => {
                 self.row = self.lines.items.len - 1;
-                self.col = cpLen(self.lines.items[self.row]);
+                self.col = cpLen(self.lines.items[self.row].items);
                 return .changed;
             },
             else => return .none,
@@ -221,7 +228,7 @@ pub const Editor = struct {
 
     fn caret(self: *Editor) struct { row: usize, col: usize } {
         const width = @max(self.width, 1);
-        const line = self.lines.items[self.row];
+        const line = self.lines.items[self.row].items;
         const cell = self.cells(line)[self.col];
         const rows = render.wrapLine(self.s, render.expandTabs(self.s, line, TAB), width);
         var used: usize = 0;
@@ -242,10 +249,10 @@ pub const Editor = struct {
         var caret_line: usize = 0;
         var caret_cell: usize = 0;
         for (self.lines.items, 0..) |line, i| {
-            heights[i] = physicalRows(render.expandTabs(self.s, line, TAB), self.width);
+            heights[i] = physicalRows(render.expandTabs(self.s, line.items, TAB), self.width);
             if (i == self.row) {
                 caret_line = i;
-                caret_cell = self.cells(line)[self.col];
+                caret_cell = self.cells(line.items)[self.col];
             }
         }
         var start = caret_line;
@@ -259,52 +266,59 @@ pub const Editor = struct {
             used += heights[end];
             end += 1;
         }
+        var rows: std.ArrayList([]const u8) = .empty;
+        for (self.lines.items[start..end]) |line| rows.append(self.s, line.items) catch {};
         return .{
-            .rows = self.lines.items[start..end],
+            .rows = rows.items,
             .cursor_row = caret_line - start,
             .cursor_col = caret_cell,
         };
     }
 
     fn insert(self: *Editor, draft: []const u8) void {
-        const current = self.lines.items[self.row];
-        var parts = std.mem.splitScalar(u8, draft, '\n');
-        const first = parts.next() orelse "";
-        var rest: std.ArrayList([]const u8) = .empty;
-        while (parts.next()) |p| rest.append(self.a, p) catch {};
-        const before = sub(self.a, current, 0, self.col);
-        const after = sub(self.a, current, self.col, cpLen(current));
-        if (rest.items.len == 0) {
-            self.lines.items[self.row] = cat(self.a, &.{ before, first, after });
-            self.col += cpLen(first);
+        const line = &self.lines.items[self.row];
+        const at = byteOf(line.items, self.col);
+        if (std.mem.indexOfScalar(u8, draft, '\n') == null) {
+            line.insertSlice(self.a, at, draft) catch {};
+            self.col += cpLen(draft);
             return;
         }
-        const head = cat(self.a, &.{ before, first });
-        const tail = cat(self.a, &.{ rest.items[rest.items.len - 1], after });
-        self.lines.items[self.row] = head;
-        var insert_at = self.row + 1;
-        for (rest.items[0 .. rest.items.len - 1]) |m| {
-            self.lines.insert(self.a, insert_at, m) catch {};
-            insert_at += 1;
+        const tail = self.a.dupe(u8, line.items[at..]) catch "";
+        line.shrinkRetainingCapacity(at);
+        var parts = std.mem.splitScalar(u8, draft, '\n');
+        line.appendSlice(self.a, parts.next() orelse "") catch {};
+        var fresh: std.ArrayList(Line) = .empty;
+        while (parts.next()) |text| {
+            var l: Line = .empty;
+            l.appendSlice(self.a, text) catch {};
+            fresh.append(self.s, l) catch {};
         }
-        self.lines.insert(self.a, insert_at, tail) catch {};
-        self.row += rest.items.len;
-        self.col = cpLen(rest.items[rest.items.len - 1]);
+        const lasti = fresh.items.len - 1;
+        const anchor = cpLen(fresh.items[lasti].items);
+        fresh.items[lasti].appendSlice(self.a, tail) catch {};
+        var at_row = self.row + 1;
+        for (fresh.items) |l| {
+            self.lines.insert(self.a, at_row, l) catch {};
+            at_row += 1;
+        }
+        self.row = at_row - 1;
+        self.col = anchor;
     }
 
     fn backspace(self: *Editor) void {
         if (self.col > 0) {
-            const line = self.lines.items[self.row];
-            const before = sub(self.a, line, 0, self.col - 1);
-            const after = sub(self.a, line, self.col, cpLen(line));
-            self.lines.items[self.row] = cat(self.a, &.{ before, after });
+            const line = &self.lines.items[self.row];
+            const from = byteOf(line.items, self.col - 1);
+            const to = byteOf(line.items, self.col);
+            line.replaceRange(self.a, from, to - from, "") catch {};
             self.col -= 1;
             return;
         }
         if (self.row > 0) {
-            const prev = self.lines.items[self.row - 1];
-            const previous = cpLen(prev);
-            self.lines.items[self.row - 1] = cat(self.a, &.{ prev, self.lines.items[self.row] });
+            const prev = &self.lines.items[self.row - 1];
+            const cur = self.lines.items[self.row];
+            const previous = cpLen(prev.items);
+            prev.appendSlice(self.a, cur.items) catch {};
             _ = self.lines.orderedRemove(self.row);
             self.row -= 1;
             self.col = previous;
@@ -312,16 +326,18 @@ pub const Editor = struct {
     }
 
     fn deleteForward(self: *Editor) void {
-        const line = self.lines.items[self.row];
-        const n = cpLen(line);
+        const line = &self.lines.items[self.row];
+        const n = cpLen(line.items);
         if (self.col < n) {
-            const before = sub(self.a, line, 0, self.col);
-            const after = sub(self.a, line, self.col + 1, n);
-            self.lines.items[self.row] = cat(self.a, &.{ before, after });
+            const from = byteOf(line.items, self.col);
+            const to = byteOf(line.items, self.col + 1);
+            line.replaceRange(self.a, from, to - from, "") catch {};
             return;
         }
         if (self.row < self.lines.items.len - 1) {
-            self.lines.items[self.row] = cat(self.a, &.{ line, self.lines.items[self.row + 1] });
+            const cur = &self.lines.items[self.row];
+            const next = self.lines.items[self.row + 1];
+            cur.appendSlice(self.a, next.items) catch {};
             _ = self.lines.orderedRemove(self.row + 1);
         }
     }
@@ -331,12 +347,12 @@ pub const Editor = struct {
             self.col -= 1;
         } else if (self.row > 0) {
             self.row -= 1;
-            self.col = cpLen(self.lines.items[self.row]);
+            self.col = cpLen(self.lines.items[self.row].items);
         }
     }
 
     fn right(self: *Editor) void {
-        if (self.col < cpLen(self.lines.items[self.row])) {
+        if (self.col < cpLen(self.lines.items[self.row].items)) {
             self.col += 1;
         } else if (self.row < self.lines.items.len - 1) {
             self.row += 1;
@@ -346,7 +362,7 @@ pub const Editor = struct {
 
     fn up(self: *Editor) void {
         const width = @max(self.width, 1);
-        const line = self.lines.items[self.row];
+        const line = self.lines.items[self.row].items;
         const ct = self.caret();
         if (ct.row > 0) {
             self.col = self.colAtCell(line, self.cells(line)[self.col] - width);
@@ -354,7 +370,7 @@ pub const Editor = struct {
         }
         if (self.row == 0) return;
         self.row -= 1;
-        const previous = self.lines.items[self.row];
+        const previous = self.lines.items[self.row].items;
         const expanded = render.expandTabs(self.s, previous, TAB);
         const last_row = render.wrapLine(self.s, expanded, width).len - 1;
         self.col = self.colAtCell(previous, last_row * width + ct.col);
@@ -362,7 +378,7 @@ pub const Editor = struct {
 
     fn down(self: *Editor) void {
         const width = @max(self.width, 1);
-        const line = self.lines.items[self.row];
+        const line = self.lines.items[self.row].items;
         const ct = self.caret();
         const expanded = render.expandTabs(self.s, line, TAB);
         if (ct.row < render.wrapLine(self.s, expanded, width).len - 1) {
@@ -371,11 +387,11 @@ pub const Editor = struct {
         }
         if (self.row == self.lines.items.len - 1) return;
         self.row += 1;
-        self.col = self.colAtCell(self.lines.items[self.row], ct.col);
+        self.col = self.colAtCell(self.lines.items[self.row].items, ct.col);
     }
 
     fn wordLeft(self: *Editor) void {
-        const line = self.lines.items[self.row];
+        const line = self.lines.items[self.row].items;
         const start = wordStart(line, self.col);
         if (start != self.col) {
             self.col = start;
@@ -383,12 +399,12 @@ pub const Editor = struct {
         }
         if (self.row == 0) return;
         self.row -= 1;
-        const previous = self.lines.items[self.row];
+        const previous = self.lines.items[self.row].items;
         self.col = wordStart(previous, cpLen(previous));
     }
 
     fn wordRight(self: *Editor) void {
-        const line = self.lines.items[self.row];
+        const line = self.lines.items[self.row].items;
         const end = wordEnd(line, self.col);
         if (end != self.col) {
             self.col = end;
@@ -396,28 +412,28 @@ pub const Editor = struct {
         }
         if (self.row == self.lines.items.len - 1) return;
         self.row += 1;
-        self.col = wordEnd(self.lines.items[self.row], 0);
+        self.col = wordEnd(self.lines.items[self.row].items, 0);
     }
 
     fn wordBack(self: *Editor) void {
-        const line = self.lines.items[self.row];
-        const start = wordStart(line, self.col);
-        const before = sub(self.a, line, 0, start);
-        const after = sub(self.a, line, self.col, cpLen(line));
-        self.lines.items[self.row] = cat(self.a, &.{ before, after });
+        const line = &self.lines.items[self.row];
+        const start = wordStart(line.items, self.col);
+        const from = byteOf(line.items, start);
+        const to = byteOf(line.items, self.col);
+        line.replaceRange(self.a, from, to - from, "") catch {};
         self.col = start;
     }
 
     pub fn completeWord(self: *Editor, step: *const fn (word: []const u8) ?[]const u8) bool {
-        const line = self.lines.items[self.row];
-        const start = wordStart(line, self.col);
+        const line = &self.lines.items[self.row];
+        const start = wordStart(line.items, self.col);
         if (start == self.col) return false;
-        if (isSpace(cpAt(line, self.col - 1))) return false;
-        const word = sub(self.a, line, start, self.col);
+        if (isSpace(cpAt(line.items, self.col - 1))) return false;
+        const word = sub(self.s, line.items, start, self.col);
         const completed = step(word) orelse return false;
-        const before = sub(self.a, line, 0, start);
-        const after = sub(self.a, line, self.col, cpLen(line));
-        self.lines.items[self.row] = cat(self.a, &.{ before, completed, after });
+        const from = byteOf(line.items, start);
+        const to = byteOf(line.items, self.col);
+        line.replaceRange(self.a, from, to - from, completed) catch {};
         self.col = start + cpLen(completed);
         return true;
     }

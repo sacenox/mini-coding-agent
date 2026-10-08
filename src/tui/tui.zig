@@ -54,6 +54,7 @@ const Tui = struct {
     editor: editor_mod.Editor,
     live: screen.LiveRegion = .{},
     messages: std.ArrayList(types.Message) = .empty,
+    backing: std.mem.Allocator = undefined,
     arena: std.heap.ArenaAllocator,
     a: std.mem.Allocator,
     scratch: std.heap.ArenaAllocator,
@@ -115,6 +116,7 @@ const Tui = struct {
             .cfg = cfg,
             .tool_names = tool_names,
             .editor = undefined,
+            .backing = a,
             .arena = std.heap.ArenaAllocator.init(a),
             .a = undefined,
             .scratch = std.heap.ArenaAllocator.init(a),
@@ -133,10 +135,13 @@ const Tui = struct {
         self.s = self.scratch.allocator();
         self.sa = self.sarena.allocator();
         self.q = self.qarena.allocator();
-        self.editor = editor_mod.Editor.init(self.a);
+        self.editor = editor_mod.Editor.init(self.backing);
+        self.editor.bind();
         self.editor.s = self.s;
-        self.reply = stream.MarkdownStream.init(self.a);
-        self.activity = stream.TailStream.init(self.a);
+        self.reply = stream.MarkdownStream.init(self.backing);
+        self.reply.bind();
+        self.activity = stream.TailStream.init(self.backing);
+        self.activity.bind();
         self.scrollback.a = self.a;
         self.scrollback.scratch = self.sa;
     }
@@ -247,8 +252,8 @@ const Tui = struct {
         const height = @max(self.term.height() - 1, 1);
         const status = self.statusLine();
 
-        var inflight = self.reply.pending();
-        if (inflight.len == 0) inflight = self.activity.pending();
+        var inflight = self.reply.pending(self.s);
+        if (inflight.len == 0) inflight = self.activity.pending(self.s);
         const rows = render.plainRows(self.s, inflight);
 
         const status_rows = physicalRows(status, width);
@@ -301,14 +306,14 @@ const Tui = struct {
             .text => |delta| {
                 self.activity.reset();
                 self.streamed.appendSlice(self.a, delta) catch {};
-                self.commitLines(self.reply.feed(delta));
+                self.commitLines(self.reply.feed(self.s, delta));
             },
             .reasoning => |delta| {
-                if (self.reply.pending().len == 0) self.activity.feed(delta);
+                if (self.reply.pending(self.s).len == 0) self.activity.feed(delta);
             },
             .tool_call => |tc| {
                 self.keepName(&self.writing_tool, null);
-                self.commitLines(self.reply.flush());
+                self.commitLines(self.reply.flush(self.s));
                 self.activity.reset();
                 self.pending_calls.append(self.a, .{
                     .name = self.a.dupe(u8, tc.name) catch "",
@@ -336,20 +341,20 @@ const Tui = struct {
         self.keepName(&self.writing_tool, null);
         self.paused = false;
         self.activity.reset();
-        self.commitLines(self.reply.flush());
+        self.commitLines(self.reply.flush(self.s));
         self.flushCalls();
         self.note(line);
     }
 
     fn commitMessage(self: *Tui, am: *types.AssistantMessage) void {
         self.activity.reset();
-        self.commitLines(self.reply.flush());
+        self.commitLines(self.reply.flush(self.s));
         defer self.streamed.clearRetainingCapacity();
         const text = types.assistantText(self.s, am) catch return;
         const trimmed = std.mem.trim(u8, text, " \t\r\n");
         if (trimmed.len > 0 and std.mem.indexOf(u8, self.streamed.items, trimmed) == null) {
-            self.commitLines(self.reply.feed(trimmed));
-            self.commitLines(self.reply.flush());
+            self.commitLines(self.reply.feed(self.s, trimmed));
+            self.commitLines(self.reply.flush(self.s));
         }
     }
 
@@ -433,7 +438,7 @@ const Tui = struct {
     }
 
     fn submit(self: *Tui) void {
-        const text = self.editor.contents();
+        const text = self.a.dupe(u8, self.editor.contents()) catch return;
         if (self.active) {
             if (self.paused) {
                 self.editor.clear();

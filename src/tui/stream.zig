@@ -35,22 +35,27 @@ fn isFenceClose(line: []const u8, marker: []const u8) bool {
 }
 
 pub const MarkdownStream = struct {
-    a: std.mem.Allocator,
+    arena: std.heap.ArenaAllocator,
+    a: std.mem.Allocator = undefined,
     rest: std.ArrayList(u8) = .empty,
     fence: ?struct { marker: []const u8, info: []const u8, lines: std.ArrayList([]const u8) } = null,
     prose: std.ArrayList([]const u8) = .empty,
 
-    pub fn init(a: std.mem.Allocator) MarkdownStream {
-        return .{ .a = a };
+    pub fn init(backing: std.mem.Allocator) MarkdownStream {
+        return .{ .arena = std.heap.ArenaAllocator.init(backing) };
     }
 
-    pub fn feed(self: *MarkdownStream, delta: []const u8) []BodyLine {
+    pub fn bind(self: *MarkdownStream) void {
+        self.a = self.arena.allocator();
+    }
+
+    pub fn feed(self: *MarkdownStream, out_a: std.mem.Allocator, delta: []const u8) []BodyLine {
         self.rest.appendSlice(self.a, delta) catch {};
         var out: std.ArrayList(BodyLine) = .empty;
         var i: usize = 0;
         while (std.mem.indexOfScalarPos(u8, self.rest.items, i, '\n')) |nl| {
             const line = self.a.dupe(u8, self.rest.items[i..nl]) catch "";
-            self.commit(line, &out);
+            self.commit(out_a, line, &out);
             i = nl + 1;
         }
         if (i > 0) {
@@ -61,75 +66,75 @@ pub const MarkdownStream = struct {
         return out.items;
     }
 
-    fn commit(self: *MarkdownStream, line: []const u8, out: *std.ArrayList(BodyLine)) void {
+    fn commit(self: *MarkdownStream, out_a: std.mem.Allocator, line: []const u8, out: *std.ArrayList(BodyLine)) void {
         if (self.fence) |*f| {
             if (isFenceClose(line, f.marker)) {
-                self.releaseFence(line, out);
+                self.releaseFence(out_a, line, out);
             } else {
                 f.lines.append(self.a, line) catch {};
             }
             return;
         }
         if (isFenceOpen(line)) |open| {
-            self.releaseProse("", out);
+            self.releaseProse(out_a, "", out);
             var fl: std.ArrayList([]const u8) = .empty;
             fl.append(self.a, line) catch {};
             self.fence = .{ .marker = open.marker, .info = open.info, .lines = fl };
             return;
         }
         if (std.mem.trim(u8, line, " \t\r").len == 0) {
-            self.releaseProse("", out);
-            out.append(self.a, .{ .text = line }) catch {};
+            self.releaseProse(out_a, "", out);
+            out.append(out_a, .{ .text = line }) catch {};
             return;
         }
         self.prose.append(self.a, line) catch {};
     }
 
-    fn releaseProse(self: *MarkdownStream, tail: []const u8, out: *std.ArrayList(BodyLine)) void {
+    fn releaseProse(self: *MarkdownStream, out_a: std.mem.Allocator, tail: []const u8, out: *std.ArrayList(BodyLine)) void {
         var prose = self.prose;
         self.prose = .empty;
         if (tail.len > 0) prose.append(self.a, tail) catch {};
         if (prose.items.len == 0) return;
         var joined: std.ArrayList(u8) = .empty;
         for (prose.items, 0..) |l, i| {
-            if (i > 0) joined.append(self.a, '\n') catch {};
-            joined.appendSlice(self.a, l) catch {};
+            if (i > 0) joined.append(out_a, '\n') catch {};
+            joined.appendSlice(out_a, l) catch {};
         }
-        joined.append(self.a, '\n') catch {};
-        emitHighlighted(self.a, highlight.highlightMarkdown(self.a, highlight.formatTables(self.a, joined.items)), out);
+        joined.append(out_a, '\n') catch {};
+        emitHighlighted(out_a, highlight.highlightMarkdown(out_a, highlight.formatTables(out_a, joined.items)), out);
     }
 
-    fn releaseFence(self: *MarkdownStream, closing: ?[]const u8, out: *std.ArrayList(BodyLine)) void {
+    fn releaseFence(self: *MarkdownStream, out_a: std.mem.Allocator, closing: ?[]const u8, out: *std.ArrayList(BodyLine)) void {
         const f = self.fence.?;
         self.fence = null;
-        out.append(self.a, .{ .text = highlight.highlightMarkdown(self.a, f.lines.items[0]) }) catch {};
+        out.append(out_a, .{ .text = highlight.highlightMarkdown(out_a, f.lines.items[0]) }) catch {};
         if (f.lines.items.len > 1) {
             var body: std.ArrayList(u8) = .empty;
             for (f.lines.items[1..], 0..) |l, i| {
-                if (i > 0) body.append(self.a, '\n') catch {};
-                body.appendSlice(self.a, l) catch {};
+                if (i > 0) body.append(out_a, '\n') catch {};
+                body.appendSlice(out_a, l) catch {};
             }
-            var it = std.mem.splitScalar(u8, highlight.highlightCode(self.a, f.info, body.items), '\n');
-            while (it.next()) |l| out.append(self.a, .{ .text = l }) catch {};
+            var it = std.mem.splitScalar(u8, highlight.highlightCode(out_a, f.info, body.items), '\n');
+            while (it.next()) |l| out.append(out_a, .{ .text = l }) catch {};
         }
-        if (closing) |c| out.append(self.a, .{ .text = highlight.highlightMarkdown(self.a, c) }) catch {};
+        if (closing) |c| out.append(out_a, .{ .text = highlight.highlightMarkdown(out_a, c) }) catch {};
     }
 
-    pub fn pending(self: *MarkdownStream) []BodyLine {
+    pub fn pending(self: *MarkdownStream, out_a: std.mem.Allocator) []BodyLine {
         var out: std.ArrayList(BodyLine) = .empty;
         const held: []const []const u8 = if (self.fence) |f| f.lines.items else self.prose.items;
-        for (held) |l| out.append(self.a, .{ .text = l }) catch {};
-        if (self.rest.items.len > 0) out.append(self.a, .{ .text = self.rest.items }) catch {};
+        for (held) |l| out.append(out_a, .{ .text = l }) catch {};
+        if (self.rest.items.len > 0) out.append(out_a, .{ .text = self.rest.items }) catch {};
         return out.items;
     }
 
-    pub fn flush(self: *MarkdownStream) []BodyLine {
+    pub fn flush(self: *MarkdownStream, out_a: std.mem.Allocator) []BodyLine {
         var out: std.ArrayList(BodyLine) = .empty;
         if (self.fence != null) {
-            self.releaseFence(null, &out);
-            if (self.rest.items.len > 0) out.append(self.a, .{ .text = highlight.highlightMarkdown(self.a, self.rest.items) }) catch {};
+            self.releaseFence(out_a, null, &out);
+            if (self.rest.items.len > 0) out.append(out_a, .{ .text = highlight.highlightMarkdown(out_a, self.rest.items) }) catch {};
         } else {
-            self.releaseProse(self.rest.items, &out);
+            self.releaseProse(out_a, self.rest.items, &out);
         }
         self.reset();
         return out.items;
@@ -139,6 +144,8 @@ pub const MarkdownStream = struct {
         self.rest = .empty;
         self.fence = null;
         self.prose = .empty;
+        _ = self.arena.reset(.retain_capacity);
+        self.a = self.arena.allocator();
     }
 };
 
@@ -159,11 +166,16 @@ fn emitHighlighted(a: std.mem.Allocator, text: []const u8, out: *std.ArrayList(B
 }
 
 pub const TailStream = struct {
-    a: std.mem.Allocator,
+    arena: std.heap.ArenaAllocator,
+    a: std.mem.Allocator = undefined,
     rest: std.ArrayList(u8) = .empty,
 
-    pub fn init(a: std.mem.Allocator) TailStream {
-        return .{ .a = a };
+    pub fn init(backing: std.mem.Allocator) TailStream {
+        return .{ .arena = std.heap.ArenaAllocator.init(backing) };
+    }
+
+    pub fn bind(self: *TailStream) void {
+        self.a = self.arena.allocator();
     }
 
     pub fn feed(self: *TailStream, delta: []const u8) void {
@@ -175,16 +187,18 @@ pub const TailStream = struct {
         }
     }
 
-    pub fn pending(self: *TailStream) []BodyLine {
+    pub fn pending(self: *TailStream, out_a: std.mem.Allocator) []BodyLine {
         var out: std.ArrayList(BodyLine) = .empty;
         if (self.rest.items.len > 0) {
-            const text = render.stripAnsi(self.a, self.rest.items);
-            out.append(self.a, .{ .text = text, .style = .{ .fg = theme.current.comment } }) catch {};
+            const text = render.stripAnsi(out_a, self.rest.items);
+            out.append(out_a, .{ .text = text, .style = .{ .fg = theme.current.comment } }) catch {};
         }
         return out.items;
     }
 
     pub fn reset(self: *TailStream) void {
         self.rest = .empty;
+        _ = self.arena.reset(.retain_capacity);
+        self.a = self.arena.allocator();
     }
 };
