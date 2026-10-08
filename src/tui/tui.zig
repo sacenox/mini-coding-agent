@@ -363,7 +363,7 @@ const Tui = struct {
         const shown = render.stripAnsi(self.s, text);
         if (self.pending_calls.items.len > 0) {
             const call = self.pending_calls.orderedRemove(0);
-            self.commitLines(&.{tool_view.callBody(self.s, call.name, call.summary)});
+            self.commitLines(tool_view.callBody(self.s, call.name, call.summary));
         }
         const width = @max(self.term.width() - BODY_PREFIX.len, 1);
         const lines: []const render.BodyLine = if (!is_error and body != null)
@@ -386,7 +386,7 @@ const Tui = struct {
     fn flushCalls(self: *Tui) void {
         for (self.pending_calls.items) |call| {
             self.scrollback.separator = true;
-            self.commitLines(&.{tool_view.callBody(self.s, call.name, call.summary)});
+            self.commitLines(tool_view.callBody(self.s, call.name, call.summary));
         }
         self.pending_calls.clearRetainingCapacity();
     }
