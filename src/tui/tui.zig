@@ -80,6 +80,9 @@ const Tui = struct {
     detail: ?[]const u8 = null,
     writing_tool: ?[]const u8 = null,
     writing_bytes: usize = 0,
+    stream_kind: enum { none, reasoning, text, tool } = .none,
+    text_bytes: usize = 0,
+    reasoning_bytes: usize = 0,
     active: bool = false,
     paused: bool = false,
     pause_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -92,7 +95,6 @@ const Tui = struct {
     scrollback: screen.Scrollback = .{},
 
     reply: stream.MarkdownStream,
-    activity: stream.TailStream,
     pending_calls: std.ArrayList(PendingCall) = .empty,
     streamed: std.ArrayList(u8) = .empty,
     turn_start: i64 = 0,
@@ -137,7 +139,6 @@ const Tui = struct {
             .q = undefined,
             .model_arena = std.heap.ArenaAllocator.init(a),
             .reply = undefined,
-            .activity = undefined,
         };
     }
 
@@ -152,8 +153,6 @@ const Tui = struct {
         self.editor.s = self.s;
         self.reply = stream.MarkdownStream.init(self.backing);
         self.reply.bind();
-        self.activity = stream.TailStream.init(self.backing);
-        self.activity.bind();
         self.scrollback.a = self.a;
         self.scrollback.scratch = self.sa;
     }
@@ -209,29 +208,75 @@ const Tui = struct {
         const model = self.opts.model orelse return styles.dim(self.s, "no model configured");
         self.messages_mutex.lockUncancelable(platform.io);
         const used = usage_mod.estimateContextTokens(self.messages.items, self.opts.system_prompt, self.opts.tools_json);
+        const cache = usage_mod.lastUsage(self.messages.items);
         self.messages_mutex.unlock(platform.io);
-        const usage = usage_mod.contextUsageLine(self.s, used, model);
+        const info = std.fmt.allocPrint(self.s, "{s} · {s}", .{
+            usage_mod.contextUsageLine(self.s, used, model),
+            usage_mod.cacheLine(self.s, cache),
+        }) catch "ctx";
         if (self.paused or self.phase == .pausing) {
-            return std.fmt.allocPrint(self.s, "{s} · {s}", .{ styles.dim(self.s, "paused - type steering, Enter to submit"), usage }) catch usage;
+            return std.fmt.allocPrint(self.s, "{s} · {s}", .{ styles.dim(self.s, "paused - type steering, Enter to submit"), info }) catch info;
         }
         if (self.active and self.pause_requested.load(.seq_cst)) {
-            return std.fmt.allocPrint(self.s, "{s} · {s}", .{ styles.dim(self.s, "pausing - waiting for the step boundary"), usage }) catch usage;
+            return std.fmt.allocPrint(self.s, "{s} · {s}", .{ styles.dim(self.s, "pausing - waiting for the step boundary"), info }) catch info;
         }
-        if (!self.active or self.phase == .idle) return usage;
-        const label = switch (self.phase) {
-            .preparing => "preparing",
-            .waiting_model => "waiting for provider",
-            .streaming => if (self.writing_tool) |w| blk: {
-                if (self.writing_bytes == 0) break :blk std.fmt.allocPrint(self.s, "writing {s}", .{w}) catch "streaming";
-                const tokenest = (self.writing_bytes + 3) / 4;
-                break :blk std.fmt.allocPrint(self.s, "writing {s} · ~{s} tok", .{ w, usage_mod.formatTokens(self.s, tokenest) }) catch "streaming";
-            } else "streaming",
-            .running_tool => std.fmt.allocPrint(self.s, "running {s}", .{self.detail orelse "tool"}) catch "running tool",
-            else => "idle",
-        };
+        if (!self.active or self.phase == .idle) return info;
         const elapsed = @max(0, @divFloor(time.nowMs() - self.turn_start, 1000));
-        const ch = spinnerChar(self.frame);
-        return std.fmt.allocPrint(self.s, "{s} · {s}", .{ styles.dim(self.s, std.fmt.allocPrint(self.s, "{s} {s} · {d}s", .{ ch, label, elapsed }) catch label), usage }) catch usage;
+        return std.fmt.allocPrint(self.s, "{s} {s} · {s} · {s}", .{
+            styles.teal(self.s, spinnerChar(self.frame)),
+            self.stateLabel(),
+            styles.dim(self.s, std.fmt.allocPrint(self.s, "{d}s", .{elapsed}) catch ""),
+            info,
+        }) catch info;
+    }
+
+    fn stateLabel(self: *Tui) []const u8 {
+        const a = self.s;
+        var text: []const u8 = "idle";
+        var color: ?[]const u8 = null;
+        var bytes: usize = 0;
+        switch (self.phase) {
+            .preparing => text = "preparing",
+            .waiting_model => text = "waiting for provider",
+            .snapshotting => {
+                text = "snapshotting";
+                color = theme.current.warn;
+            },
+            .running_tool => {
+                text = std.fmt.allocPrint(a, "running tool call {s}", .{self.detail orelse "tool"}) catch "running tool call";
+                color = theme.current.prompt;
+            },
+            .streaming => switch (self.stream_kind) {
+                .tool => {
+                    text = std.fmt.allocPrint(a, "writing tool call {s}", .{self.writing_tool orelse "tool"}) catch "writing tool call";
+                    color = theme.current.prompt;
+                    bytes = self.writing_bytes;
+                },
+                .reasoning => {
+                    text = "reasoning";
+                    color = theme.current.prompt;
+                    bytes = self.reasoning_bytes;
+                },
+                .text => {
+                    text = "writing response";
+                    color = theme.current.prompt;
+                    bytes = self.text_bytes;
+                },
+                .none => text = "streaming",
+            },
+            else => {},
+        }
+        var out: std.ArrayList(u8) = .empty;
+        out.appendSlice(a, if (color) |c| styles.styledWith(a, .{ .fg = c }, text) else styles.dim(a, text)) catch {};
+        if (bytes > 0) {
+            const n = usage_mod.formatTokens(a, (bytes + 3) / 4);
+            out.appendSlice(a, styles.dim(a, std.fmt.allocPrint(a, " · ~{s} tok", .{n}) catch "")) catch {};
+        }
+        const queued = self.pending_calls.items.len -| @intFromBool(self.phase == .running_tool);
+        if (queued > 0) {
+            out.appendSlice(a, styles.dim(a, std.fmt.allocPrint(a, " · {d} queued", .{queued}) catch "")) catch {};
+        }
+        return out.items;
     }
 
     fn spinnerChar(frame: usize) []const u8 {
@@ -246,53 +291,17 @@ const Tui = struct {
         return " ";
     }
 
-    fn queueRows(self: *Tui, width: usize, budget: usize) []const []const u8 {
-        if (budget == 0) return &.{};
-        var out: std.ArrayList([]const u8) = .empty;
-        var used: usize = 0;
-        for (self.pending_calls.items, 0..) |call, i| {
-            for (tool_view.callRows(self.s, call, i == 0 and self.phase == .running_tool)) |row| {
-                const h = physicalRows(row, width);
-                if (used + h > budget and out.items.len > 0) break;
-                used += h;
-                out.append(self.s, row) catch {};
-            }
-        }
-        return out.items;
-    }
-
     fn draw(self: *Tui) void {
         if (self.closed) return;
         self.resetScratch();
         const width = @max(self.term.width(), 1);
         const height = @max(self.term.height() - 1, 1);
         const status = self.statusLine();
-
-        var inflight = self.reply.pending(self.s);
-        if (inflight.len == 0) inflight = self.activity.pending(self.s);
-        const rows = render.plainRows(self.s, inflight);
-
         const status_rows = physicalRows(status, width);
-        const room = if (height > status_rows + 1) height - status_rows - 1 else 0;
-        const queue = self.queueRows(width, room);
-        var queue_height: usize = 0;
-        for (queue) |r| queue_height += physicalRows(r, width);
-        const body_budget = if (room > queue_height) room - queue_height else 0;
-        var body_start = rows.len;
-        var body_used: usize = 0;
-        while (body_start > 0) {
-            const h = physicalRows(rows[body_start - 1], width);
-            if (body_used + h > body_budget) break;
-            body_used += h;
-            body_start -= 1;
-        }
-        const body = rows[body_start..];
-        const editor_budget = height -| (status_rows + queue_height + body_used);
+        const editor_budget = height -| status_rows;
         const ed = self.editor.layout(width, @max(editor_budget, 1));
 
         var lines: std.ArrayList([]const u8) = .empty;
-        for (body) |r| lines.append(self.s, r) catch {};
-        for (queue) |r| lines.append(self.s, r) catch {};
         lines.append(self.s, status) catch {};
         const caret_line = lines.items.len + ed.cursor_row;
         for (ed.rows) |r| lines.append(self.s, r) catch {};
@@ -318,35 +327,45 @@ const Tui = struct {
                 self.phase = p.phase;
                 self.keepName(&self.detail, p.detail);
                 if (p.phase == .pausing) self.paused = true;
+                if (p.phase == .waiting_model) {
+                    self.stream_kind = .none;
+                    self.text_bytes = 0;
+                    self.reasoning_bytes = 0;
+                }
             },
             .text => |delta| {
-                self.activity.reset();
+                self.stream_kind = .text;
+                self.text_bytes += delta.len;
                 self.streamed.appendSlice(self.a, delta) catch {};
                 self.commitLines(self.reply.feed(self.s, delta));
             },
             .reasoning => |delta| {
-                if (self.reply.pending(self.s).len == 0) self.activity.feed(delta);
+                self.stream_kind = .reasoning;
+                self.reasoning_bytes += delta.len;
             },
             .tool_call => |tc| {
+                self.stream_kind = .none;
                 self.keepName(&self.writing_tool, null);
                 self.commitLines(self.reply.flush(self.s));
-                self.activity.reset();
+                const summary = tool_view.callSummary(self.a, tc.name, tc.arguments);
+                const display = if (std.mem.eql(u8, tc.name, "read") or std.mem.eql(u8, tc.name, "edit"))
+                    tool_view.relativize(self.opts.session.cwd, summary)
+                else
+                    summary;
                 self.pending_calls.append(self.a, .{
                     .name = self.a.dupe(u8, tc.name) catch "",
-                    .summary = tool_view.callSummary(self.a, tc.name, tc.arguments),
+                    .summary = display,
                 }) catch {};
             },
             .tool_call_start => |name| {
+                self.stream_kind = .tool;
                 self.keepName(&self.writing_tool, name);
                 self.writing_bytes = 0;
             },
             .tool_args => |n| self.writing_bytes = n,
-            .tool_output => |chunk| self.activity.feed(chunk),
+            .tool_output => {},
             .message => |am| self.commitMessage(am),
-            .tool_result => |tr| {
-                self.activity.reset();
-                self.commitToolResult(tr.name, tr.text, tr.is_error, tr.diffs, tr.body);
-            },
+            .tool_result => |tr| self.commitToolResult(tr.name, tr.text, tr.is_error, tr.diffs, tr.body),
             .err => |m| self.endTurn(styles.red(self.s, std.fmt.allocPrint(self.s, "! {s}", .{m}) catch "! error")),
             .no_model => self.endTurn(styles.red(self.s, "! no model configured")),
             .cancelled => self.endTurn(styles.red(self.s, "! cancelled")),
@@ -360,14 +379,13 @@ const Tui = struct {
         self.keepName(&self.detail, null);
         self.keepName(&self.writing_tool, null);
         self.paused = false;
-        self.activity.reset();
+        self.stream_kind = .none;
         self.commitLines(self.reply.flush(self.s));
         self.flushCalls();
         self.note(line);
     }
 
     fn commitMessage(self: *Tui, am: *types.AssistantMessage) void {
-        self.activity.reset();
         self.commitLines(self.reply.flush(self.s));
         defer self.streamed.clearRetainingCapacity();
         const text = types.assistantText(self.s, am) catch return;
@@ -381,19 +399,23 @@ const Tui = struct {
     fn commitToolResult(self: *Tui, name: []const u8, text: []const u8, is_error: bool, diffs: []const common.FileDiff, body: ?[]const u8) void {
         self.scrollback.separator = true;
         const shown = render.stripAnsi(self.s, text);
+        const meta: ?[]const u8 = if (!is_error) body else null;
         if (self.pending_calls.items.len > 0) {
             const call = self.pending_calls.orderedRemove(0);
-            self.commitLines(tool_view.callBody(self.s, call.name, call.summary));
+            self.commitLines(tool_view.callBody(self.s, call.name, call.summary, meta));
         }
-        const width = @max(self.term.width() - BODY_PREFIX.len, 1);
-        const lines: []const render.BodyLine = if (!is_error and body != null)
-            &.{.{ .text = body.? }}
-        else
-            tool_view.resultLines(self.s, name, shown, is_error);
-        const rows = if (std.mem.eql(u8, name, "edit")) render.plainRows(self.s, lines) else render.bodyRows(self.s, lines, width);
-        for (rows, 0..) |row, i| {
-            const prefix = if (is_error and i == rows.len - 1) styles.red(self.s, ERROR_PREFIX) else styles.dim(self.s, BODY_PREFIX);
-            self.push(std.fmt.allocPrint(self.s, "{s}{s}", .{ prefix, row }) catch row);
+        if (meta == null) {
+            const width = @max(self.term.width() - BODY_PREFIX.len, 1);
+            const is_bash = std.mem.eql(u8, name, "bash");
+            const bash_exit: ?[]const u8 = if (is_bash) tool_view.exitLine(self.s, shown, is_error) else null;
+            const lines = tool_view.resultLines(self.s, name, shown);
+            const rows = if (std.mem.eql(u8, name, "edit")) render.plainRows(self.s, lines) else render.bodyRows(self.s, lines, width);
+            const mark_error = is_error and bash_exit == null;
+            for (rows, 0..) |row, i| {
+                const prefix = if (mark_error and i == rows.len - 1) styles.red(self.s, ERROR_PREFIX) else styles.dim(self.s, BODY_PREFIX);
+                self.push(std.fmt.allocPrint(self.s, "{s}{s}", .{ prefix, row }) catch row);
+            }
+            if (bash_exit) |status_line| self.push(status_line);
         }
         if (diffs.len > 0) {
             for (render.plainRows(self.s, diff_view.diffRows(self.s, diffs))) |row| {
@@ -406,7 +428,7 @@ const Tui = struct {
     fn flushCalls(self: *Tui) void {
         for (self.pending_calls.items) |call| {
             self.scrollback.separator = true;
-            self.commitLines(tool_view.callBody(self.s, call.name, call.summary));
+            self.commitLines(tool_view.callBody(self.s, call.name, call.summary, null));
         }
         self.pending_calls.clearRetainingCapacity();
     }

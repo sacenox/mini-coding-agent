@@ -63,3 +63,24 @@ pub fn contextUsageLine(a: std.mem.Allocator, used: u64, model: *const types.Mod
     const text = std.fmt.allocPrint(a, "ctx {s} · {d}%", .{ sizes, @as(u64, @intFromFloat(percent + 0.5)) }) catch "ctx";
     return if (percent >= 85) styles.yellow(a, text) else styles.dim(a, text);
 }
+
+pub fn lastUsage(messages: []const types.Message) types.Usage {
+    var out: types.Usage = .{};
+    for (messages) |m| {
+        if (m != .assistant) continue;
+        const am = m.assistant;
+        if (am.stop_reason == .aborted or am.stop_reason == .err) continue;
+        if (am.usage.total_tokens == 0) continue;
+        out = am.usage;
+    }
+    return out;
+}
+
+pub fn cacheLine(a: std.mem.Allocator, usage: types.Usage) []const u8 {
+    const prompt = usage.input + usage.cache_read + usage.cache_write;
+    const pct: u64 = if (prompt == 0)
+        0
+    else
+        @intFromFloat(@as(f64, @floatFromInt(usage.cache_read)) / @as(f64, @floatFromInt(prompt)) * 100.0 + 0.5);
+    return styles.dim(a, std.fmt.allocPrint(a, "cache {d}%", .{pct}) catch "cache");
+}

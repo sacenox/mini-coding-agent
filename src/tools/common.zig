@@ -11,11 +11,23 @@ pub const OutputFn = struct {
     }
 };
 
+pub const ToolPhase = enum { snapshotting, running };
+
+pub const PhaseFn = struct {
+    ctx: *anyopaque,
+    on_phase: *const fn (ctx: *anyopaque, phase: ToolPhase) void,
+
+    pub fn call(self: PhaseFn, phase: ToolPhase) void {
+        self.on_phase(self.ctx, phase);
+    }
+};
+
 pub const Context = struct {
     cancel: *const std.atomic.Value(bool),
     supports_images: bool,
     tools: []const config.ToolName = &.{},
     on_output: ?OutputFn = null,
+    on_phase: ?PhaseFn = null,
     snapshot_ignore_dirs: []const []const u8 = &.{},
     snapshot_uses_gitignore: bool = true,
 };

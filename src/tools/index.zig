@@ -17,10 +17,10 @@ const bash_params =
     \\{"type":"object","required":["command"],"properties":{"command":{"type":"string","description":"Command to run"},"timeout":{"type":"integer","description":"Timeout in seconds; defaults to 120"}},"additionalProperties":false}
 ;
 
-const read_description = "Read a file. Returns its text. Returns the whole file unless offset and range give a line window. Prefer bash for search or binary files.";
-const read_image_description = "Read a file. Returns its text, or the image itself when the file is a png, jpg, or webp. Returns the whole file unless offset and range give a line window. Prefer bash for search or binary files.";
+const read_description = "Read a file. Returns its text. Returns the whole file unless offset and range give a line window.";
+const read_image_description = "Read a file. Returns its text, or the image itself when the file is a png, jpg, or webp. Returns the whole file unless offset and range give a line window.";
 const edit_description = "Edit a file by exact text replacement. oldText must occur exactly once. With empty oldText, create a new file (fails if it exists).";
-const bash_description = "Run a bash command in the current working directory ({s}).";
+const bash_description = "Run a bash command. Commands run in dir: {s}";
 
 pub fn execute(a: std.mem.Allocator, scratch: std.mem.Allocator, name: []const u8, args_json: []const u8, ctx: common.Context) common.Result {
     const enabled = for (ctx.tools) |tool| {

@@ -263,4 +263,3 @@ pub fn bodyRows(a: std.mem.Allocator, lines: []const BodyLine, width: usize) []c
     for (rows[tail_at..]) |r| out.append(a, r) catch {};
     return out.items;
 }
-

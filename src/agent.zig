@@ -8,7 +8,7 @@ const session = @import("session.zig");
 const config = @import("config.zig");
 const time = @import("time.zig");
 
-pub const Phase = enum { preparing, waiting_model, streaming, running_tool, pausing, idle };
+pub const Phase = enum { preparing, waiting_model, streaming, running_tool, snapshotting, pausing, idle };
 
 pub const Event = union(enum) {
     phase: struct { phase: Phase, detail: ?[]const u8 = null },
@@ -74,6 +74,16 @@ fn unlockMessages(opts: Options) void {
 }
 
 const StreamCtx = struct { listener: Listener, started: bool = false };
+
+const ToolPhaseCtx = struct { listener: Listener, name: []const u8 };
+
+fn onToolPhase(ctx: *anyopaque, phase: common.ToolPhase) void {
+    const c: *ToolPhaseCtx = @ptrCast(@alignCast(ctx));
+    switch (phase) {
+        .snapshotting => c.listener.emit(.{ .phase = .{ .phase = .snapshotting } }),
+        .running => c.listener.emit(.{ .phase = .{ .phase = .running_tool, .detail = c.name } }),
+    }
+}
 
 fn onApiEvent(ctx: *anyopaque, event: api.Event) void {
     const stream_ctx: *StreamCtx = @ptrCast(@alignCast(ctx));
@@ -245,11 +255,13 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
             var result: ?common.Result = null;
             if (run_tools) {
                 listener.emit(.{ .phase = .{ .phase = .running_tool, .detail = call.name } });
+                var phase_ctx = ToolPhaseCtx{ .listener = listener, .name = call.name };
                 result = tools.execute(opts.a, scratch, call.name, call.arguments, .{
                     .cancel = opts.cancel,
                     .supports_images = opts.supports_images,
                     .tools = opts.config.tools,
                     .on_output = .{ .ctx = &stream_ctx.listener, .on_chunk = onToolOutput },
+                    .on_phase = .{ .ctx = &phase_ctx, .on_phase = onToolPhase },
                     .snapshot_ignore_dirs = opts.config.snapshot_ignore_dirs,
                     .snapshot_uses_gitignore = opts.config.snapshot_uses_gitignore,
                 });

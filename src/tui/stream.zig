@@ -1,5 +1,4 @@
 const std = @import("std");
-const theme = @import("theme.zig");
 const highlight = @import("highlight.zig");
 const render = @import("render.zig");
 
@@ -164,41 +163,3 @@ fn emitHighlighted(a: std.mem.Allocator, text: []const u8, out: *std.ArrayList(B
     }
     for (lines.items) |l| out.append(a, .{ .text = l }) catch {};
 }
-
-pub const TailStream = struct {
-    arena: std.heap.ArenaAllocator,
-    a: std.mem.Allocator = undefined,
-    rest: std.ArrayList(u8) = .empty,
-
-    pub fn init(backing: std.mem.Allocator) TailStream {
-        return .{ .arena = std.heap.ArenaAllocator.init(backing) };
-    }
-
-    pub fn bind(self: *TailStream) void {
-        self.a = self.arena.allocator();
-    }
-
-    pub fn feed(self: *TailStream, delta: []const u8) void {
-        self.rest.appendSlice(self.a, delta) catch {};
-        if (std.mem.lastIndexOfScalar(u8, self.rest.items, '\n')) |nl| {
-            const keep = self.rest.items[nl + 1 ..];
-            std.mem.copyForwards(u8, self.rest.items[0..keep.len], keep);
-            self.rest.items.len = keep.len;
-        }
-    }
-
-    pub fn pending(self: *TailStream, out_a: std.mem.Allocator) []BodyLine {
-        var out: std.ArrayList(BodyLine) = .empty;
-        if (self.rest.items.len > 0) {
-            const text = render.stripAnsi(out_a, self.rest.items);
-            out.append(out_a, .{ .text = text, .style = .{ .fg = theme.current.comment } }) catch {};
-        }
-        return out.items;
-    }
-
-    pub fn reset(self: *TailStream) void {
-        self.rest = .empty;
-        _ = self.arena.reset(.retain_capacity);
-        self.a = self.arena.allocator();
-    }
-};
