@@ -53,6 +53,19 @@ the config lives. Interactive mode requires a TTY.
 | `Ctrl+D` | exit on an empty draft |
 | `Tab` | complete command or path |
 
+While a turn is paused (`Esc`), submitting a message steers the running turn.
+
+## Tools
+
+The model sees only the tools listed in `tools`; a call to any other name is an
+error.
+
+| Tool | Behavior |
+|---|---|
+| `read` | returns a file's text; `offset` (1-based) and `range` give a line window; text is cut at 100k characters; binary files are refused; `png`/`jpg`/`webp` are returned as an image only when the model accepts image input |
+| `edit` | replaces `oldText`, which must occur exactly once; an empty `oldText` creates a new file and fails if it exists; prints a unified diff |
+| `bash` | runs `bash -c` in the cwd with a 120s default `timeout`; output keeps the first 10k and last 6k bytes; a before/after snapshot of the cwd reports changed files as diffs |
+
 ## Configure
 
 The config is one JSON object. It is read from
@@ -73,6 +86,8 @@ A full example:
   "discoverAgentFiles": true,
   "skillsDirs": ["/home/me/.agents/skills"],
   "tools": ["edit", "read", "bash"],
+  "snapshotIgnoreDirs": [".git"],
+  "snapshotUsesGitignore": true,
   "customProviders": [
     {
       "id": "local",
@@ -108,9 +123,11 @@ Keys:
 | `systemPrompt` | `""` | prepended to the system prompt |
 | `sessionsDir` | `$XDG_STATE_HOME/mini-coding-agent/sessions`, else `$HOME/.local/state/mini-coding-agent/sessions`, else `sessions` | where JSONL session logs go |
 | `discoverAgentFiles` | `true` | load `AGENTS.md`/`CLAUDE.md` from `$HOME/.agents` and the cwd |
-| `skillsDirs` | `[]` | directories holding `<name>/SKILL.md` skills |
+| `skillsDirs` | `[]` | directories holding `<name>/SKILL.md` skills; each `SKILL.md` needs a `name` in its frontmatter (optional `description`) |
 | `tools` | `["edit", "read", "bash"]` | which tools the model sees |
 | `customProviders` | `[]` | in-tree provider definitions |
+| `snapshotIgnoreDirs` | `[]` | directory names skipped when the `bash` tool snapshots the cwd for diffs |
+| `snapshotUsesGitignore` | `true` | also skip directories named in `.gitignore` when snapshotting |
 
 Unknown keys are rejected. `provider` and `model` must both be set to make a
 request; a custom provider must list the model in its `models`.
@@ -149,6 +166,8 @@ fails at request time.
 
 ## Sessions
 
-Each session is a JSONL directory under `sessionsDir`. Every message and every
-model request is appended and fsynced. The log is write-only; a write failure
-stops the turn.
+Each session is a directory under `sessionsDir` named
+`<timestamp>-<title>-<id>` with a `session.jsonl` inside it. The title is
+slugified from the first user message. A header line opens the log; every
+message and every model request is then appended and fsynced. The log is
+write-only; a write failure stops the turn.
