@@ -329,7 +329,7 @@ const State = struct {
                 if (delta.signature) |s| try block.signature.appendSlice(st.req.pers, s);
             } else if (std.mem.eql(u8, dt, "input_json_delta")) {
                 if (call) |c| {
-                    if (delta.partial_json) |s| try c.args.appendSlice(st.req.pers, s);
+                    if (delta.partial_json) |s| try c.grow(st.req.pers, st.sink, s);
                 }
             }
             return;

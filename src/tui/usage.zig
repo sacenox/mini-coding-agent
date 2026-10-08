@@ -43,7 +43,7 @@ fn estimateMessageTokens(m: types.Message) u64 {
     };
 }
 
-fn formatTokens(a: std.mem.Allocator, n: u64) []const u8 {
+pub fn formatTokens(a: std.mem.Allocator, n: u64) []const u8 {
     if (n < 1000) return std.fmt.allocPrint(a, "{d}", .{n}) catch "";
     const millions = n >= 1_000_000;
     const div: f64 = if (millions) 1_000_000.0 else 1000.0;

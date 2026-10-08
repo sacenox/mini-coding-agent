@@ -261,7 +261,7 @@ fn handleDelta(st: *State, delta: Chunk.Delta) !void {
         if (fn_.name) |name| {
             if (name.len > 0) try call.announce(st.req.pers, st.sink, name);
         }
-        if (fn_.arguments) |args| try call.args.appendSlice(st.req.pers, args);
+        if (fn_.arguments) |args| try call.grow(st.req.pers, st.sink, args);
     }
 }
 

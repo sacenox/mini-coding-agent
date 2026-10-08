@@ -246,7 +246,7 @@ fn addCall(st: *State, part: Chunk.Piece) !void {
         if (args != .null) {
             var out: std.Io.Writer.Allocating = .init(st.req.pers);
             try std.json.Stringify.value(args, .{}, &out.writer);
-            try call.args.appendSlice(st.req.pers, out.written());
+            try call.grow(st.req.pers, st.sink, out.written());
         }
     }
 }

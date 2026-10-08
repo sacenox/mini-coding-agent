@@ -200,7 +200,7 @@ const State = struct {
         if (std.mem.eql(u8, event_type, "response.function_call_arguments.delta")) {
             const index = streamIndex(chunk, st.calls.items.len);
             if (index < st.calls.items.len) {
-                if (chunk.delta) |s| try st.calls.items[index].args.appendSlice(st.req.pers, s);
+                if (chunk.delta) |s| try st.calls.items[index].grow(st.req.pers, st.sink, s);
             }
             return;
         }
@@ -210,7 +210,7 @@ const State = struct {
             if (index < st.calls.items.len) {
                 if (chunk.arguments) |s| {
                     st.calls.items[index].args.clearRetainingCapacity();
-                    try st.calls.items[index].args.appendSlice(st.req.pers, s);
+                    try st.calls.items[index].grow(st.req.pers, st.sink, s);
                 }
             }
             return;
@@ -233,7 +233,7 @@ const State = struct {
                 st.sink.emit(.{ .tool_start = call.name });
             }
             if (call.args.items.len == 0) {
-                if (item.arguments) |s| try call.args.appendSlice(st.req.pers, s);
+                if (item.arguments) |s| try call.grow(st.req.pers, st.sink, s);
             }
             return;
         }

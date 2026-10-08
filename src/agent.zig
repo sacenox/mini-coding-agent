@@ -15,6 +15,7 @@ pub const Event = union(enum) {
     text: []const u8,
     reasoning: []const u8,
     tool_call_start: []const u8,
+    tool_args: usize,
     tool_call: struct { name: []const u8, arguments: []const u8 },
     tool_output: []const u8,
     tool_result: struct { name: []const u8, text: []const u8, is_error: bool, diffs: []const common.FileDiff, body: ?[]const u8 },
@@ -85,6 +86,7 @@ fn onApiEvent(ctx: *anyopaque, event: api.Event) void {
         .text => |d| listener.emit(.{ .text = d }),
         .reasoning => |d| listener.emit(.{ .reasoning = d }),
         .tool_start => |name| listener.emit(.{ .tool_call_start = name }),
+        .tool_args => |n| listener.emit(.{ .tool_args = n }),
         .tool_call => |call| listener.emit(.{ .tool_call = .{ .name = call.name, .arguments = call.arguments } }),
     }
 }

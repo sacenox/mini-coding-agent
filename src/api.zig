@@ -7,6 +7,7 @@ pub const Event = union(enum) {
     text: []const u8,
     reasoning: []const u8,
     tool_start: []const u8,
+    tool_args: usize,
     tool_call: types.ToolCall,
 };
 
@@ -234,6 +235,11 @@ pub const Call = struct {
             self.started = true;
             sink.emit(.{ .tool_start = self.name });
         }
+    }
+
+    pub fn grow(self: *Call, a: std.mem.Allocator, sink: Sink, bytes: []const u8) !void {
+        try self.args.appendSlice(a, bytes);
+        sink.emit(.{ .tool_args = self.args.items.len });
     }
 };
 

@@ -79,6 +79,7 @@ const Tui = struct {
     phase: agent.Phase = .idle,
     detail: ?[]const u8 = null,
     writing_tool: ?[]const u8 = null,
+    writing_bytes: usize = 0,
     active: bool = false,
     paused: bool = false,
     pause_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -209,7 +210,11 @@ const Tui = struct {
         const label = switch (self.phase) {
             .preparing => "preparing",
             .waiting_model => "waiting for provider",
-            .streaming => if (self.writing_tool) |w| std.fmt.allocPrint(self.s, "writing {s}", .{w}) catch "streaming" else "streaming",
+            .streaming => if (self.writing_tool) |w| blk: {
+                if (self.writing_bytes == 0) break :blk std.fmt.allocPrint(self.s, "writing {s}", .{w}) catch "streaming";
+                const tokenest = (self.writing_bytes + 3) / 4;
+                break :blk std.fmt.allocPrint(self.s, "writing {s} · ~{s} tok", .{ w, usage_mod.formatTokens(self.s, tokenest) }) catch "streaming";
+            } else "streaming",
             .running_tool => std.fmt.allocPrint(self.s, "running {s}", .{self.detail orelse "tool"}) catch "running tool",
             else => "idle",
         };
@@ -320,7 +325,11 @@ const Tui = struct {
                     .summary = tool_view.callSummary(self.a, tc.name, tc.arguments),
                 }) catch {};
             },
-            .tool_call_start => |name| self.keepName(&self.writing_tool, name),
+            .tool_call_start => |name| {
+                self.keepName(&self.writing_tool, name);
+                self.writing_bytes = 0;
+            },
+            .tool_args => |n| self.writing_bytes = n,
             .tool_output => |chunk| self.activity.feed(chunk),
             .message => |am| self.commitMessage(am),
             .tool_result => |tr| {
