@@ -22,6 +22,24 @@ const HttpError = error{
     Aborted,
 } || std.mem.Allocator.Error;
 
+// Blocking socket reads cannot observe the cancel token, so a watcher thread
+// shuts the connection down when a cancel is requested, unblocking the read.
+const CancelWatch = struct {
+    cancel: *const std.atomic.Value(bool),
+    connection: *std.http.Client.Connection,
+    done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    fn run(self: *CancelWatch) void {
+        while (!self.done.load(.acquire)) {
+            if (self.cancel.load(.acquire)) {
+                self.connection.stream_reader.stream.shutdown(platform.io, .both) catch {};
+                return;
+            }
+            std.Io.sleep(platform.io, .{ .nanoseconds = 25 * std.time.ns_per_ms }, .boot) catch {};
+        }
+    }
+};
+
 pub fn postSse(
     a: std.mem.Allocator,
     url: []const u8,
@@ -31,6 +49,7 @@ pub fn postSse(
     cancel: *const std.atomic.Value(bool),
     err_body: *?[]const u8,
 ) HttpError!void {
+    if (cancel.load(.acquire)) return error.Aborted;
     const uri = std.Uri.parse(url) catch return error.RequestFailed;
     var client: std.http.Client = .{ .allocator = a, .io = platform.io };
     defer client.deinit();
@@ -51,6 +70,13 @@ pub fn postSse(
     bw.writer.writeAll(body) catch return error.RequestFailed;
     bw.end() catch return error.RequestFailed;
     req.connection.?.flush() catch return error.RequestFailed;
+
+    var watch = CancelWatch{ .cancel = cancel, .connection = req.connection.? };
+    const watcher = std.Thread.spawn(.{}, CancelWatch.run, .{&watch}) catch null;
+    defer {
+        watch.done.store(true, .release);
+        if (watcher) |t| t.join();
+    }
 
     var response = req.receiveHead(&.{}) catch return error.RequestFailed;
     const status = @intFromEnum(response.head.status);

@@ -192,7 +192,6 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
             return;
         };
 
-        if (cancelled(opts, listener)) return;
         pushMessage(opts, messages, .{ .assistant = assistant }) catch {
             listener.emit(.{ .err = "out of memory" });
             return;
