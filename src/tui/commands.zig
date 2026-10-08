@@ -9,6 +9,7 @@ pub const Command = enum {
     provider,
     model,
     thinking,
+    login,
 
     pub fn wire(self: Command) []const u8 {
         return @tagName(self);
@@ -21,10 +22,11 @@ pub const Command = enum {
             .provider => "choose the provider and model",
             .model => "choose a model for the current provider",
             .thinking => "set the thinking level",
+            .login => "log in to a subscription provider",
         };
     }
 
-    pub const all = [_]Command{ .help, .new, .provider, .model, .thinking };
+    pub const all = [_]Command{ .help, .new, .provider, .model, .thinking, .login };
 };
 
 pub fn findCommand(text: []const u8) ?Command {

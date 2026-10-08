@@ -6,6 +6,8 @@ const session_mod = @import("../session.zig");
 const types = @import("../types.zig");
 const agent = @import("../agent.zig");
 const models_mod = @import("../models.zig");
+const registry = @import("../providers.zig");
+const auth = @import("../auth.zig");
 const tools_index = @import("../tools/index.zig");
 const common = @import("../tools/common.zig");
 const render = @import("render.zig");
@@ -110,6 +112,17 @@ const Tui = struct {
     prompt_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     pending_command: enum { none, provider, model, thinking } = .none,
     pending_provider: ?[]const u8 = null,
+
+    fetch_attempt: usize = 0,
+    fetching: bool = false,
+    fetch_done: ?*FetchResult = null,
+
+    background_mutex: std.Io.Mutex = .init,
+    login_provider: []const u8 = "",
+    logging_in: bool = false,
+    login_done: ?*LoginResult = null,
+    login_url: ?[]const u8 = null,
+    login_cancel: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     fn init(a: std.mem.Allocator, opts: *agent.Options, cfg: *const config.Config, tool_names: []const config.ToolName) Tui {
         return .{
@@ -407,6 +420,12 @@ const Tui = struct {
             return;
         }
         if (key == .interrupt) {
+            if (self.logging_in) {
+                self.login_cancel.store(true, .seq_cst);
+                self.cancelLogin();
+                self.dirty = true;
+                return;
+            }
             if (self.active) {
                 self.abort.store(true, .seq_cst);
                 self.steering_ready.store(true, .seq_cst);
@@ -419,6 +438,7 @@ const Tui = struct {
             } else if (self.command_active) {
                 self.command_active = false;
                 self.prompt_open = false;
+                self.fetching = false;
                 self.dirty = true;
             } else if (self.editor.contents().len != 0) {
                 self.editor.clear();
@@ -520,10 +540,11 @@ const Tui = struct {
             },
             .thinking => {
                 const m = self.opts.model orelse return self.fail("! no model configured", .{});
-                const levels = models_mod.supportedLevels(self.cfg, m.provider, m.id);
+                const levels = models_mod.supportedLevels(self.a, self.cfg, m.provider, m.id);
                 self.beginPrompt("Select a thinking level", levels, levels);
                 self.pending_command = .thinking;
             },
+            .login => self.startLogin(),
         }
     }
 
@@ -563,7 +584,7 @@ const Tui = struct {
         var ids: std.ArrayList([]const u8) = .empty;
         var names: std.ArrayList([]const u8) = .empty;
         for (entries) |p| {
-            if (!p.key_present) continue;
+            if (!p.available) continue;
             ids.append(self.a, p.id) catch {};
             names.append(self.a, p.name) catch {};
         }
@@ -576,25 +597,163 @@ const Tui = struct {
     }
 
     fn startModelSelect(self: *Tui, provider_id: []const u8) void {
-        const list = models_mod.catalogModels(self.a, self.cfg, provider_id) catch {
+        const result = platform.gpa.create(FetchResult) catch {
             self.fail("! out of memory", .{});
-            self.command_active = false;
             return;
         };
+        self.fetch_attempt += 1;
+        result.* = .{
+            .arena = std.heap.ArenaAllocator.init(platform.gpa),
+            .attempt = self.fetch_attempt,
+            .provider = self.a.dupe(u8, provider_id) catch provider_id,
+        };
+        self.fetching = true;
+        self.command_active = true;
+        self.note(std.fmt.allocPrint(self.s, "fetching models for {s}...", .{provider_id}) catch "fetching models...");
+        const thread = std.Thread.spawn(.{}, modelListThread, .{ self, result }) catch {
+            self.fetching = false;
+            self.command_active = false;
+            result.destroy();
+            self.fail("! could not start the model listing", .{});
+            return;
+        };
+        thread.detach();
+    }
+
+    fn startModelPrompt(self: *Tui, provider_id: []const u8, models: []const types.Model) void {
         var ids: std.ArrayList([]const u8) = .empty;
         var names: std.ArrayList([]const u8) = .empty;
-        for (list) |m| {
-            ids.append(self.a, m.id) catch {};
-            names.append(self.a, m.name) catch {};
+        for (models) |m| {
+            ids.append(self.a, self.a.dupe(u8, m.id) catch m.id) catch {};
+            names.append(self.a, self.a.dupe(u8, m.name) catch m.name) catch {};
         }
         if (ids.items.len == 0) {
             self.fail("! no models for provider", .{});
-            self.command_active = false;
             return;
         }
         self.beginPrompt(std.fmt.allocPrint(self.a, "Select a model for {s}", .{provider_id}) catch "Select a model", names.items, ids.items);
         self.pending_command = .model;
-        self.pending_provider = provider_id;
+        self.pending_provider = self.a.dupe(u8, provider_id) catch provider_id;
+    }
+
+    // The provider to sign in to: one awaiting login first, then any other
+    // subscription provider, so a sign-in that broke can be redone.
+    fn subscriptionProvider(self: *Tui) ?[]const u8 {
+        const entries = models_mod.providers(self.a, self.cfg);
+        var target: ?[]const u8 = null;
+        for (entries) |p| {
+            if (!p.oauth) continue;
+            if (target == null) target = p.id;
+            if (!p.available) return p.id;
+        }
+        return target;
+    }
+
+    fn startLogin(self: *Tui) void {
+        if (self.logging_in) return;
+        const provider_id = self.subscriptionProvider() orelse
+            return self.fail("! no subscription provider to log in to", .{});
+        const result = platform.gpa.create(LoginResult) catch return self.fail("! out of memory", .{});
+        result.* = .{ .arena = std.heap.ArenaAllocator.init(platform.gpa) };
+        self.login_provider = self.a.dupe(u8, provider_id) catch provider_id;
+        self.login_cancel.store(false, .seq_cst);
+        self.logging_in = true;
+        self.command_active = true;
+        self.note("starting login...");
+        const thread = std.Thread.spawn(.{}, loginThread, .{ self, result }) catch {
+            self.logging_in = false;
+            self.command_active = false;
+            result.destroy();
+            self.fail("! could not start the login", .{});
+            return;
+        };
+        thread.detach();
+    }
+
+    // Worker results are taken once the worker is done with them, so nothing a
+    // worker still writes to is reused or freed under it.
+    fn takeFetch(self: *Tui) ?*FetchResult {
+        self.background_mutex.lockUncancelable(platform.io);
+        defer self.background_mutex.unlock(platform.io);
+        const result = self.fetch_done;
+        self.fetch_done = null;
+        return result;
+    }
+
+    fn takeLogin(self: *Tui) ?*LoginResult {
+        self.background_mutex.lockUncancelable(platform.io);
+        defer self.background_mutex.unlock(platform.io);
+        const result = self.login_done;
+        self.login_done = null;
+        return result;
+    }
+
+    fn publishFetch(self: *Tui, result: *FetchResult) void {
+        self.background_mutex.lockUncancelable(platform.io);
+        const stale = self.fetch_done;
+        if (stale) |s| {
+            // A superseded attempt can finish after the attempt that replaced
+            // it; the newer listing is the one the main loop is waiting for.
+            if (s.attempt > result.attempt) {
+                self.background_mutex.unlock(platform.io);
+                return result.destroy();
+            }
+            s.destroy();
+        }
+        self.fetch_done = result;
+        self.background_mutex.unlock(platform.io);
+    }
+
+    fn publishLogin(self: *Tui, result: *LoginResult) void {
+        self.background_mutex.lockUncancelable(platform.io);
+        const stale = self.login_done;
+        self.login_done = result;
+        self.background_mutex.unlock(platform.io);
+        if (stale) |s| s.destroy();
+    }
+
+    fn setLoginUrl(self: *Tui, url: []const u8) void {
+        self.background_mutex.lockUncancelable(platform.io);
+        defer self.background_mutex.unlock(platform.io);
+        self.login_url = url;
+    }
+
+    fn takeLoginUrl(self: *Tui) ?[]const u8 {
+        self.background_mutex.lockUncancelable(platform.io);
+        defer self.background_mutex.unlock(platform.io);
+        const url = self.login_url;
+        self.login_url = null;
+        return url;
+    }
+
+    fn pollBackground(self: *Tui) void {
+        if (self.takeFetch()) |result| {
+            defer result.destroy();
+            if (self.fetching and result.attempt == self.fetch_attempt) {
+                self.fetching = false;
+                self.command_active = false;
+                if (result.err) |message| {
+                    self.fail("! {s}", .{message});
+                } else {
+                    self.startModelPrompt(result.provider, result.models);
+                }
+            }
+        }
+        if (!self.logging_in) return;
+        if (self.takeLoginUrl()) |url| {
+            self.push("Open this URL in your browser to log in:");
+            self.push(url);
+        }
+        if (self.takeLogin()) |result| {
+            defer result.destroy();
+            self.logging_in = false;
+            self.command_active = false;
+            if (result.err) |message| {
+                self.fail("! {s}", .{message});
+            } else {
+                self.note("logged in");
+            }
+        }
     }
 
     fn beginPrompt(self: *Tui, message: []const u8, options: []const []const u8, ids: []const []const u8) void {
@@ -634,7 +793,7 @@ const Tui = struct {
                 const m = self.opts.model orelse return;
                 const updated = self.a.create(types.Model) catch return;
                 updated.* = m.*;
-                updated.effort = models_mod.clampNamed(self.cfg, m.provider, m.id, id);
+                updated.effort = models_mod.clampNamed(self.a, self.cfg, m.provider, m.id, id);
                 self.select(updated);
                 config.save(self.a, self.cfg, .{ .thinking_effort = id }) catch {};
             },
@@ -677,6 +836,12 @@ const Tui = struct {
         return self.steering_text;
     }
 
+    fn cancelLogin(self: *Tui) void {
+        const p = registry.find(self.login_provider) orelse return;
+        const oauth = p.oauth orelse return;
+        auth.cancel(&oauth);
+    }
+
     fn exit(self: *Tui) void {
         if (self.closed) return;
         self.closed = true;
@@ -702,6 +867,72 @@ fn matchOption(answer: []const u8, options: []const []const u8, ids: []const []c
     };
     if (n >= 1 and n <= ids.len) return ids[n - 1];
     return null;
+}
+
+// Model listings and logins run on detached threads. Each worker owns the
+// arena its result lives in and hands it over on publish; the main loop never
+// touches it while the worker runs.
+const FetchResult = struct {
+    arena: std.heap.ArenaAllocator,
+    attempt: usize,
+    provider: []const u8,
+    models: []const types.Model = &.{},
+    err: ?[]const u8 = null,
+
+    fn destroy(self: *FetchResult) void {
+        self.arena.deinit();
+        platform.gpa.destroy(self);
+    }
+};
+
+const LoginResult = struct {
+    arena: std.heap.ArenaAllocator,
+    err: ?[]const u8 = null,
+
+    fn destroy(self: *LoginResult) void {
+        self.arena.deinit();
+        platform.gpa.destroy(self);
+    }
+};
+
+const LoginCtx = struct { tui: *Tui, result: *LoginResult };
+
+fn modelListThread(self: *Tui, result: *FetchResult) void {
+    const list = models_mod.listModels(result.arena.allocator(), self.cfg, result.provider);
+    result.models = list.models;
+    result.err = list.err;
+    self.publishFetch(result);
+}
+
+fn loginThread(self: *Tui, result: *LoginResult) void {
+    const p = registry.find(self.login_provider) orelse {
+        result.err = "unknown provider";
+        return self.publishLogin(result);
+    };
+    const oauth = p.oauth orelse {
+        result.err = "provider has no oauth";
+        return self.publishLogin(result);
+    };
+    var login_ctx = LoginCtx{ .tui = self, .result = result };
+    _ = auth.login(result.arena.allocator(), &oauth, .{
+        .ctx = &login_ctx,
+        .on_url = onLoginUrl,
+        .cancel = &self.login_cancel,
+    }) catch |e| {
+        result.err = switch (e) {
+            error.Cancelled => "login cancelled",
+            error.MissingScope => "the account is not authorized for ChatGPT plan usage",
+            else => "login failed",
+        };
+        return self.publishLogin(result);
+    };
+    self.publishLogin(result);
+}
+
+fn onLoginUrl(ctx: *anyopaque, url: []const u8) void {
+    const login: *LoginCtx = @ptrCast(@alignCast(ctx));
+    const kept = login.result.arena.allocator().dupe(u8, url) catch return;
+    login.tui.setLoginUrl(kept);
 }
 
 fn completePathStep(word: []const u8) ?[]const u8 {
@@ -842,6 +1073,8 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
             self.q = self.qarena.allocator();
         }
         self.event_mutex.unlock(platform.io);
+
+        self.pollBackground();
 
         if (self.prompt_open and self.prompt_ready.load(.seq_cst)) self.answerPrompt();
 

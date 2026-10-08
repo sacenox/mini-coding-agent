@@ -74,6 +74,10 @@ pub fn configPath(a: std.mem.Allocator) []const u8 {
     return filesystem.join(a, &.{ configDir(a), "config.json" }) catch "config.json";
 }
 
+pub fn credentialPath(a: std.mem.Allocator) []const u8 {
+    return filesystem.join(a, &.{ configDir(a), "auth.json" }) catch "auth.json";
+}
+
 fn sessionsDir(a: std.mem.Allocator) []const u8 {
     const state = platform.getEnv("XDG_STATE_HOME") orelse blk: {
         const home = platform.home() orelse return "sessions";

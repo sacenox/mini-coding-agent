@@ -18,6 +18,21 @@ pub fn writeFile(path: []const u8, data: []const u8) !void {
     try f.writeStreamingAll(platform.io, data);
 }
 
+/// Atomically replacing write, owner-only permissions.
+pub fn writePrivateFile(path: []const u8, data: []const u8) !void {
+    const dir_path = std.fs.path.dirname(path) orelse ".";
+    std.Io.Dir.cwd().createDirPath(platform.io, dir_path) catch {};
+    var dir = try std.Io.Dir.cwd().openDir(platform.io, dir_path, .{});
+    defer dir.close(platform.io);
+    var file = try dir.createFileAtomic(platform.io, std.fs.path.basename(path), .{
+        .permissions = @enumFromInt(0o600),
+        .replace = true,
+    });
+    defer file.deinit(platform.io);
+    try file.file.writeStreamingAll(platform.io, data);
+    try file.replace(platform.io);
+}
+
 pub fn fileExists(path: []const u8) bool {
     std.Io.Dir.cwd().access(platform.io, path, .{}) catch return false;
     return true;

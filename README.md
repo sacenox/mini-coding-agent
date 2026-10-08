@@ -39,8 +39,13 @@ the config lives. Interactive mode requires a TTY.
 | `/provider` | choose the provider and model |
 | `/model` | choose a model for the current provider |
 | `/thinking` | set the thinking level |
+| `/login` | log in to a subscription provider |
 
 `/provider`, `/model`, and `/thinking` write the change back to the config file.
+
+`/provider` lists the providers whose auth is available. Choosing one fetches
+that provider's model list live; choosing a model fetches its metadata from
+models.dev (cached for a day under `$XDG_CACHE_HOME/mini-coding-agent`).
 
 ## Keybindings
 
@@ -116,7 +121,7 @@ Keys:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `provider` | unset | provider id; built-ins are `opencode` and `opencode-go`, or a `customProviders` id |
+| `provider` | unset | provider id; built-ins are `opencode`, `opencode-go`, and `chatgpt`, or a `customProviders` id |
 | `model` | unset | model id |
 | `thinkingEffort` | unset | one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; unset sends no reasoning parameter and clamps to what the model accepts |
 | `theme` | `tokyonight` | TUI palette: `tokyonight`, `oxocarbon`, or `kanagawa`. Read at startup; there is no live reload |
@@ -160,9 +165,12 @@ so one provider may mix APIs and base URLs:
 
 ## Environment
 
-The built-in providers read `OPENCODE_API_KEY`. Custom providers read the first
-present variable in their `envKeys`. A provider without a key is listed but
-fails at request time.
+`opencode` and `opencode-go` read `OPENCODE_API_KEY`. `chatgpt` uses a ChatGPT
+subscription through Sign in with ChatGPT (ChatGPT plan usage): run `/login` in
+the TUI, open the printed link, and consent. Credentials are stored at
+`$XDG_CONFIG_HOME/mini-coding-agent/auth.json`, alongside a per-host
+`ext_agent_host_id`. Custom providers read the first present variable in their
+`envKeys`. A provider without a key is listed but fails at request time.
 
 ## Sessions
 

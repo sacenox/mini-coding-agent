@@ -74,7 +74,7 @@ fn buildInput(a: std.mem.Allocator, req: api.Request) ![]const InputItem {
 
 fn buildBody(req: api.Request) ![]u8 {
     const a = req.scratch;
-    const max_tokens: ?u64 = if (req.model.max_tokens > 0)
+    const max_tokens: ?u64 = if (req.model.sends_max_output and req.model.max_tokens > 0)
         (if (req.model.max_tokens > 16) req.model.max_tokens else 16)
     else
         null;

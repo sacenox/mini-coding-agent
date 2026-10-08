@@ -117,6 +117,7 @@ pub const Model = struct {
     supports_images: bool,
     context_window: u64,
     max_tokens: u64,
+    sends_max_output: bool = true,
     cost_input: f64,
     cost_output: f64,
     cost_cache_read: f64,

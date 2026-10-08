@@ -1,6 +1,7 @@
 const std = @import("std");
 const types = @import("types.zig");
 const api = @import("api.zig");
+const models = @import("models.zig");
 const platform = @import("platform.zig");
 const tools = @import("tools/index.zig");
 const common = @import("tools/common.zig");
@@ -140,6 +141,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
         listener.emit(.no_model);
         return;
     };
+    var request_model = model.*;
 
     var arena = std.heap.ArenaAllocator.init(opts.a);
     defer arena.deinit();
@@ -174,6 +176,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
 
         if (cancelled(opts, listener)) return;
         listener.emit(.{ .phase = .{ .phase = .waiting_model } });
+        models.resolveCredentials(scratch, &request_model, opts.cancel);
         var stream_ctx = StreamCtx{ .listener = listener };
         const assistant = opts.a.create(types.AssistantMessage) catch {
             listener.emit(.{ .err = "out of memory" });
@@ -182,7 +185,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
         assistant.* = api.stream(.{
             .pers = opts.a,
             .scratch = scratch,
-            .model = model,
+            .model = &request_model,
             .system_prompt = opts.system_prompt,
             .tools_json = opts.tools_json,
             .messages = messages.items,
