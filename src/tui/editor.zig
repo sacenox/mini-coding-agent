@@ -291,7 +291,7 @@ pub const Editor = struct {
         while (parts.next()) |text| {
             var l: Line = .empty;
             l.appendSlice(self.a, text) catch {};
-            fresh.append(self.s, l) catch {};
+            fresh.append(self.a, l) catch {};
         }
         const lasti = fresh.items.len - 1;
         const anchor = cpLen(fresh.items[lasti].items);
