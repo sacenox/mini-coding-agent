@@ -1,6 +1,7 @@
 const std = @import("std");
 const platform = @import("platform.zig");
-const catalog = @import("catalog.zig");
+const modelsdev = @import("models_dev.zig");
+const http = @import("http.zig");
 const config = @import("config.zig");
 const types = @import("types.zig");
 
@@ -92,7 +93,11 @@ pub fn resolve(a: std.mem.Allocator, cfg: *const config.Config, err: *?[]const u
 
 pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id: []const u8, model_id: []const u8, err: *?[]const u8) ?types.Model {
     if (builtin(provider_id)) |b| {
-        const info = catalog.lookup(provider_id, model_id) orelse {
+        var db = modelsdev.Db.open(a) catch {
+            err.* = "model metadata unavailable";
+            return null;
+        };
+        const info = db.info(provider_id, model_id) orelse {
             err.* = unknownModel(a, model_id, provider_id);
             return null;
         };
@@ -164,23 +169,47 @@ pub fn providers(a: std.mem.Allocator, cfg: *const config.Config) []ProviderEntr
     return out.toOwnedSlice(a) catch &.{};
 }
 
-pub fn catalogModels(a: std.mem.Allocator, cfg: *const config.Config, provider_id: []const u8) ![]types.Model {
-    var out: std.ArrayList(types.Model) = .empty;
-    for (&catalog.entries) |*entry| {
-        if (!std.mem.eql(u8, entry.provider, provider_id)) continue;
-        var err: ?[]const u8 = null;
-        if (resolveNamed(a, cfg, provider_id, entry.id, &err)) |m| try out.append(a, m);
-    }
-    if (custom(cfg, provider_id)) |p| {
-        for (p.models) |m| {
-            var err: ?[]const u8 = null;
-            if (resolveNamed(a, cfg, provider_id, m.id, &err)) |resolved| try out.append(a, resolved);
-        }
+pub const Entry = struct { id: []const u8, name: []const u8 };
+
+/// The models a provider offers. Built-ins are asked over the wire
+/// (authenticated, so the provider decides what is enabled); a model with no
+/// models.dev metadata is skipped. Custom providers list what they declare.
+pub fn listing(
+    a: std.mem.Allocator,
+    cfg: *const config.Config,
+    provider_id: []const u8,
+    cancel: *const std.atomic.Value(bool),
+) ![]Entry {
+    if (custom(cfg, provider_id)) |p| return customListing(a, p);
+    const b = builtin(provider_id) orelse return error.UnknownProvider;
+    var db = modelsdev.Db.open(a) catch return error.ModelMetadataUnavailable;
+    const base = db.baseUrl(provider_id) orelse return error.UnknownProvider;
+    const key = firstEnv(b.env_keys) orelse return error.MissingApiKey;
+
+    const url = try std.fmt.allocPrint(a, "{s}/models", .{base});
+    const authorization = try std.fmt.allocPrint(a, "Bearer {s}", .{key});
+    const body = try http.get(a, url, &.{.{ .name = "Authorization", .value = authorization }}, cancel);
+
+    const List = struct {
+        data: []const struct { id: []const u8 },
+    };
+    const parsed = try std.json.parseFromSliceLeaky(List, a, body, .{ .ignore_unknown_fields = true });
+
+    var out: std.ArrayList(Entry) = .empty;
+    for (parsed.data) |model| {
+        const info = db.info(provider_id, model.id) orelse continue;
+        try out.append(a, .{ .id = model.id, .name = info.name });
     }
     return out.toOwnedSlice(a);
 }
 
-pub fn supportedLevels(cfg: *const config.Config, provider_id: []const u8, model_id: []const u8) []const []const u8 {
+fn customListing(a: std.mem.Allocator, p: *const config.CustomProvider) ![]Entry {
+    var out: std.ArrayList(Entry) = .empty;
+    for (p.models) |m| try out.append(a, .{ .id = m.id, .name = m.name orelse m.id });
+    return out.toOwnedSlice(a);
+}
+
+pub fn supportedLevels(a: std.mem.Allocator, cfg: *const config.Config, provider_id: []const u8, model_id: []const u8) []const []const u8 {
     if (builtin(provider_id) == null) {
         if (custom(cfg, provider_id)) |p| {
             for (p.models) |m| {
@@ -192,13 +221,14 @@ pub fn supportedLevels(cfg: *const config.Config, provider_id: []const u8, model
         }
         return &ladder;
     }
-    const info = catalog.lookup(provider_id, model_id) orelse return &ladder;
+    var db = modelsdev.Db.open(a) catch return &ladder;
+    const info = db.info(provider_id, model_id) orelse return &ladder;
     if (!info.reasoning) return &.{"off"};
     if (info.effort.len == 0) return &ladder;
     return info.effort;
 }
 
-pub fn clampNamed(cfg: *const config.Config, provider_id: []const u8, model_id: []const u8, desired: []const u8) []const u8 {
+pub fn clampNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id: []const u8, model_id: []const u8, desired: []const u8) []const u8 {
     if (builtin(provider_id) == null) {
         if (custom(cfg, provider_id)) |p| {
             for (p.models) |m| {
@@ -207,7 +237,8 @@ pub fn clampNamed(cfg: *const config.Config, provider_id: []const u8, model_id: 
         }
         return desired;
     }
-    const info = catalog.lookup(provider_id, model_id) orelse return desired;
+    var db = modelsdev.Db.open(a) catch return desired;
+    const info = db.info(provider_id, model_id) orelse return desired;
     return clampEffort(info.reasoning, info.effort, desired);
 }
 

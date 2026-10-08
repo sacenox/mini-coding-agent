@@ -111,6 +111,15 @@ const Tui = struct {
     pending_command: enum { none, provider, model, thinking } = .none,
     pending_provider: ?[]const u8 = null,
 
+    model_thread: ?std.Thread = null,
+    model_abort: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    model_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    model_ok: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    model_entries: []const models_mod.Entry = &.{},
+    model_provider: []const u8 = "",
+    model_arena: std.heap.ArenaAllocator,
+    model_m: std.mem.Allocator = undefined,
+
     fn init(a: std.mem.Allocator, opts: *agent.Options, cfg: *const config.Config, tool_names: []const config.ToolName) Tui {
         return .{
             .opts = opts,
@@ -126,6 +135,7 @@ const Tui = struct {
             .sa = undefined,
             .qarena = std.heap.ArenaAllocator.init(a),
             .q = undefined,
+            .model_arena = std.heap.ArenaAllocator.init(a),
             .reply = undefined,
             .activity = undefined,
         };
@@ -136,6 +146,7 @@ const Tui = struct {
         self.s = self.scratch.allocator();
         self.sa = self.sarena.allocator();
         self.q = self.qarena.allocator();
+        self.model_m = self.model_arena.allocator();
         self.editor = editor_mod.Editor.init(self.backing);
         self.editor.bind();
         self.editor.s = self.s;
@@ -419,6 +430,7 @@ const Tui = struct {
             } else if (self.command_active) {
                 self.command_active = false;
                 self.prompt_open = false;
+                self.model_abort.store(true, .seq_cst);
                 self.dirty = true;
             } else if (self.editor.contents().len != 0) {
                 self.editor.clear();
@@ -516,11 +528,11 @@ const Tui = struct {
             .provider => self.startProviderSelect(),
             .model => {
                 const m = self.opts.model orelse return self.fail("! no model configured", .{});
-                self.startModelSelect(m.provider);
+                self.startModelFetch(m.provider);
             },
             .thinking => {
                 const m = self.opts.model orelse return self.fail("! no model configured", .{});
-                const levels = models_mod.supportedLevels(self.cfg, m.provider, m.id);
+                const levels = models_mod.supportedLevels(self.a, self.cfg, m.provider, m.id);
                 self.beginPrompt("Select a thinking level", levels, levels);
                 self.pending_command = .thinking;
             },
@@ -575,26 +587,54 @@ const Tui = struct {
         self.pending_command = .provider;
     }
 
-    fn startModelSelect(self: *Tui, provider_id: []const u8) void {
-        const list = models_mod.catalogModels(self.a, self.cfg, provider_id) catch {
-            self.fail("! out of memory", .{});
-            self.command_active = false;
+    fn startModelFetch(self: *Tui, provider_id: []const u8) void {
+        if (self.model_thread) |t| {
+            self.model_abort.store(true, .seq_cst);
+            t.join();
+            self.model_thread = null;
+        }
+        _ = self.model_arena.reset(.retain_capacity);
+        self.model_m = self.model_arena.allocator();
+        self.model_provider = provider_id;
+        self.model_entries = &.{};
+        self.model_abort.store(false, .seq_cst);
+        self.model_ok.store(false, .seq_cst);
+        self.model_ready.store(false, .seq_cst);
+        self.model_thread = std.Thread.spawn(.{}, modelFetchThread, .{self}) catch {
+            self.fail("! cannot query models", .{});
             return;
         };
-        var ids: std.ArrayList([]const u8) = .empty;
-        var names: std.ArrayList([]const u8) = .empty;
-        for (list) |m| {
-            ids.append(self.a, m.id) catch {};
-            names.append(self.a, m.name) catch {};
+        self.command_active = true;
+        self.prompt_open = false;
+        self.note(styles.dim(self.s, "querying models..."));
+        self.dirty = true;
+    }
+
+    fn modelFetchThread(self: *Tui) void {
+        if (models_mod.listing(self.model_m, self.cfg, self.model_provider, &self.model_abort)) |entries| {
+            self.model_entries = entries;
+            self.model_ok.store(true, .seq_cst);
+        } else |_| {
+            self.model_ok.store(false, .seq_cst);
         }
-        if (ids.items.len == 0) {
-            self.fail("! no models for provider", .{});
+        self.model_ready.store(true, .release);
+    }
+
+    fn openModelsPrompt(self: *Tui) void {
+        if (self.model_entries.len == 0) {
             self.command_active = false;
+            self.fail("! no models for provider", .{});
             return;
         }
-        self.beginPrompt(std.fmt.allocPrint(self.a, "Select a model for {s}", .{provider_id}) catch "Select a model", names.items, ids.items);
+        var ids: std.ArrayList([]const u8) = .empty;
+        var names: std.ArrayList([]const u8) = .empty;
+        for (self.model_entries) |e| {
+            ids.append(self.a, e.id) catch {};
+            names.append(self.a, e.name) catch {};
+        }
+        self.beginPrompt(std.fmt.allocPrint(self.a, "Select a model for {s}", .{self.model_provider}) catch "Select a model", names.items, ids.items);
         self.pending_command = .model;
-        self.pending_provider = provider_id;
+        self.pending_provider = self.model_provider;
     }
 
     fn beginPrompt(self: *Tui, message: []const u8, options: []const []const u8, ids: []const []const u8) void {
@@ -620,7 +660,7 @@ const Tui = struct {
         self.command_active = false;
         const id = matchOption(answer, self.prompt_options, self.prompt_ids) orelse return;
         switch (command) {
-            .provider => self.startModelSelect(id),
+            .provider => self.startModelFetch(id),
             .model => {
                 const provider_id = self.pending_provider orelse return;
                 var err: ?[]const u8 = null;
@@ -634,7 +674,7 @@ const Tui = struct {
                 const m = self.opts.model orelse return;
                 const updated = self.a.create(types.Model) catch return;
                 updated.* = m.*;
-                updated.effort = models_mod.clampNamed(self.cfg, m.provider, m.id, id);
+                updated.effort = models_mod.clampNamed(self.a, self.cfg, m.provider, m.id, id);
                 self.select(updated);
                 config.save(self.a, self.cfg, .{ .thinking_effort = id }) catch {};
             },
@@ -682,6 +722,11 @@ const Tui = struct {
         self.closed = true;
         self.abort.store(true, .seq_cst);
         self.steering_ready.store(true, .seq_cst);
+        self.model_abort.store(true, .seq_cst);
+        if (self.model_thread) |t| {
+            t.join();
+            self.model_thread = null;
+        }
         const width = @max(self.term.width(), 1);
         self.term.write(self.live.erase(self.a, width));
         self.term.write(self.scrollback.buf.items);
@@ -842,6 +887,22 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
             self.q = self.qarena.allocator();
         }
         self.event_mutex.unlock(platform.io);
+
+        if (self.model_thread) |t| {
+            if (self.model_ready.load(.acquire)) {
+                t.join();
+                self.model_thread = null;
+                if (self.command_active) {
+                    if (self.model_ok.load(.seq_cst)) {
+                        self.openModelsPrompt();
+                    } else {
+                        self.command_active = false;
+                        self.fail("! cannot load models", .{});
+                    }
+                }
+                self.dirty = true;
+            }
+        }
 
         if (self.prompt_open and self.prompt_ready.load(.seq_cst)) self.answerPrompt();
 

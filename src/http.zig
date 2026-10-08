@@ -40,6 +40,41 @@ const CancelWatch = struct {
     }
 };
 
+pub fn get(
+    a: std.mem.Allocator,
+    url: []const u8,
+    headers: []const Header,
+    cancel: *const std.atomic.Value(bool),
+) HttpError![]u8 {
+    if (cancel.load(.acquire)) return error.Aborted;
+    const uri = std.Uri.parse(url) catch return error.RequestFailed;
+    var client: std.http.Client = .{ .allocator = a, .io = platform.io };
+    defer client.deinit();
+
+    var hdrs: std.ArrayList(std.http.Header) = .empty;
+    defer hdrs.deinit(a);
+    for (headers) |h| hdrs.append(a, .{ .name = h.name, .value = h.value }) catch return error.OutOfMemory;
+
+    var req = client.request(.GET, uri, .{
+        .redirect_behavior = .unhandled,
+        .extra_headers = hdrs.items,
+        .headers = .{ .user_agent = .{ .override = user_agent } },
+    }) catch return error.RequestFailed;
+    defer req.deinit();
+
+    req.sendBodiless() catch return error.RequestFailed;
+    var response = req.receiveHead(&.{}) catch return error.RequestFailed;
+    const status = @intFromEnum(response.head.status);
+
+    var transfer: [16 * 1024]u8 = undefined;
+    var decompress: std.http.Decompress = undefined;
+    var decompress_buf: [std.compress.flate.max_window_len]u8 = undefined;
+    const reader = response.readerDecompressing(&transfer, &decompress, &decompress_buf);
+
+    if (status < 200 or status >= 300) return error.HttpStatus;
+    return reader.allocRemaining(a, .limited(1 << 22)) catch return error.ReadFailed;
+}
+
 pub fn postSse(
     a: std.mem.Allocator,
     url: []const u8,
