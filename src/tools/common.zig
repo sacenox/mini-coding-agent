@@ -1,4 +1,5 @@
 const std = @import("std");
+const config = @import("../config.zig");
 const types = @import("../types.zig");
 
 pub const OutputFn = struct {
@@ -13,6 +14,7 @@ pub const OutputFn = struct {
 pub const Context = struct {
     cancel: *const std.atomic.Value(bool),
     supports_images: bool,
+    tools: []const config.ToolName = &.{},
     on_output: ?OutputFn = null,
     snapshot_ignore_dirs: []const []const u8 = &.{},
     snapshot_uses_gitignore: bool = true,

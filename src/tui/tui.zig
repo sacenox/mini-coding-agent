@@ -645,7 +645,7 @@ const Tui = struct {
     fn select(self: *Tui, m: *const types.Model) void {
         self.opts.model = m;
         self.opts.supports_images = m.supports_images;
-        self.opts.tools_json = tools_index.json(self.a, self.tool_names, self.opts.supports_images);
+        self.opts.tools_json = tools_index.json(self.a, self.tool_names, self.opts.supports_images, self.opts.session.cwd);
         self.pushBanner();
         self.dirty = true;
     }

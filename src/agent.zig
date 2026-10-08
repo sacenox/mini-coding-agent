@@ -248,6 +248,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
                 result = tools.execute(opts.a, scratch, call.name, call.arguments, .{
                     .cancel = opts.cancel,
                     .supports_images = opts.supports_images,
+                    .tools = opts.config.tools,
                     .on_output = .{ .ctx = &stream_ctx.listener, .on_chunk = onToolOutput },
                     .snapshot_ignore_dirs = opts.config.snapshot_ignore_dirs,
                     .snapshot_uses_gitignore = opts.config.snapshot_uses_gitignore,

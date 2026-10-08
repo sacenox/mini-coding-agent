@@ -100,7 +100,7 @@ fn run() !u8 {
         .model = model_ptr,
         .system_prompt = built.prompt,
         .loaded = .{ .agent_files = built.loaded.agent_files, .skills = built.loaded.skills },
-        .tools_json = tools.json(a, cfg.tools, supports_images),
+        .tools_json = tools.json(a, cfg.tools, supports_images, cwd),
         .supports_images = supports_images,
         .session = &sess,
         .cancel = &cancel,
