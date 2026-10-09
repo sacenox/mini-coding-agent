@@ -15,7 +15,7 @@ by reading the code, it does not belong here; keep this file short.
   timeouts. The user's ability to interrupt is the limit.
 - Config-first. Every user-facing behavior that can vary comes from config with
   a sane default. Global config only — no project-local config, no
-  config-override flags — and never duplicate `pi-ai`'s catalog or env vars.
+  config-override flags.
 - Minimal context. The model sees the configured system prompt plus explicitly
   opted-in resource files — never reminders, hidden blocks, or harness
   meta-text.
