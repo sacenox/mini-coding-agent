@@ -1,5 +1,6 @@
 const std = @import("std");
-const types = @import("types.zig");
+const message_mod = @import("message.zig");
+const models = @import("models.zig");
 const http = @import("http.zig");
 const time = @import("time.zig");
 
@@ -8,7 +9,7 @@ pub const Event = union(enum) {
     reasoning: []const u8,
     tool_start: []const u8,
     tool_args: usize,
-    tool_call: types.ToolCall,
+    tool_call: message_mod.ToolCall,
 };
 
 pub const Sink = struct {
@@ -19,8 +20,6 @@ pub const Sink = struct {
         self.on_event(self.ctx, event);
     }
 };
-
-pub const Raw = types.Raw;
 
 pub const ErrField = struct {
     message: ?[]const u8 = null,
@@ -57,10 +56,10 @@ pub const Count = struct {
 pub const Request = struct {
     pers: std.mem.Allocator,
     scratch: std.mem.Allocator,
-    model: *const types.Model,
+    model: *const models.Model,
     system_prompt: []const u8,
     tools_json: []const u8,
-    messages: []const types.Message,
+    messages: []const message_mod.Message,
     effort: []const u8,
     session_id: ?[]const u8,
     cancel: *const std.atomic.Value(bool),
@@ -84,7 +83,7 @@ pub fn run(
     req: Request,
     sink: Sink,
     finalize: *const fn (st: *State) std.mem.Allocator.Error!void,
-) std.mem.Allocator.Error!types.AssistantMessage {
+) std.mem.Allocator.Error!message_mod.AssistantMessage {
     var msg = newAssistant(req);
 
     var arena = std.heap.ArenaAllocator.init(req.scratch);
@@ -142,7 +141,7 @@ pub fn blockAt(comptime T: type, list: *std.ArrayList(T), a: std.mem.Allocator, 
     return &list.items[idx];
 }
 
-pub fn stream(req: Request, sink: Sink) std.mem.Allocator.Error!types.AssistantMessage {
+pub fn stream(req: Request, sink: Sink) std.mem.Allocator.Error!message_mod.AssistantMessage {
     if (std.mem.eql(u8, req.model.api, "openai-completions")) {
         return @import("api/openai_completions.zig").stream(req, sink);
     }
@@ -161,7 +160,7 @@ pub fn stream(req: Request, sink: Sink) std.mem.Allocator.Error!types.AssistantM
     return msg;
 }
 
-fn newAssistant(req: Request) types.AssistantMessage {
+fn newAssistant(req: Request) message_mod.AssistantMessage {
     return .{
         .content = .empty,
         .api = req.model.api,
@@ -198,7 +197,7 @@ fn wireHeaders(a: std.mem.Allocator, req: Request, wire: Wire) ![]http.Header {
     return list.toOwnedSlice(a);
 }
 
-fn post(req: Request, url: []const u8, hdrs: []const http.Header, body: []const u8, handler: http.SseHandler, msg: *types.AssistantMessage) std.mem.Allocator.Error!bool {
+fn post(req: Request, url: []const u8, hdrs: []const http.Header, body: []const u8, handler: http.SseHandler, msg: *message_mod.AssistantMessage) std.mem.Allocator.Error!bool {
     var err_body: ?[]const u8 = null;
     http.postSse(req.scratch, url, hdrs, body, handler, req.cancel, &err_body) catch |e| {
         if (e == error.OutOfMemory) return error.OutOfMemory;
@@ -243,7 +242,7 @@ pub const Call = struct {
     }
 };
 
-pub fn appendCalls(msg: *types.AssistantMessage, sink: Sink, a: std.mem.Allocator, calls: []const Call, failed: bool) !bool {
+pub fn appendCalls(msg: *message_mod.AssistantMessage, sink: Sink, a: std.mem.Allocator, calls: []const Call, failed: bool) !bool {
     if (failed) return false;
     var any = false;
     for (calls) |call| {
@@ -275,12 +274,12 @@ pub fn keepString(slot: *?[]const u8, a: std.mem.Allocator, value: ?[]const u8) 
     slot.* = try a.dupe(u8, v);
 }
 
-pub fn appendParts(msg: *types.AssistantMessage, a: std.mem.Allocator, thinking: []const u8, signature: ?[]const u8, text: []const u8) !void {
+pub fn appendParts(msg: *message_mod.AssistantMessage, a: std.mem.Allocator, thinking: []const u8, signature: ?[]const u8, text: []const u8) !void {
     if (thinking.len > 0) try msg.content.append(a, .{ .thinking = .{ .text = thinking, .signature = signature } });
     if (text.len > 0) try msg.content.append(a, .{ .text = text });
 }
 
-pub fn finishUsage(msg: *types.AssistantMessage, model: *const types.Model, usage: types.Usage) void {
+pub fn finishUsage(msg: *message_mod.AssistantMessage, model: *const models.Model, usage: message_mod.Usage) void {
     var u = usage;
     if (u.total_tokens == 0) u.total_tokens = u.input + u.output + u.cache_read + u.cache_write;
     const per = struct {

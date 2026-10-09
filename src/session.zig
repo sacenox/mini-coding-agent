@@ -3,12 +3,13 @@ const platform = @import("platform.zig");
 const time = @import("time.zig");
 const filesystem = @import("filesystem.zig");
 const text = @import("text.zig");
-const types = @import("types.zig");
+const message_mod = @import("message.zig");
+const json = @import("json.zig");
 
 const alphabet = "0123456789abcdefghijklmnopqrstuvwxyz";
 
-const Raw = types.Raw;
-const StopReason = types.StopReason;
+const Raw = json.Raw;
+const StopReason = message_mod.StopReason;
 
 const ThinkingBlock = struct {
     type: []const u8 = "thinking",
@@ -168,7 +169,7 @@ pub const Session = struct {
         return .{ .a = a, .sessions_dir = sessions_dir, .cwd = cwd };
     }
 
-    pub fn appendMessage(self: *Session, scratch: std.mem.Allocator, message: types.Message) !void {
+    pub fn appendMessage(self: *Session, scratch: std.mem.Allocator, message: message_mod.Message) !void {
         if (self.closed) return;
         try self.ensure(if (message == .user) text.slugify(self.a, message.user.content) else "session");
 
@@ -271,7 +272,7 @@ fn randomBytes(buf: []u8) void {
     std.Io.random(platform.io, buf);
 }
 
-fn messageRecord(a: std.mem.Allocator, message: types.Message) !MessageRecord {
+fn messageRecord(a: std.mem.Allocator, message: message_mod.Message) !MessageRecord {
     switch (message) {
         .user => |u| return .{ .user = .{ .content = u.content, .timestamp = u.timestamp } },
         .tool_result => |t| {

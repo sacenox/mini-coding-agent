@@ -2,7 +2,7 @@ const std = @import("std");
 const platform = @import("platform.zig");
 const time = @import("time.zig");
 const config = @import("config.zig");
-const types = @import("types.zig");
+const message_mod = @import("message.zig");
 const agent = @import("agent.zig");
 
 var cancel = std.atomic.Value(bool).init(false);
@@ -35,8 +35,8 @@ fn printEvent(ctx: *anyopaque, event: agent.Event) void {
 }
 
 pub fn run(a: std.mem.Allocator, prompt_text: []const u8, opts: agent.Options) u8 {
-    var messages: std.ArrayList(types.Message) = .empty;
-    const user = types.Message{ .user = .{ .content = prompt_text, .timestamp = time.nowMs() } };
+    var messages: std.ArrayList(message_mod.Message) = .empty;
+    const user = message_mod.Message{ .user = .{ .content = prompt_text, .timestamp = time.nowMs() } };
     messages.append(a, user) catch {
         platform.printErr("[error] out of memory\n", .{});
         return 1;
@@ -66,7 +66,7 @@ pub fn run(a: std.mem.Allocator, prompt_text: []const u8, opts: agent.Options) u
         i -= 1;
         if (messages.items[i] == .assistant) break messages.items[i].assistant;
     } else return 0;
-    const text = types.assistantText(a, last) catch {
+    const text = last.text(a) catch {
         platform.printErr("[error] out of memory\n", .{});
         return 1;
     };

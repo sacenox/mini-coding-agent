@@ -1,5 +1,6 @@
 const std = @import("std");
-const types = @import("types.zig");
+const message_mod = @import("message.zig");
+const models = @import("models.zig");
 const api = @import("api.zig");
 const platform = @import("platform.zig");
 const tools = @import("tools.zig");
@@ -18,7 +19,7 @@ pub const Event = union(enum) {
     tool_call: struct { name: []const u8, arguments: []const u8 },
     tool_output: []const u8,
     tool_result: struct { name: []const u8, text: []const u8, is_error: bool, diffs: []const tools.FileDiff, body: ?[]const u8 },
-    message: *types.AssistantMessage,
+    message: *message_mod.AssistantMessage,
     no_model,
     err: []const u8,
     cancelled,
@@ -53,7 +54,7 @@ pub const Interaction = struct {
 
 pub const Options = struct {
     a: std.mem.Allocator,
-    model: ?*const types.Model,
+    model: ?*const models.Model,
     system_prompt: []const u8,
     loaded: struct { agent_files: usize = 0, skills: usize = 0 } = .{},
     tools_json: []const u8,
@@ -105,15 +106,15 @@ fn onToolOutput(ctx: *anyopaque, chunk: []const u8) void {
     listener.emit(.{ .tool_output = chunk });
 }
 
-fn pushMessage(opts: Options, messages: *std.ArrayList(types.Message), message: types.Message) !void {
+fn pushMessage(opts: Options, messages: *std.ArrayList(message_mod.Message), message: message_mod.Message) !void {
     lockMessages(opts);
     defer unlockMessages(opts);
     try messages.append(opts.a, message);
 }
 
-fn steer(opts: Options, messages: *std.ArrayList(types.Message), content: []const u8) !void {
+fn steer(opts: Options, messages: *std.ArrayList(message_mod.Message), content: []const u8) !void {
     if (content.len == 0) return;
-    const message = types.Message{ .user = .{ .content = content, .timestamp = time.nowMs() } };
+    const message = message_mod.Message{ .user = .{ .content = content, .timestamp = time.nowMs() } };
     try pushMessage(opts, messages, message);
     try opts.session.appendMessage(opts.a, message);
 }
@@ -137,12 +138,12 @@ fn cancelled(opts: Options, listener: Listener) bool {
 
 const Run = struct {
     opts: Options,
-    messages: *std.ArrayList(types.Message),
+    messages: *std.ArrayList(message_mod.Message),
     interaction: ?Interaction,
     listener: Listener,
 };
 
-pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interaction: ?Interaction, listener: Listener) void {
+pub fn runTurn(opts: Options, messages: *std.ArrayList(message_mod.Message), interaction: ?Interaction, listener: Listener) void {
     const run = Run{ .opts = opts, .messages = messages, .interaction = interaction, .listener = listener };
 
     const model = opts.model orelse {
@@ -184,7 +185,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
         if (cancelled(opts, listener)) return;
         listener.emit(.{ .phase = .{ .phase = .waiting_model } });
         var stream_ctx = StreamCtx{ .listener = listener };
-        const assistant = opts.a.create(types.AssistantMessage) catch {
+        const assistant = opts.a.create(message_mod.AssistantMessage) catch {
             listener.emit(.{ .err = "out of memory" });
             return;
         };
@@ -266,7 +267,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
                 });
             }
 
-            const tool_message = types.Message{ .tool_result = .{
+            const tool_message = message_mod.Message{ .tool_result = .{
                 .tool_call_id = call.id,
                 .tool_name = call.name,
                 .text = if (result) |r| r.text else "aborted",

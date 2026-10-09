@@ -1,8 +1,9 @@
 const std = @import("std");
-const types = @import("../types.zig");
+const message_mod = @import("../message.zig");
+const models = @import("../models.zig");
 const styles = @import("styles.zig");
 
-pub fn estimateContextTokens(messages: []const types.Message, system_prompt: []const u8, tools_json: []const u8) u64 {
+pub fn estimateContextTokens(messages: []const message_mod.Message, system_prompt: []const u8, tools_json: []const u8) u64 {
     var last_idx: ?usize = null;
     var usage: u64 = 0;
     for (messages, 0..) |m, i| {
@@ -27,7 +28,7 @@ fn estimateTextTokens(text: []const u8) u64 {
     return (text.len + 3) / 4;
 }
 
-fn estimateMessageTokens(m: types.Message) u64 {
+fn estimateMessageTokens(m: message_mod.Message) u64 {
     return switch (m) {
         .user => |u| estimateTextTokens(u.content),
         .tool_result => |t| estimateTextTokens(t.text),
@@ -55,7 +56,7 @@ pub fn formatTokens(a: std.mem.Allocator, n: u64) []const u8 {
     return std.fmt.allocPrint(a, "{s}{s}", .{ num, unit }) catch unit;
 }
 
-pub fn contextUsageLine(a: std.mem.Allocator, used: u64, model: *const types.Model) []const u8 {
+pub fn contextUsageLine(a: std.mem.Allocator, used: u64, model: *const models.Model) []const u8 {
     const cw = @max(model.context_window, 1);
     const percent = @as(f64, @floatFromInt(used)) / @as(f64, @floatFromInt(cw)) * 100.0;
     const sizes = std.fmt.allocPrint(a, "{s}/{s}", .{ formatTokens(a, used), formatTokens(a, cw) }) catch "";
@@ -64,8 +65,8 @@ pub fn contextUsageLine(a: std.mem.Allocator, used: u64, model: *const types.Mod
     return if (percent >= 85) styles.yellow(a, text) else styles.dim(a, text);
 }
 
-pub fn lastUsage(messages: []const types.Message) types.Usage {
-    var out: types.Usage = .{};
+pub fn lastUsage(messages: []const message_mod.Message) message_mod.Usage {
+    var out: message_mod.Usage = .{};
     for (messages) |m| {
         if (m != .assistant) continue;
         const am = m.assistant;
@@ -76,7 +77,7 @@ pub fn lastUsage(messages: []const types.Message) types.Usage {
     return out;
 }
 
-pub fn cacheLine(a: std.mem.Allocator, usage: types.Usage) []const u8 {
+pub fn cacheLine(a: std.mem.Allocator, usage: message_mod.Usage) []const u8 {
     const prompt = usage.input + usage.cache_read + usage.cache_write;
     const pct: u64 = if (prompt == 0)
         0

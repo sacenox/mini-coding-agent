@@ -1,6 +1,6 @@
 const std = @import("std");
 const api = @import("../api.zig");
-const types = @import("../types.zig");
+const message_mod = @import("../message.zig");
 
 const ToolCall = struct {
     id: []const u8,
@@ -66,13 +66,13 @@ const Body = struct {
     tools: ?api.Tools = null,
 };
 
-fn toolCall(block: types.ContentBlock) ?ToolCall {
+fn toolCall(block: message_mod.ContentBlock) ?ToolCall {
     if (block != .tool_call) return null;
     const c = block.tool_call;
     return .{ .id = c.id, .function = .{ .name = c.name, .arguments = api.argumentsOrObject(c.arguments) } };
 }
 
-fn imageParts(a: std.mem.Allocator, run: []const types.Message) ![]const Part {
+fn imageParts(a: std.mem.Allocator, run: []const message_mod.Message) ![]const Part {
     var parts: std.ArrayList(Part) = .empty;
     try parts.append(a, .{ .text = .{ .text = "Attached image(s) from tool result:" } });
     for (run) |msg| {
@@ -120,7 +120,7 @@ fn buildMessages(a: std.mem.Allocator, req: api.Request) ![]const Message {
                     if (block == .thinking) try thinking.appendSlice(a, block.thinking.text);
                 }
                 try out.append(a, .{ .assistant = .{
-                    .content = try types.assistantText(a, am),
+                    .content = try am.text(a),
                     .reasoning_content = if (thinking.items.len > 0 or reasoning_on) thinking.items else null,
                     .tool_calls = if (calls.items.len > 0) calls.items else null,
                 } });
@@ -198,12 +198,12 @@ const State = struct {
     req: api.Request,
     sink: api.Sink,
     arena: *std.heap.ArenaAllocator,
-    msg: *types.AssistantMessage,
+    msg: *message_mod.AssistantMessage,
     text: std.ArrayList(u8) = .empty,
     thinking: std.ArrayList(u8) = .empty,
     signature: ?[]const u8 = null,
     calls: std.ArrayList(api.Call) = .empty,
-    usage: types.Usage = .{},
+    usage: message_mod.Usage = .{},
     finish_reason: ?[]const u8 = null,
     stream_error: ?[]const u8 = null,
     failed: bool = false,
@@ -269,11 +269,11 @@ fn handleDelta(st: *State, delta: Chunk.Delta) !void {
     }
 }
 
-fn usageOf(u: Chunk.Usage) types.Usage {
+fn usageOf(u: Chunk.Usage) message_mod.Usage {
     var cache_read = if (u.prompt_tokens_details) |d| d.cached_tokens.value else 0;
     if (cache_read == 0) cache_read = u.cached_tokens.value;
     const cache_write = if (u.prompt_tokens_details) |d| d.cache_write_tokens.value else 0;
-    var usage = types.Usage{
+    var usage = message_mod.Usage{
         .input = u.prompt_tokens.value -| cache_read -| cache_write,
         .output = u.completion_tokens.value,
         .cache_read = cache_read,
@@ -322,6 +322,6 @@ const wire = api.Wire{
     .build_body = buildBody,
 };
 
-pub fn stream(req: api.Request, sink: api.Sink) std.mem.Allocator.Error!types.AssistantMessage {
+pub fn stream(req: api.Request, sink: api.Sink) std.mem.Allocator.Error!message_mod.AssistantMessage {
     return api.run(State, Chunk, wire, req, sink, finalize);
 }

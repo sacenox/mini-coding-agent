@@ -3,7 +3,27 @@ const platform = @import("platform.zig");
 const modelsdev = @import("models_dev.zig");
 const http = @import("http.zig");
 const config = @import("config.zig");
-const types = @import("types.zig");
+
+pub const Thinking = enum { off, budget, effort };
+
+pub const Model = struct {
+    id: []const u8,
+    name: []const u8,
+    api: []const u8,
+    provider: []const u8,
+    base_url: []const u8,
+    api_key: ?[]const u8,
+    effort: []const u8,
+    supports_images: bool,
+    context_window: u64,
+    max_tokens: u64,
+    cost_input: f64,
+    cost_output: f64,
+    cost_cache_read: f64,
+    session_header: ?[]const u8,
+    headers: []const [2][]const u8 = &.{},
+    thinking: Thinking = .budget,
+};
 
 const Builtin = struct {
     id: []const u8,
@@ -62,7 +82,7 @@ fn clampEffort(reasoning: bool, effort: []const []const u8, desired: ?[]const u8
     return normalizeEffort(pick);
 }
 
-fn thinkingStyle(info: modelsdev.Info) types.Thinking {
+fn thinkingStyle(info: modelsdev.Info) Thinking {
     if (!info.reasoning) return .off;
     if (info.budget_tokens) return .budget;
     if (info.effort.len > 0) return .effort;
@@ -92,13 +112,13 @@ fn firstEnv(keys: []const []const u8) ?[]const u8 {
     return null;
 }
 
-pub fn resolve(a: std.mem.Allocator, cfg: *const config.Config, err: *?[]const u8) ?types.Model {
+pub fn resolve(a: std.mem.Allocator, cfg: *const config.Config, err: *?[]const u8) ?Model {
     const provider_id = cfg.provider orelse return null;
     const model_id = cfg.model orelse return null;
     return resolveNamed(a, cfg, provider_id, model_id, err);
 }
 
-pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id: []const u8, model_id: []const u8, err: *?[]const u8) ?types.Model {
+pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id: []const u8, model_id: []const u8, err: *?[]const u8) ?Model {
     if (builtin(provider_id)) |b| {
         var db = modelsdev.Db.open(a) catch {
             err.* = "model metadata unavailable";
@@ -108,7 +128,7 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
             err.* = unknownModel(a, model_id, provider_id);
             return null;
         };
-        return types.Model{
+        return Model{
             .id = model_id,
             .name = info.name,
             .api = info.api,
@@ -130,7 +150,7 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
     if (custom(cfg, provider_id)) |p| {
         for (p.models) |m| {
             if (!std.mem.eql(u8, m.id, model_id)) continue;
-            return types.Model{
+            return Model{
                 .id = m.id,
                 .name = m.name orelse m.id,
                 .api = @tagName(m.api),

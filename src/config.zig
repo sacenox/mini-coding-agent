@@ -1,7 +1,6 @@
 const std = @import("std");
 const platform = @import("platform.zig");
 const filesystem = @import("filesystem.zig");
-const theme = @import("tui/theme.zig");
 
 pub const ToolName = enum { edit, read, bash };
 
@@ -183,7 +182,7 @@ fn defaults(a: std.mem.Allocator) !Config {
         .provider = null,
         .model = null,
         .thinking_effort = null,
-        .theme = theme.default_id,
+        .theme = "tokyonight",
         .program_status = true,
         .custom_providers = &.{},
         .snapshot_ignore_dirs = &.{},

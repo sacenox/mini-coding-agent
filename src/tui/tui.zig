@@ -3,7 +3,7 @@ const platform = @import("../platform.zig");
 const time = @import("../time.zig");
 const config = @import("../config.zig");
 const session_mod = @import("../session.zig");
-const types = @import("../types.zig");
+const message_mod = @import("../message.zig");
 const agent = @import("../agent.zig");
 const models_mod = @import("../models.zig");
 const tools_index = @import("../tools.zig");
@@ -61,7 +61,7 @@ const Tui = struct {
     term: term.Terminal = .{},
     editor: editor_mod.Editor,
     live: screen.LiveRegion = .{},
-    messages: std.ArrayList(types.Message) = .empty,
+    messages: std.ArrayList(message_mod.Message) = .empty,
     backing: std.mem.Allocator = undefined,
     arena: std.heap.ArenaAllocator,
     a: std.mem.Allocator,
@@ -449,10 +449,10 @@ const Tui = struct {
         self.note(line);
     }
 
-    fn commitMessage(self: *Tui, am: *types.AssistantMessage) void {
+    fn commitMessage(self: *Tui, am: *message_mod.AssistantMessage) void {
         self.commitLines(self.reply.flush(self.s));
         defer self.streamed.clearRetainingCapacity();
-        const text = types.assistantText(self.s, am) catch return;
+        const text = am.text(self.s) catch return;
         const trimmed = std.mem.trim(u8, text, " \t\r\n");
         if (trimmed.len > 0 and std.mem.indexOf(u8, self.streamed.items, trimmed) == null) {
             self.commitLines(self.reply.feed(self.s, trimmed));
@@ -629,7 +629,7 @@ const Tui = struct {
             return;
         }
         self.editor.clear();
-        const message = types.Message{ .user = .{ .content = self.a.dupe(u8, text) catch text, .timestamp = time.nowMs() } };
+        const message = message_mod.Message{ .user = .{ .content = self.a.dupe(u8, text) catch text, .timestamp = time.nowMs() } };
         self.messages_mutex.lockUncancelable(platform.io);
         self.messages.append(platform.gpa, message) catch {
             self.messages_mutex.unlock(platform.io);
@@ -809,14 +809,14 @@ const Tui = struct {
                 const provider_id = self.pending_provider orelse return;
                 var err: ?[]const u8 = null;
                 const m = models_mod.resolveNamed(self.a, self.cfg, provider_id, id, &err) orelse return;
-                const ptr = self.a.create(types.Model) catch return;
+                const ptr = self.a.create(models_mod.Model) catch return;
                 ptr.* = m;
                 self.select(ptr);
                 config.save(self.a, self.cfg, .{ .provider = provider_id, .model = id }) catch {};
             },
             .thinking => {
                 const m = self.opts.model orelse return;
-                const updated = self.a.create(types.Model) catch return;
+                const updated = self.a.create(models_mod.Model) catch return;
                 updated.* = m.*;
                 updated.effort = models_mod.clampNamed(self.a, self.cfg, m.provider, m.id, id);
                 self.select(updated);
@@ -826,7 +826,7 @@ const Tui = struct {
         }
     }
 
-    fn select(self: *Tui, m: *const types.Model) void {
+    fn select(self: *Tui, m: *const models_mod.Model) void {
         self.opts.model = m;
         self.opts.supports_images = m.supports_images;
         self.opts.tools_json = tools_index.json(self.a, self.tool_names, self.opts.supports_images, self.opts.session.cwd);

@@ -1,6 +1,6 @@
 const std = @import("std");
 const config = @import("config.zig");
-const types = @import("types.zig");
+const message_mod = @import("message.zig");
 const read_tool = @import("tools/read.zig");
 const edit_tool = @import("tools/edit.zig");
 const bash_tool = @import("tools/bash.zig");
@@ -44,7 +44,7 @@ pub const FileDiff = struct {
 pub const Result = struct {
     text: []const u8,
     is_error: bool,
-    images: []const types.ImageContent = &.{},
+    images: []const message_mod.ImageContent = &.{},
     diffs: []const FileDiff = &.{},
     body: ?[]const u8 = null,
 };

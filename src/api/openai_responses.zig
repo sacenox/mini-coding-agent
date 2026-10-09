@@ -1,6 +1,6 @@
 const std = @import("std");
 const api = @import("../api.zig");
-const types = @import("../types.zig");
+const message_mod = @import("../message.zig");
 
 const InputItem = struct {
     type: []const u8,
@@ -139,12 +139,12 @@ const State = struct {
     req: api.Request,
     sink: api.Sink,
     arena: *std.heap.ArenaAllocator,
-    msg: *types.AssistantMessage,
+    msg: *message_mod.AssistantMessage,
     text: std.ArrayList(u8) = .empty,
     reasoning: std.ArrayList(u8) = .empty,
     encrypted: ?[]const u8 = null,
     calls: std.ArrayList(api.Call) = .empty,
-    usage: types.Usage = .{},
+    usage: message_mod.Usage = .{},
     status: ?[]const u8 = null,
     incomplete: ?[]const u8 = null,
     stream_error: ?[]const u8 = null,
@@ -312,6 +312,6 @@ const wire = api.Wire{
     .build_body = buildBody,
 };
 
-pub fn stream(req: api.Request, sink: api.Sink) std.mem.Allocator.Error!types.AssistantMessage {
+pub fn stream(req: api.Request, sink: api.Sink) std.mem.Allocator.Error!message_mod.AssistantMessage {
     return api.run(State, Chunk, wire, req, sink, finalize);
 }

@@ -4,7 +4,6 @@ const config = @import("config.zig");
 const prompt = @import("prompt.zig");
 const models = @import("models.zig");
 const session = @import("session.zig");
-const types = @import("types.zig");
 const agent = @import("agent.zig");
 const tools = @import("tools.zig");
 const tui = @import("tui/tui.zig");
@@ -87,8 +86,8 @@ fn run() !u8 {
     const cwd = std.process.currentPathAlloc(platform.io, a) catch ".";
     var sess = session.Session.init(a, cfg.sessions_dir, cwd);
 
-    const model_ptr: ?*const types.Model = if (model) |m| blk: {
-        const ptr = try a.create(types.Model);
+    const model_ptr: ?*const models.Model = if (model) |m| blk: {
+        const ptr = try a.create(models.Model);
         ptr.* = m;
         break :blk ptr;
     } else null;

@@ -194,8 +194,6 @@ const KANAGAWA_CAPTURES = [_]Capture{
     .{ .name = "text.reference", .style = .{ .fg = "#c4b28a" } },
 };
 
-pub const default_id = "tokyonight";
-
 pub fn find(id: []const u8) ?*const Theme {
     if (std.mem.eql(u8, id, "tokyonight")) return &TOKYONIGHT;
     if (std.mem.eql(u8, id, "oxocarbon")) return &OXOCARBON;

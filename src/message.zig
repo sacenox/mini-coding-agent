@@ -1,15 +1,5 @@
 const std = @import("std");
 
-pub const Raw = struct {
-    bytes: []const u8 = "",
-
-    pub fn jsonStringify(self: Raw, jws: anytype) !void {
-        try jws.beginWriteRaw();
-        try jws.writer.writeAll(self.bytes);
-        jws.endWriteRaw();
-    }
-};
-
 pub const Usage = struct {
     input: u64 = 0,
     output: u64 = 0,
@@ -80,6 +70,15 @@ pub const AssistantMessage = struct {
     stop_reason: StopReason = .pending,
     error_message: ?[]const u8 = null,
     timestamp: i64 = 0,
+
+    pub fn text(self: *const AssistantMessage, a: std.mem.Allocator) ![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        for (self.content.items) |block| switch (block) {
+            .text => |t| try out.appendSlice(a, t),
+            else => {},
+        };
+        return out.items;
+    }
 };
 
 pub const ToolResultMessage = struct {
@@ -95,34 +94,4 @@ pub const Message = union(enum) {
     user: struct { content: []const u8, timestamp: i64 },
     assistant: *AssistantMessage,
     tool_result: ToolResultMessage,
-};
-
-pub fn assistantText(a: std.mem.Allocator, msg: *const AssistantMessage) ![]const u8 {
-    var out: std.ArrayList(u8) = .empty;
-    for (msg.content.items) |block| switch (block) {
-        .text => |t| try out.appendSlice(a, t),
-        else => {},
-    };
-    return out.items;
-}
-
-pub const Thinking = enum { off, budget, effort };
-
-pub const Model = struct {
-    id: []const u8,
-    name: []const u8,
-    api: []const u8,
-    provider: []const u8,
-    base_url: []const u8,
-    api_key: ?[]const u8,
-    effort: []const u8,
-    supports_images: bool,
-    context_window: u64,
-    max_tokens: u64,
-    cost_input: f64,
-    cost_output: f64,
-    cost_cache_read: f64,
-    session_header: ?[]const u8,
-    headers: []const [2][]const u8 = &.{},
-    thinking: Thinking = .budget,
 };

@@ -1,12 +1,13 @@
 const std = @import("std");
 const api = @import("../api.zig");
-const types = @import("../types.zig");
+const message_mod = @import("../message.zig");
+const json = @import("../json.zig");
 
 const Part = struct {
     text: ?[]const u8 = null,
     thought: ?bool = null,
     inlineData: ?struct { mimeType: []const u8, data: []const u8 } = null,
-    functionCall: ?struct { name: []const u8, args: api.Raw } = null,
+    functionCall: ?struct { name: []const u8, args: json.Raw } = null,
     thoughtSignature: ?[]const u8 = null,
     functionResponse: ?struct {
         name: []const u8,
@@ -38,7 +39,7 @@ fn textPart(text: []const u8) Part {
     return .{ .text = text };
 }
 
-fn contentParts(a: std.mem.Allocator, msg: types.Message) ![]const Part {
+fn contentParts(a: std.mem.Allocator, msg: message_mod.Message) ![]const Part {
     switch (msg) {
         .user => |u| {
             const parts = try a.alloc(Part, 1);
@@ -68,7 +69,7 @@ fn contentParts(a: std.mem.Allocator, msg: types.Message) ![]const Part {
     }
 }
 
-fn toolResultContent(a: std.mem.Allocator, run: []const types.Message) !Content {
+fn toolResultContent(a: std.mem.Allocator, run: []const message_mod.Message) !Content {
     const parts = try a.alloc(Part, run.len);
     for (run, parts) |msg, *part| {
         const t = msg.tool_result;
@@ -184,12 +185,12 @@ const State = struct {
     req: api.Request,
     sink: api.Sink,
     arena: *std.heap.ArenaAllocator,
-    msg: *types.AssistantMessage,
+    msg: *message_mod.AssistantMessage,
     text: std.ArrayList(u8) = .empty,
     reasoning: std.ArrayList(u8) = .empty,
     signature: ?[]const u8 = null,
     calls: std.ArrayList(api.Call) = .empty,
-    usage: types.Usage = .{},
+    usage: message_mod.Usage = .{},
     finish: ?[]const u8 = null,
     stream_error: ?[]const u8 = null,
     failed: bool = false,
@@ -275,6 +276,6 @@ const wire = api.Wire{
     .build_body = buildBody,
 };
 
-pub fn stream(req: api.Request, sink: api.Sink) std.mem.Allocator.Error!types.AssistantMessage {
+pub fn stream(req: api.Request, sink: api.Sink) std.mem.Allocator.Error!message_mod.AssistantMessage {
     return api.run(State, Chunk, wire, req, sink, finalize);
 }

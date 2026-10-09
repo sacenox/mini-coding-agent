@@ -1,7 +1,7 @@
 const std = @import("std");
 const filesystem = @import("../filesystem.zig");
 const text = @import("../text.zig");
-const types = @import("../types.zig");
+const message_mod = @import("../message.zig");
 const tools = @import("../tools.zig");
 
 const Args = struct {
@@ -124,7 +124,7 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
         const b64 = a.alloc(u8, encoded) catch return fail(a, "read failed: out of memory", .{});
         _ = std.base64.standard.Encoder.encode(b64, data);
         const summary = std.fmt.allocPrint(a, "read {s} ({s}, {d} bytes)", .{ path, mime, data.len }) catch "read";
-        const images = a.alloc(types.ImageContent, 1) catch return .{ .text = summary, .is_error = false };
+        const images = a.alloc(message_mod.ImageContent, 1) catch return .{ .text = summary, .is_error = false };
         images[0] = .{ .data = b64, .mime_type = mime };
         return .{
             .text = summary,
