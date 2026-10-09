@@ -119,19 +119,15 @@ pub fn diffLines(a: std.mem.Allocator, path: []const u8, lines: []const []const 
     return out.items;
 }
 
-pub fn diffRows(a: std.mem.Allocator, diffs: []const common.FileDiff) []const BodyLine {
-    var out: std.ArrayList(BodyLine) = .empty;
-    for (diffs) |d| {
-        out.append(a, .{ .text = d.path, .style = .{ .fg = theme.current.prompt } }) catch {};
-        if (d.patch) |patch| {
-            const trimmed = std.mem.trimEnd(u8, patch, " \t\r\n");
-            var it = std.mem.splitScalar(u8, trimmed, '\n');
-            var body: std.ArrayList([]const u8) = .empty;
-            while (it.next()) |l| body.append(a, l) catch {};
-            out.appendSlice(a, diffLines(a, d.path, body.items)) catch {};
-        } else if (d.note) |note| {
-            out.append(a, .{ .text = note, .style = .{ .fg = theme.current.comment } }) catch {};
-        }
+pub fn diffBody(a: std.mem.Allocator, d: common.FileDiff) []const BodyLine {
+    if (d.patch) |patch| {
+        const trimmed = std.mem.trimEnd(u8, patch, " \t\r\n");
+        var it = std.mem.splitScalar(u8, trimmed, '\n');
+        var body: std.ArrayList([]const u8) = .empty;
+        while (it.next()) |l| body.append(a, l) catch {};
+        return diffLines(a, d.path, body.items);
     }
+    var out: std.ArrayList(BodyLine) = .empty;
+    if (d.note) |note| out.append(a, .{ .text = note, .style = .{ .fg = theme.current.comment } }) catch {};
     return out.items;
 }

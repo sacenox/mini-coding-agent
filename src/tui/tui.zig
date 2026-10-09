@@ -417,8 +417,9 @@ const Tui = struct {
             }
             if (bash_exit) |status_line| self.push(status_line);
         }
-        if (diffs.len > 0) {
-            for (render.plainRows(self.s, diff_view.diffRows(self.s, diffs))) |row| {
+        for (diffs) |d| {
+            self.push(tool_view.diffHead(self.s, name, d.path));
+            for (render.plainRows(self.s, diff_view.diffBody(self.s, d))) |row| {
                 self.push(std.fmt.allocPrint(self.s, "{s}{s}", .{ styles.dim(self.s, BODY_PREFIX), row }) catch row);
             }
         }

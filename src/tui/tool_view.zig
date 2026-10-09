@@ -12,6 +12,11 @@ fn callHead(a: std.mem.Allocator, name: []const u8) []const u8 {
     return styles.teal(a, std.fmt.allocPrint(a, "-> {s}", .{name}) catch "->");
 }
 
+pub fn diffHead(a: std.mem.Allocator, name: []const u8, path: []const u8) []const u8 {
+    const head = callHead(a, std.fmt.allocPrint(a, "{s} diff", .{name}) catch name);
+    return std.fmt.allocPrint(a, "{s}  {s}", .{ head, path }) catch path;
+}
+
 pub fn relativize(cwd: []const u8, path: []const u8) []const u8 {
     if (!std.fs.path.isAbsolute(path) or cwd.len == 0) return path;
     if (!std.mem.startsWith(u8, path, cwd)) return path;
