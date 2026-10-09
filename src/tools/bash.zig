@@ -12,7 +12,7 @@ const default_timeout_s = 120;
 
 const description_fmt =
     "Run a bash command and return its combined output.\n\n" ++
-    "The command runs with `bash -c` starting in {s}, so pipes, redirects, globs, and && work. Use it for " ++
+    "The command runs with `bash -c` starting in {s}, your working directory. Use it for " ++
     "builds, tests, git, package managers, and file work that read and edit do not cover. The output ends " ++
     "with an `exit code:` line. Pass `timeout` (seconds) to change the 120-second limit.";
 
