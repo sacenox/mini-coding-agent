@@ -51,46 +51,35 @@ fn syntax(a: std.mem.Allocator, language: *const ts.Language, sources: []const [
 
 var grammars: ?Grammars = null;
 
-const Grammars = struct {
-    javascript: Syntax,
-    typescript: Syntax,
-    tsx: Syntax,
-    markdown: Syntax,
-    markdown_inline: Syntax,
-    python: Syntax,
-    go: Syntax,
-    zig: Syntax,
-    bash: Syntax,
-    diff: Syntax,
+const Lang = enum { javascript, typescript, tsx, markdown, markdown_inline, python, go, zig, bash, diff };
 
-    fn init(a: std.mem.Allocator) Grammars {
-        const js = tree_sitter_javascript();
-        const ts_lang = tree_sitter_typescript();
-        const tsx_lang = tree_sitter_tsx();
-        const md = tree_sitter_markdown();
-        const md_inline = tree_sitter_markdown_inline();
-        const py = tree_sitter_python();
-        const go_lang = tree_sitter_go();
-        const zig_lang = tree_sitter_zig();
-        const bash_lang = tree_sitter_bash();
-        const diff_lang = tree_sitter_diff();
-        return .{
-            .javascript = syntax(a, js, &.{JS_QUERIES}) orelse unreachable,
-            .typescript = syntax(a, ts_lang, &.{ JS_QUERIES, TS_QUERIES }) orelse unreachable,
-            .tsx = syntax(a, tsx_lang, &.{ JS_QUERIES, TS_QUERIES }) orelse unreachable,
-            .markdown = syntax(a, md, &.{ MD_QUERIES, MD_TABLES }) orelse unreachable,
-            .markdown_inline = syntax(a, md_inline, &.{MD_INLINE_QUERIES}) orelse unreachable,
-            .python = syntax(a, py, &.{PY_QUERIES}) orelse unreachable,
-            .go = syntax(a, go_lang, &.{GO_QUERIES}) orelse unreachable,
-            .zig = syntax(a, zig_lang, &.{ZIG_QUERIES}) orelse unreachable,
-            .bash = syntax(a, bash_lang, &.{BASH_QUERIES}) orelse unreachable,
-            .diff = syntax(a, diff_lang, &.{DIFF_QUERIES}) orelse unreachable,
-        };
+fn load(a: std.mem.Allocator, lang: Lang) Syntax {
+    return switch (lang) {
+        .javascript => syntax(a, tree_sitter_javascript(), &.{JS_QUERIES}) orelse unreachable,
+        .typescript => syntax(a, tree_sitter_typescript(), &.{ JS_QUERIES, TS_QUERIES }) orelse unreachable,
+        .tsx => syntax(a, tree_sitter_tsx(), &.{ JS_QUERIES, TS_QUERIES }) orelse unreachable,
+        .markdown => syntax(a, tree_sitter_markdown(), &.{ MD_QUERIES, MD_TABLES }) orelse unreachable,
+        .markdown_inline => syntax(a, tree_sitter_markdown_inline(), &.{MD_INLINE_QUERIES}) orelse unreachable,
+        .python => syntax(a, tree_sitter_python(), &.{PY_QUERIES}) orelse unreachable,
+        .go => syntax(a, tree_sitter_go(), &.{GO_QUERIES}) orelse unreachable,
+        .zig => syntax(a, tree_sitter_zig(), &.{ZIG_QUERIES}) orelse unreachable,
+        .bash => syntax(a, tree_sitter_bash(), &.{BASH_QUERIES}) orelse unreachable,
+        .diff => syntax(a, tree_sitter_diff(), &.{DIFF_QUERIES}) orelse unreachable,
+    };
+}
+
+const Grammars = struct {
+    slots: [@typeInfo(Lang).@"enum".fields.len]?Syntax = @splat(null),
+
+    fn get(self: *Grammars, a: std.mem.Allocator, lang: Lang) *Syntax {
+        const slot = &self.slots[@intFromEnum(lang)];
+        if (slot.* == null) slot.* = load(a, lang);
+        return &slot.*.?;
     }
 };
 
-fn getGrammars(a: std.mem.Allocator) *Grammars {
-    if (grammars == null) grammars = Grammars.init(a);
+fn getGrammars() *Grammars {
+    if (grammars == null) grammars = .{};
     return &grammars.?;
 }
 
@@ -295,15 +284,19 @@ fn emit(a: std.mem.Allocator, out: *std.ArrayList(u8), active: *std.ArrayList(us
     at.* = end;
 }
 
-fn syntaxFor(g: *Grammars, lang: []const u8) ?*Syntax {
-    if (std.mem.eql(u8, lang, "js") or std.mem.eql(u8, lang, "javascript") or std.mem.eql(u8, lang, "jsx")) return &g.javascript;
-    if (std.mem.eql(u8, lang, "ts") or std.mem.eql(u8, lang, "typescript")) return &g.typescript;
-    if (std.mem.eql(u8, lang, "tsx")) return &g.tsx;
-    if (std.mem.eql(u8, lang, "py") or std.mem.eql(u8, lang, "python")) return &g.python;
-    if (std.mem.eql(u8, lang, "go") or std.mem.eql(u8, lang, "golang")) return &g.go;
-    if (std.mem.eql(u8, lang, "zig")) return &g.zig;
-    if (std.mem.eql(u8, lang, "bash") or std.mem.eql(u8, lang, "sh") or std.mem.eql(u8, lang, "shell")) return &g.bash;
+fn langFor(lang: []const u8) ?Lang {
+    if (std.mem.eql(u8, lang, "js") or std.mem.eql(u8, lang, "javascript") or std.mem.eql(u8, lang, "jsx")) return .javascript;
+    if (std.mem.eql(u8, lang, "ts") or std.mem.eql(u8, lang, "typescript")) return .typescript;
+    if (std.mem.eql(u8, lang, "tsx")) return .tsx;
+    if (std.mem.eql(u8, lang, "py") or std.mem.eql(u8, lang, "python")) return .python;
+    if (std.mem.eql(u8, lang, "go") or std.mem.eql(u8, lang, "golang")) return .go;
+    if (std.mem.eql(u8, lang, "zig")) return .zig;
+    if (std.mem.eql(u8, lang, "bash") or std.mem.eql(u8, lang, "sh") or std.mem.eql(u8, lang, "shell")) return .bash;
     return null;
+}
+
+fn syntaxFor(g: *Grammars, a: std.mem.Allocator, lang: []const u8) ?*Syntax {
+    return g.get(a, langFor(lang) orelse return null);
 }
 
 fn infoLang(info: []const u8) []const u8 {
@@ -314,9 +307,9 @@ fn infoLang(info: []const u8) []const u8 {
 }
 
 pub fn spansFor(a: std.mem.Allocator, info: []const u8, text: []const u8) []const Span {
-    const g = getGrammars(a);
+    const g = getGrammars();
     const lang = std.ascii.allocLowerString(a, infoLang(info)) catch infoLang(info);
-    const s = syntaxFor(g, lang) orelse return &.{};
+    const s = syntaxFor(g, a, lang) orelse return &.{};
     const u = utf16(a, text) orelse return &.{};
     const root = parse(s.parser, u) orelse return &.{};
     defer root.destroy();
@@ -359,9 +352,9 @@ fn collectDiffNodes(a: std.mem.Allocator, node: ts.Node, u: Utf16, out: *std.Arr
 }
 
 pub fn diffSpans(a: std.mem.Allocator, text: []const u8) []NodeSpan {
-    const g = getGrammars(a);
+    const g = getGrammars();
     const u = utf16(a, text) orelse return &.{};
-    const root = parse(g.diff.parser, u) orelse return &.{};
+    const root = parse(g.get(a, .diff).parser, u) orelse return &.{};
     defer root.destroy();
     var out: std.ArrayList(NodeSpan) = .empty;
     collectDiffNodes(a, root.rootNode(), u, &out);
@@ -373,12 +366,12 @@ pub fn highlightCode(a: std.mem.Allocator, info: []const u8, text: []const u8) [
 }
 
 pub fn highlightMarkdown(a: std.mem.Allocator, text: []const u8) []const u8 {
-    const g = getGrammars(a);
+    const g = getGrammars();
     const u = utf16(a, text) orelse return text;
-    const root = parse(g.markdown.parser, u) orelse return text;
+    const root = parse(g.get(a, .markdown).parser, u) orelse return text;
     defer root.destroy();
     var spans: std.ArrayList(Span) = .empty;
-    spans.appendSlice(a, spansOf(a, &g.markdown, root.rootNode(), u, text, 0)) catch {};
+    spans.appendSlice(a, spansOf(a, g.get(a, .markdown), root.rootNode(), u, text, 0)) catch {};
 
     var inline_nodes: std.ArrayList(ts.Node) = .empty;
     collectByKind(a, root.rootNode(), &.{ "inline", "pipe_table_cell" }, &inline_nodes);
@@ -386,9 +379,9 @@ pub fn highlightMarkdown(a: std.mem.Allocator, text: []const u8) []const u8 {
         const start = byteOf(u, node.startByte() / 2);
         const inline_text = text[start..byteOf(u, node.endByte() / 2)];
         const iu = utf16(a, inline_text) orelse continue;
-        const inline_root = parse(g.markdown_inline.parser, iu) orelse continue;
+        const inline_root = parse(g.get(a, .markdown_inline).parser, iu) orelse continue;
         defer inline_root.destroy();
-        spans.appendSlice(a, spansOf(a, &g.markdown_inline, inline_root.rootNode(), iu, inline_text, start)) catch {};
+        spans.appendSlice(a, spansOf(a, g.get(a, .markdown_inline), inline_root.rootNode(), iu, inline_text, start)) catch {};
         var code_spans: std.ArrayList(ts.Node) = .empty;
         collectByKind(a, inline_root.rootNode(), &.{"code_span"}, &code_spans);
         for (code_spans.items) |code| spans = std.ArrayList(Span).fromOwnedSlice(recolor(
@@ -506,7 +499,7 @@ fn formatTable(a: std.mem.Allocator, text: []const u8, u: Utf16, table: ts.Node)
 
 pub fn formatTables(a: std.mem.Allocator, text: []const u8) []const u8 {
     const u = utf16(a, text) orelse return text;
-    const root = parse(getGrammars(a).markdown.parser, u) orelse return text;
+    const root = parse(getGrammars().get(a, .markdown).parser, u) orelse return text;
     defer root.destroy();
     var tables: std.ArrayList(ts.Node) = .empty;
     collectByKind(a, root.rootNode(), &.{"pipe_table"}, &tables);
