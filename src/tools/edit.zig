@@ -4,11 +4,37 @@ const text = @import("../text.zig");
 const platform = @import("../platform.zig");
 const diff = @import("../diff.zig");
 const common = @import("common.zig");
+const spec = @import("spec.zig");
 
 const Args = struct {
     path: []const u8,
     oldText: []const u8,
     newText: []const u8,
+};
+
+const description =
+    "Edit a file by replacing exact text.\n\n" ++
+    "`oldText` must match the file byte-for-byte and occur exactly once; include surrounding lines to make " ++
+    "it unique. `newText` replaces it. If `oldText` is missing or matches more than once, the edit fails " ++
+    "without changing anything.\n\n" ++
+    "To create a new file, pass an empty `oldText`; this fails if the file already exists. The result " ++
+    "includes a unified diff of the change.";
+
+const params = [_]spec.Param{
+    .{ .name = "path", .kind = .string, .description = "File to edit, or to create when `oldText` is empty." },
+    .{ .name = "oldText", .kind = .string, .description = "Exact text to replace. Must occur exactly once. Leave empty to create a new file." },
+    .{ .name = "newText", .kind = .string, .description = "Replacement text." },
+};
+
+fn describe(_: std.mem.Allocator, _: spec.Describe) []const u8 {
+    return description;
+}
+
+pub const tool = spec.Descriptor{
+    .name = .edit,
+    .description = describe,
+    .params = &params,
+    .run = run,
 };
 
 fn fail(a: std.mem.Allocator, comptime fmt: []const u8, args: anytype) common.Result {

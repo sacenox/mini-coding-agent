@@ -3,11 +3,42 @@ const filesystem = @import("../filesystem.zig");
 const text = @import("../text.zig");
 const types = @import("../types.zig");
 const common = @import("common.zig");
+const spec = @import("spec.zig");
 
 const Args = struct {
     path: []const u8,
     offset: ?usize = null,
     range: ?usize = null,
+};
+
+const description_base =
+    "Read a file and return its text.\n\n" ++
+    "Relative paths resolve against the working directory. Prefer this over cat, head, or sed. The whole " ++
+    "file is returned by default; pass `offset` (the 1-based first line) and/or `range` (the number of " ++
+    "lines) to read part of it.";
+
+const text_description = description_base ++
+    "\n\nText longer than 100,000 characters is truncated, and binary files are rejected; use bash to read those.";
+
+const image_description = description_base ++
+    "\n\nImages (png, jpg, jpeg, webp) are returned as image content. Text longer than 100,000 characters is " ++
+    "truncated.";
+
+const params = [_]spec.Param{
+    .{ .name = "path", .kind = .string, .description = "File to read. Relative paths resolve against the working directory." },
+    .{ .name = "offset", .kind = .integer, .required = false, .description = "First line to return, 1-based. Defaults to the beginning of the file." },
+    .{ .name = "range", .kind = .integer, .required = false, .description = "Number of lines to return from `offset`. Defaults to the end of the file." },
+};
+
+fn describe(_: std.mem.Allocator, ctx: spec.Describe) []const u8 {
+    return if (ctx.with_images) image_description else text_description;
+}
+
+pub const tool = spec.Descriptor{
+    .name = .read,
+    .description = describe,
+    .params = &params,
+    .run = run,
 };
 
 const image_mime = [_]struct { ext: []const u8, mime: []const u8 }{

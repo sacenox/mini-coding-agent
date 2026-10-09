@@ -3,12 +3,35 @@ const platform = @import("../platform.zig");
 const text = @import("../text.zig");
 const common = @import("common.zig");
 const snapshot = @import("snapshot.zig");
+const spec = @import("spec.zig");
 
 const max_head = 10_000;
 const max_tail = 6_000;
 const truncated_marker = "\n\n... output truncated ...\n\n";
 
 const default_timeout_s = 120;
+
+const description_fmt =
+    "Run a bash command and return its combined output.\n\n" ++
+    "The command runs with `bash -c` starting in {s}, so pipes, redirects, globs, and && work. Use it for " ++
+    "builds, tests, git, package managers, and file work that read and edit do not cover. The output ends " ++
+    "with an `exit code:` line. Pass `timeout` (seconds) to change the 120-second limit.";
+
+const params = [_]spec.Param{
+    .{ .name = "command", .kind = .string, .description = "Bash command line to execute." },
+    .{ .name = "timeout", .kind = .integer, .required = false, .description = "Seconds to allow before the command is killed. Defaults to 120." },
+};
+
+fn describe(a: std.mem.Allocator, ctx: spec.Describe) []const u8 {
+    return std.fmt.allocPrint(a, description_fmt, .{ctx.cwd}) catch "Run a bash command.";
+}
+
+pub const tool = spec.Descriptor{
+    .name = .bash,
+    .description = describe,
+    .params = &params,
+    .run = run,
+};
 
 const Args = struct { command: []const u8, timeout: ?u64 = null };
 
