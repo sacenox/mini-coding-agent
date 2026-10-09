@@ -20,6 +20,7 @@ const usage_mod = @import("usage.zig");
 const diff_view = @import("diff_view.zig");
 const tool_view = @import("tool_view.zig");
 const screen = @import("screen.zig");
+const status = @import("../status.zig");
 
 const SPINNER = "⠀⠁⠂⠃⠄⠅⠆⠇⡀⡁⡂⡃⡄⡅⡆⡇⠈⠉⠊⠋⠌⠍⠎⠏⡈⡉⡊⡋⡌⡍⡎⡏⠐⠑⠒⠓⠔⠕⠖⠗⡐⡑⡒⡓⡔⡕⡖⡗⠘⠙⠚⠛⠜⠝⠞⠟⡘⡙⡚⡛⡜⡝⡞⡟⠠⠡⠢⠣⠤⠥⠦⠧⡠⡡⡢⡣⡤⡥⡦⡧⠨⠩⠪⠫⠬⠭⠮⠯⡨⡩⡪⡫⡬⡭⡮⡯⠰⠱⠲⠳⠴⠵⠶⠷⡰⡱⡲⡳⡴⡵⡶⡷⠸⠹⠺⠻⠼⠽⠾⠿⡸⡹⡺⡻⡼⡽⡾⡿⢀⢁⢂⢃⢄⢅⢆⢇⣀⣁⣂⣃⣄⣅⣆⣇⢈⢉⢊⢋⢌⢍⢎⢏⣈⣉⣊⣋⣌⣍⣎⣏⢐⢑⢒⢓⢔⢕⢖⢗⣐⣑⣒⣓⣔⣕⣖⣗⢘⢙⢚⢛⢜⢝⢞⢟⣘⣙⣚⣛⣜⣝⣞⣟⢠⢡⢢⢣⢤⢥⢦⢧⣠⣡⣢⣣⣤⣥⣦⣧⢨⢩⢪⢫⢬⢭⢮⢯⣨⣩⣪⣫⣬⣭⣮⣯⢰⢱⢲⢳⢴⢵⢶⢷⣰⣱⣲⣳⣴⣵⣶⣷⢸⢹⢺⢻⢼⢽⢾⢿⣸⣹⣺⣻⣼⣽⣾⣿";
 const SPINNER_MS = 120;
@@ -295,13 +296,13 @@ const Tui = struct {
         self.resetScratch();
         const width = @max(self.term.width(), 1);
         const height = @max(self.term.height() - 1, 1);
-        const status = self.statusLine();
-        const status_rows = physicalRows(status, width);
+        const status_line = self.statusLine();
+        const status_rows = physicalRows(status_line, width);
         const editor_budget = height -| status_rows;
         const ed = self.editor.layout(width, @max(editor_budget, 1));
 
         var lines: std.ArrayList([]const u8) = .empty;
-        lines.append(self.s, status) catch {};
+        lines.append(self.s, status_line) catch {};
         const caret_line = lines.items.len + ed.cursor_row;
         for (ed.rows) |r| lines.append(self.s, r) catch {};
 
@@ -331,6 +332,11 @@ const Tui = struct {
                     self.text_bytes = 0;
                     self.reasoning_bytes = 0;
                 }
+                self.reportStatus(switch (p.phase) {
+                    .preparing, .waiting_model, .streaming, .snapshotting, .running_tool => "working",
+                    .pausing => "blocked",
+                    .idle => "idle",
+                }, if (p.phase == .pausing) "question" else null, if (p.phase == .pausing) "paused - type steering to continue" else null);
             },
             .text => |delta| {
                 self.stream_kind = .text;
@@ -365,12 +371,29 @@ const Tui = struct {
             .tool_output => {},
             .message => |am| self.commitMessage(am),
             .tool_result => |tr| self.commitToolResult(tr.name, tr.text, tr.is_error, tr.diffs, tr.body),
-            .err => |m| self.endTurn(styles.red(self.s, std.fmt.allocPrint(self.s, "! {s}", .{m}) catch "! error")),
-            .no_model => self.endTurn(styles.red(self.s, "! no model configured")),
-            .cancelled => self.endTurn(styles.red(self.s, "! cancelled")),
-            .complete => self.endTurn(styles.dim(self.s, std.fmt.allocPrint(self.s, "[complete · {d}s]", .{@max(0, @divFloor(time.nowMs() - self.turn_start, 1000))}) catch "[complete]")),
+            .err => |m| {
+                self.reportStatus("error", null, m);
+                self.endTurn(styles.red(self.s, std.fmt.allocPrint(self.s, "! {s}", .{m}) catch "! error"));
+            },
+            .no_model => {
+                self.reportStatus("error", null, "no model configured");
+                self.endTurn(styles.red(self.s, "! no model configured"));
+            },
+            .cancelled => {
+                self.reportStatus("idle", null, null);
+                self.endTurn(styles.red(self.s, "! cancelled"));
+            },
+            .complete => {
+                self.reportStatus("done", null, null);
+                self.endTurn(styles.dim(self.s, std.fmt.allocPrint(self.s, "[complete · {d}s]", .{@max(0, @divFloor(time.nowMs() - self.turn_start, 1000))}) catch "[complete]"));
+            },
         }
         self.dirty = true;
+    }
+
+    fn reportStatus(self: *Tui, state: []const u8, kind: ?[]const u8, msg: ?[]const u8) void {
+        if (!self.cfg.program_status) return;
+        status.report(state, kind, msg);
     }
 
     fn endTurn(self: *Tui, line: []const u8) void {
@@ -446,6 +469,7 @@ const Tui = struct {
                 self.steering_text = "";
                 if (!self.aborting) {
                     self.aborting = true;
+                    self.reportStatus("idle", null, null);
                     self.endTurn(styles.red(self.s, "! cancelled"));
                 }
                 self.dirty = true;
@@ -869,6 +893,7 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
     std.posix.sigaction(std.posix.SIG.HUP, &term_act, null);
     std.posix.sigaction(std.posix.SIG.QUIT, &term_act, null);
 
+    self.reportStatus("idle", null, null);
     self.pushBanner();
     self.draw();
 

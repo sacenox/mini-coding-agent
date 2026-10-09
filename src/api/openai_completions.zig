@@ -87,6 +87,10 @@ fn imageParts(a: std.mem.Allocator, run: []const types.Message) ![]const Part {
 
 fn buildMessages(a: std.mem.Allocator, req: api.Request) ![]const Message {
     var out: std.ArrayList(Message) = .empty;
+    // Some upstreams reject a thinking-mode request whose assistant messages omit
+    // reasoning_content, even when the turn produced none, so the field is always
+    // sent (empty) while reasoning is on.
+    const reasoning_on = req.effort.len > 0 and !std.mem.eql(u8, req.effort, "off");
     if (req.system_prompt.len > 0) {
         try out.append(a, .{ .system = .{ .content = req.system_prompt } });
     }
@@ -117,7 +121,7 @@ fn buildMessages(a: std.mem.Allocator, req: api.Request) ![]const Message {
                 }
                 try out.append(a, .{ .assistant = .{
                     .content = try types.assistantText(a, am),
-                    .reasoning_content = if (thinking.items.len > 0) thinking.items else null,
+                    .reasoning_content = if (thinking.items.len > 0 or reasoning_on) thinking.items else null,
                     .tool_calls = if (calls.items.len > 0) calls.items else null,
                 } });
             },
