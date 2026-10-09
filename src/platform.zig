@@ -41,7 +41,12 @@ pub fn writeErr(bytes: []const u8) void {
 }
 
 pub fn printErr(comptime fmt: []const u8, fmt_args: anytype) void {
-    const s = std.fmt.allocPrint(gpa, fmt, fmt_args) catch return;
-    defer gpa.free(s);
+    var buf: [512]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, fmt, fmt_args) catch {
+        const heap = std.fmt.allocPrint(gpa, fmt, fmt_args) catch return;
+        defer gpa.free(heap);
+        writeErr(heap);
+        return;
+    };
     writeErr(s);
 }

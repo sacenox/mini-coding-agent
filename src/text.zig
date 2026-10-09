@@ -1,5 +1,11 @@
 const std = @import("std");
 
+const binary_sniff = 8192;
+
+pub fn isBinary(bytes: []const u8) bool {
+    return std.mem.indexOfScalar(u8, bytes[0..@min(bytes.len, binary_sniff)], 0) != null;
+}
+
 fn utf8SeqLen(p: []const u8) ?usize {
     if (p.len == 0) return null;
     const c = p[0];

@@ -106,6 +106,8 @@ pub fn assistantText(a: std.mem.Allocator, msg: *const AssistantMessage) ![]cons
     return out.items;
 }
 
+pub const Thinking = enum { off, budget, effort };
+
 pub const Model = struct {
     id: []const u8,
     name: []const u8,
@@ -122,4 +124,5 @@ pub const Model = struct {
     cost_cache_read: f64,
     session_header: ?[]const u8,
     headers: []const [2][]const u8 = &.{},
+    thinking: Thinking = .budget,
 };

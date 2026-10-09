@@ -89,7 +89,8 @@ const Message = union(enum) {
     }
 };
 
-const Thinking = struct { type: []const u8 = "enabled", budget_tokens: u64 };
+const Thinking = struct { type: []const u8, budget_tokens: ?u64 = null };
+const OutputConfig = struct { effort: []const u8 };
 
 const Body = struct {
     model: []const u8,
@@ -97,6 +98,7 @@ const Body = struct {
     stream: bool = true,
     system: ?[]const u8 = null,
     thinking: ?Thinking = null,
+    output_config: ?OutputConfig = null,
     messages: []const Message,
     tools: ?api.Tools = null,
 };
@@ -186,11 +188,18 @@ fn buildBody(req: api.Request) ![]u8 {
     const budget = budgetFor(req.effort);
     var max_tokens: u64 = if (req.model.max_tokens > 0) req.model.max_tokens else 8192;
     if (budget > 0 and max_tokens <= budget) max_tokens = budget + 4096;
+    const adaptive = req.model.thinking == .effort and req.effort.len > 0 and budget > 0;
     const body = Body{
         .model = req.model.id,
         .max_tokens = max_tokens,
         .system = if (req.system_prompt.len > 0) req.system_prompt else null,
-        .thinking = if (budget > 0) .{ .budget_tokens = budget } else null,
+        .thinking = if (adaptive)
+            Thinking{ .type = "adaptive" }
+        else if (budget > 0)
+            Thinking{ .type = "enabled", .budget_tokens = budget }
+        else
+            null,
+        .output_config = if (adaptive) OutputConfig{ .effort = req.effort } else null,
         .messages = try buildMessages(a, req),
         .tools = if (req.tools_json.len > 0) .{ .a = a, .json = req.tools_json, .form = .{
             .open = "[",

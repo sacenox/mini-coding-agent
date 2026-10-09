@@ -23,14 +23,14 @@ pub fn fileExists(path: []const u8) bool {
     return true;
 }
 
-pub fn listDir(a: std.mem.Allocator, root: []const u8) [][]u8 {
-    var out: std.ArrayList([]u8) = .empty;
-    const dir = std.Io.Dir.cwd().openDir(platform.io, root, .{ .iterate = true }) catch return &.{};
+pub fn listDir(a: std.mem.Allocator, root: []const u8) ![]const []const u8 {
+    var dir = try std.Io.Dir.cwd().openDir(platform.io, root, .{ .iterate = true });
     defer dir.close(platform.io);
+    var out: std.ArrayList([]const u8) = .empty;
+    errdefer out.deinit(a);
     var it = dir.iterate();
-    while (it.next(platform.io) catch return out.toOwnedSlice(a) catch &.{}) |entry| {
-        out.append(a, a.dupe(u8, entry.name) catch return out.toOwnedSlice(a) catch &.{}) catch
-            return out.toOwnedSlice(a) catch &.{};
+    while (try it.next(platform.io)) |entry| {
+        try out.append(a, try a.dupe(u8, entry.name));
     }
-    return out.toOwnedSlice(a) catch &.{};
+    return out.toOwnedSlice(a);
 }

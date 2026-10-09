@@ -62,6 +62,13 @@ fn clampEffort(reasoning: bool, effort: []const []const u8, desired: ?[]const u8
     return normalizeEffort(pick);
 }
 
+fn thinkingStyle(info: modelsdev.Info) types.Thinking {
+    if (!info.reasoning) return .off;
+    if (info.budget_tokens) return .budget;
+    if (info.effort.len > 0) return .effort;
+    return .budget;
+}
+
 fn builtin(id: []const u8) ?*const Builtin {
     for (&builtins) |*b| {
         if (std.mem.eql(u8, b.id, id)) return b;
@@ -112,6 +119,7 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
             .supports_images = info.images,
             .context_window = info.context,
             .max_tokens = info.max_output,
+            .thinking = thinkingStyle(info),
             .cost_input = info.cost_input,
             .cost_output = info.cost_output,
             .cost_cache_read = info.cost_cache_read,

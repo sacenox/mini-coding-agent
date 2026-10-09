@@ -125,15 +125,18 @@ pub fn execute(a: std.mem.Allocator, scratch: std.mem.Allocator, name: []const u
 pub fn json(a: std.mem.Allocator, names: []const config.ToolName, with_images: bool, cwd: []const u8) []const u8 {
     const ctx = Describe{ .with_images = with_images, .cwd = cwd };
     var out: std.Io.Writer.Allocating = .init(a);
-    const w = &out.writer;
-    w.writeByte('[') catch return "[]";
+    writeJson(&out.writer, a, names, ctx) catch return "[]";
+    return out.written();
+}
+
+fn writeJson(w: *std.Io.Writer, a: std.mem.Allocator, names: []const config.ToolName, ctx: Describe) !void {
+    try w.writeByte('[');
     var first = true;
     for (names) |name| {
         const tool = byName(name) orelse continue;
-        if (!first) w.writeByte(',') catch return out.written();
+        if (!first) try w.writeByte(',');
         first = false;
-        write(w, a, tool, ctx) catch return out.written();
+        try write(w, a, tool, ctx);
     }
-    w.writeByte(']') catch return out.written();
-    return out.written();
+    try w.writeByte(']');
 }

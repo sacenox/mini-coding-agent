@@ -134,8 +134,7 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
         };
     }
 
-    const head = data[0..@min(data.len, 8000)];
-    if (std.mem.indexOfScalar(u8, head, 0) != null) {
+    if (text.isBinary(data)) {
         return fail(a, "read failed: {s} is binary; use bash (file, xxd)", .{path});
     }
 

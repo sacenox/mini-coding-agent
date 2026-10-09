@@ -27,7 +27,7 @@ fn frontmatter(text: []const u8) Frontmatter {
 fn discoverSkills(a: std.mem.Allocator, dirs: []const []const u8) ![]Skill {
     var skills: std.ArrayList(Skill) = .empty;
     for (dirs) |root| {
-        for (filesystem.listDir(a, root)) |entry| {
+        for (filesystem.listDir(a, root) catch continue) |entry| {
             const path = filesystem.join(a, &.{ root, entry, "SKILL.md" }) catch continue;
             if (!filesystem.fileExists(path)) continue;
             const text = filesystem.readFileAlloc(a, path, 1 << 20) catch continue;

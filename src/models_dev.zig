@@ -15,6 +15,7 @@ pub const Info = struct {
     context: u64,
     max_output: u64,
     effort: []const []const u8,
+    budget_tokens: bool,
     cost_input: f64,
     cost_output: f64,
     cost_cache_read: f64,
@@ -85,6 +86,7 @@ pub const Db = struct {
             .context = m.limit.context,
             .max_output = m.limit.output,
             .effort = effortOf(m),
+            .budget_tokens = hasOption(m, "budget_tokens"),
             .cost_input = m.cost.input,
             .cost_output = m.cost.output,
             .cost_cache_read = m.cost.cache_read,
@@ -97,4 +99,11 @@ fn effortOf(m: Model) []const []const u8 {
         if (std.mem.eql(u8, opt.type, "effort")) return opt.values;
     }
     return &.{};
+}
+
+fn hasOption(m: Model, kind: []const u8) bool {
+    for (m.reasoning_options) |opt| {
+        if (std.mem.eql(u8, opt.type, kind)) return true;
+    }
+    return false;
 }
