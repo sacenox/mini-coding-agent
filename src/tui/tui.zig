@@ -43,13 +43,15 @@ const Search = struct {
 
 var resize_flag = std.atomic.Value(bool).init(false);
 var exit_flag = std.atomic.Value(bool).init(false);
+var exit_signal = std.atomic.Value(u32).init(0);
 
 fn onWinch(_: std.posix.SIG) callconv(.c) void {
     resize_flag.store(true, .seq_cst);
 }
 
-fn onExitSignal(_: std.posix.SIG) callconv(.c) void {
+fn onExitSignal(sig: std.posix.SIG) callconv(.c) void {
     term.restore();
+    exit_signal.store(@intFromEnum(sig), .seq_cst);
     exit_flag.store(true, .seq_cst);
 }
 
@@ -1079,4 +1081,6 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
         }
         std.Io.sleep(platform.io, .{ .nanoseconds = 8 * std.time.ns_per_ms }, .boot) catch {};
     }
+    const sig = exit_signal.load(.seq_cst);
+    if (sig != 0) platform.reRaise(@enumFromInt(sig));
 }

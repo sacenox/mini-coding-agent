@@ -29,7 +29,25 @@ pub fn getEnv(key: []const u8) ?[]const u8 {
 }
 
 pub fn home() ?[]const u8 {
-    return getEnv("HOME");
+    if (getEnv("HOME")) |h| {
+        if (h.len > 0) return h;
+    }
+    const pw = std.c.getpwuid(std.c.getuid()) orelse return null;
+    const dir = pw.dir orelse return null;
+    return std.mem.sliceTo(dir, 0);
+}
+
+/// Reset `sig` to its default disposition and re-raise it, so the process dies
+/// with the signal instead of masking it behind a normal exit code.
+pub fn reRaise(sig: std.posix.SIG) noreturn {
+    const act = std.posix.Sigaction{
+        .handler = .{ .handler = std.posix.SIG.DFL },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+    std.posix.sigaction(sig, &act, null);
+    std.posix.raise(sig) catch {};
+    std.process.exit(1);
 }
 
 pub fn writeOut(bytes: []const u8) void {

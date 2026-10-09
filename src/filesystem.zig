@@ -13,7 +13,7 @@ pub fn writeFile(path: []const u8, data: []const u8) !void {
     if (std.fs.path.dirname(path)) |dir| {
         std.Io.Dir.cwd().createDirPath(platform.io, dir) catch {};
     }
-    const f = try std.Io.Dir.cwd().createFile(platform.io, path, .{ .truncate = true });
+    const f = try std.Io.Dir.cwd().createFile(platform.io, path, .{ .truncate = true, .permissions = .fromMode(0o600) });
     defer f.close(platform.io);
     try f.writeStreamingAll(platform.io, data);
 }

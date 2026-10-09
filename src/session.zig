@@ -221,7 +221,7 @@ pub const Session = struct {
 
     fn ensure(self: *Session, title: []const u8) !void {
         if (self.file != null) return;
-        std.Io.Dir.cwd().createDirPath(platform.io, self.sessions_dir) catch {};
+        _ = std.Io.Dir.cwd().createDirPathStatus(platform.io, self.sessions_dir, .fromMode(0o700)) catch {};
         var stamp_buf: [15]u8 = undefined;
         const stamp = time.stamp(&stamp_buf, time.nowMs());
 
@@ -231,12 +231,12 @@ pub const Session = struct {
             shortId(&id_buf);
             const name = try std.fmt.allocPrint(self.a, "{s}-{s}-{s}", .{ stamp, title, &id_buf });
             const dir = try filesystem.join(self.a, &.{ self.sessions_dir, name });
-            std.Io.Dir.cwd().createDir(platform.io, dir, .default_dir) catch |e| switch (e) {
+            std.Io.Dir.cwd().createDir(platform.io, dir, .fromMode(0o700)) catch |e| switch (e) {
                 error.PathAlreadyExists => continue,
                 else => return e,
             };
             const log_path = try filesystem.join(self.a, &.{ dir, "session.jsonl" });
-            const file = try std.Io.Dir.cwd().createFile(platform.io, log_path, .{ .truncate = false });
+            const file = try std.Io.Dir.cwd().createFile(platform.io, log_path, .{ .truncate = false, .permissions = .fromMode(0o600) });
             self.id = name;
             self.file = file;
             var header_buf: std.Io.Writer.Allocating = .init(self.a);

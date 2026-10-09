@@ -67,8 +67,14 @@ const File = struct {
     snapshotUsesGitignore: ?bool = null,
 };
 
+/// An empty environment variable is treated as unset, per the XDG spec.
+fn xdg(key: []const u8) ?[]const u8 {
+    const value = platform.getEnv(key) orelse return null;
+    return if (value.len == 0) null else value;
+}
+
 fn configDir(a: std.mem.Allocator) []const u8 {
-    const base = platform.getEnv("XDG_CONFIG_HOME") orelse
+    const base = xdg("XDG_CONFIG_HOME") orelse
         filesystem.join(a, &.{ platform.home() orelse "", ".config" }) catch "";
     return filesystem.join(a, &.{ base, "mini-coding-agent" }) catch "mini-coding-agent";
 }
@@ -78,7 +84,7 @@ pub fn configPath(a: std.mem.Allocator) []const u8 {
 }
 
 fn stateDir(a: std.mem.Allocator) []const u8 {
-    return platform.getEnv("XDG_STATE_HOME") orelse blk: {
+    return xdg("XDG_STATE_HOME") orelse blk: {
         const home = platform.home() orelse return "";
         break :blk filesystem.join(a, &.{ home, ".local/state" }) catch "";
     };
