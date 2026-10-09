@@ -53,9 +53,11 @@ pub const LiveRegion = struct {
         var out: std.ArrayList(u8) = .empty;
         out.appendSlice(a, self.erase(a, width)) catch {};
         out.appendSlice(a, above) catch {};
+        // Each live row carries its own colors: scrollback above can leave any
+        // style active, and the editor must never render in the host's.
         for (lines, 0..) |line, i| {
             if (i > 0) out.appendSlice(a, "\r\n") catch {};
-            out.appendSlice(a, line) catch {};
+            out.appendSlice(a, render.paintRow(a, line)) catch {};
         }
         self.remember(lines, caret_line, caret_cell);
         const end_row = self.totalRows(width) - 1;

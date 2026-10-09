@@ -128,31 +128,59 @@ pub fn postSse(
 
     var data: std.ArrayList(u8) = .empty;
     defer data.deinit(a);
+    var line: std.ArrayList(u8) = .empty;
+    defer line.deinit(a);
     var have_data = false;
+    var buf: [4096]u8 = undefined;
 
+    // Lines are assembled here instead of with `takeDelimiter`: some providers
+    // stream whole documents in one event, and a line that does not fit the
+    // reader's buffer sends the delimiter search down a failure path that
+    // desynchronizes chunked transfer decoding.
     while (true) {
         if (cancel.load(.acquire)) return error.Aborted;
-        const maybe_line = reader.takeDelimiter('\n') catch return error.ReadFailed;
-        const raw = maybe_line orelse break;
-        var line = raw;
-        if (line.len > 0 and line[line.len - 1] == '\r') line = line[0 .. line.len - 1];
-
-        if (line.len == 0) {
-            if (have_data) {
+        const n = reader.readSliceShort(&buf) catch return error.ReadFailed;
+        if (n == 0) break;
+        var rest: []const u8 = buf[0..n];
+        while (std.mem.indexOfScalar(u8, rest, '\n')) |nl| {
+            try line.appendSlice(a, rest[0..nl]);
+            rest = rest[nl + 1 ..];
+            if (try feedLine(a, line.items, &data, &have_data)) {
                 handler.call(data.items);
                 data.clearRetainingCapacity();
                 have_data = false;
             }
-            continue;
+            line.clearRetainingCapacity();
         }
-        if (line[0] == ':') continue;
-        if (std.mem.startsWith(u8, line, "data:")) {
-            var value = line[5..];
-            if (value.len > 0 and value[0] == ' ') value = value[1..];
-            if (have_data) data.append(a, '\n') catch return error.OutOfMemory;
-            data.appendSlice(a, value) catch return error.OutOfMemory;
-            have_data = true;
-        }
+        try line.appendSlice(a, rest);
+    }
+    if (line.items.len > 0 and try feedLine(a, line.items, &data, &have_data)) {
+        handler.call(data.items);
+        data.clearRetainingCapacity();
+        have_data = false;
     }
     if (have_data) handler.call(data.items);
+}
+
+/// Applies one SSE line to the pending event payload, returning whether the
+/// payload is complete and should be dispatched.
+fn feedLine(
+    a: std.mem.Allocator,
+    raw: []const u8,
+    data: *std.ArrayList(u8),
+    have_data: *bool,
+) std.mem.Allocator.Error!bool {
+    var line = raw;
+    if (line.len > 0 and line[line.len - 1] == '\r') line = line[0 .. line.len - 1];
+
+    if (line.len == 0) return have_data.*;
+    if (line[0] == ':') return false;
+    if (std.mem.startsWith(u8, line, "data:")) {
+        var value = line[5..];
+        if (value.len > 0 and value[0] == ' ') value = value[1..];
+        if (have_data.*) try data.append(a, '\n');
+        try data.appendSlice(a, value);
+        have_data.* = true;
+    }
+    return false;
 }
