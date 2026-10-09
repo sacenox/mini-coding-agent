@@ -7,7 +7,6 @@ const types = @import("../types.zig");
 const agent = @import("../agent.zig");
 const models_mod = @import("../models.zig");
 const tools_index = @import("../tools.zig");
-const common = @import("../tools/common.zig");
 const render = @import("render.zig");
 const theme = @import("theme.zig");
 const styles = @import("styles.zig");
@@ -396,7 +395,7 @@ const Tui = struct {
         }
     }
 
-    fn commitToolResult(self: *Tui, name: []const u8, text: []const u8, is_error: bool, diffs: []const common.FileDiff, body: ?[]const u8) void {
+    fn commitToolResult(self: *Tui, name: []const u8, text: []const u8, is_error: bool, diffs: []const tools_index.FileDiff, body: ?[]const u8) void {
         self.scrollback.separator = true;
         const shown = render.stripAnsi(self.s, text);
         const meta: ?[]const u8 = if (!is_error) body else null;
@@ -815,8 +814,8 @@ fn copyEvent(a: std.mem.Allocator, e: agent.Event) agent.Event {
             .arguments = a.dupe(u8, tc.arguments) catch "",
         } },
         .tool_result => |tr| blk: {
-            var diffs: []const common.FileDiff = &.{};
-            if (a.alloc(common.FileDiff, tr.diffs.len)) |buf| {
+            var diffs: []const tools_index.FileDiff = &.{};
+            if (a.alloc(tools_index.FileDiff, tr.diffs.len)) |buf| {
                 for (tr.diffs, 0..) |d, i| buf[i] = .{
                     .path = a.dupe(u8, d.path) catch "",
                     .patch = if (d.patch) |p| a.dupe(u8, p) catch "" else null,

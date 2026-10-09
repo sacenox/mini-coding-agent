@@ -3,7 +3,6 @@ const types = @import("types.zig");
 const api = @import("api.zig");
 const platform = @import("platform.zig");
 const tools = @import("tools.zig");
-const common = @import("tools/common.zig");
 const session = @import("session.zig");
 const config = @import("config.zig");
 const time = @import("time.zig");
@@ -18,7 +17,7 @@ pub const Event = union(enum) {
     tool_args: usize,
     tool_call: struct { name: []const u8, arguments: []const u8 },
     tool_output: []const u8,
-    tool_result: struct { name: []const u8, text: []const u8, is_error: bool, diffs: []const common.FileDiff, body: ?[]const u8 },
+    tool_result: struct { name: []const u8, text: []const u8, is_error: bool, diffs: []const tools.FileDiff, body: ?[]const u8 },
     message: *types.AssistantMessage,
     no_model,
     err: []const u8,
@@ -77,7 +76,7 @@ const StreamCtx = struct { listener: Listener, started: bool = false };
 
 const ToolPhaseCtx = struct { listener: Listener, name: []const u8 };
 
-fn onToolPhase(ctx: *anyopaque, phase: common.ToolPhase) void {
+fn onToolPhase(ctx: *anyopaque, phase: tools.ToolPhase) void {
     const c: *ToolPhaseCtx = @ptrCast(@alignCast(ctx));
     switch (phase) {
         .snapshotting => c.listener.emit(.{ .phase = .{ .phase = .snapshotting } }),
@@ -252,7 +251,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(types.Message), interacti
             }
             if (run_tools and opts.cancel.load(.acquire)) run_tools = false;
 
-            var result: ?common.Result = null;
+            var result: ?tools.Result = null;
             if (run_tools) {
                 listener.emit(.{ .phase = .{ .phase = .running_tool, .detail = call.name } });
                 var phase_ctx = ToolPhaseCtx{ .listener = listener, .name = call.name };

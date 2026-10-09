@@ -2,8 +2,7 @@ const std = @import("std");
 const filesystem = @import("../filesystem.zig");
 const text = @import("../text.zig");
 const types = @import("../types.zig");
-const common = @import("common.zig");
-const spec = @import("spec.zig");
+const tools = @import("../tools.zig");
 
 const Args = struct {
     path: []const u8,
@@ -24,17 +23,17 @@ const image_description = description_base ++
     "\n\nImages (png, jpg, jpeg, webp) are returned as image content. Text longer than 100,000 characters is " ++
     "truncated.";
 
-const params = [_]spec.Param{
+const params = [_]tools.Param{
     .{ .name = "path", .kind = .string, .description = "File to read. Relative paths resolve against the working directory." },
     .{ .name = "offset", .kind = .integer, .required = false, .description = "First line to return, 1-based. Defaults to the beginning of the file." },
     .{ .name = "range", .kind = .integer, .required = false, .description = "Number of lines to return from `offset`. Defaults to the end of the file." },
 };
 
-fn describe(_: std.mem.Allocator, ctx: spec.Describe) []const u8 {
+fn describe(_: std.mem.Allocator, ctx: tools.Describe) []const u8 {
     return if (ctx.with_images) image_description else text_description;
 }
 
-pub const tool = spec.Descriptor{
+pub const tool = tools.Descriptor{
     .name = .read,
     .description = describe,
     .params = &params,
@@ -51,8 +50,8 @@ const image_mime = [_]struct { ext: []const u8, mime: []const u8 }{
 const max_text_chars = 100_000;
 const max_image_base64_bytes = 5 * 1024 * 1024;
 
-fn fail(a: std.mem.Allocator, comptime fmt: []const u8, args: anytype) common.Result {
-    return common.fail(a, "read failed", fmt, args);
+fn fail(a: std.mem.Allocator, comptime fmt: []const u8, args: anytype) tools.Result {
+    return tools.fail(a, "read failed", fmt, args);
 }
 
 fn mimeFor(path: []const u8) ?[]const u8 {
@@ -104,7 +103,7 @@ fn bodyLine(a: std.mem.Allocator, args: Args, lines: usize, truncated: bool) ?[]
     return out.written();
 }
 
-pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const u8, ctx: common.Context) common.Result {
+pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const u8, ctx: tools.Context) tools.Result {
     const args = std.json.parseFromSliceLeaky(Args, scratch, args_json, .{ .ignore_unknown_fields = true }) catch
         return fail(a, "read failed: invalid arguments", .{});
     const path = args.path;

@@ -1,5 +1,5 @@
 const std = @import("std");
-const common = @import("../tools/common.zig");
+const tools = @import("../tools.zig");
 const theme = @import("theme.zig");
 const highlight = @import("highlight.zig");
 const render = @import("render.zig");
@@ -119,7 +119,7 @@ pub fn diffLines(a: std.mem.Allocator, path: []const u8, lines: []const []const 
     return out.items;
 }
 
-pub fn diffBody(a: std.mem.Allocator, d: common.FileDiff) []const BodyLine {
+pub fn diffBody(a: std.mem.Allocator, d: tools.FileDiff) []const BodyLine {
     if (d.patch) |patch| {
         const trimmed = std.mem.trimEnd(u8, patch, " \t\r\n");
         var it = std.mem.splitScalar(u8, trimmed, '\n');

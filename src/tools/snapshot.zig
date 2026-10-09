@@ -2,7 +2,7 @@ const std = @import("std");
 const platform = @import("../platform.zig");
 const filesystem = @import("../filesystem.zig");
 const diff = @import("../diff.zig");
-const common = @import("common.zig");
+const tools = @import("../tools.zig");
 
 const max_file_bytes = 1 << 20;
 const max_total_bytes = 32 << 20;
@@ -131,7 +131,7 @@ fn noteFor(a: std.mem.Allocator, kind: Kind, verb: []const u8) []const u8 {
     };
 }
 
-fn diffOne(a: std.mem.Allocator, path: []const u8, before: ?FileState, after: ?FileState) !?common.FileDiff {
+fn diffOne(a: std.mem.Allocator, path: []const u8, before: ?FileState, after: ?FileState) !?tools.FileDiff {
     if (before == null) {
         const af = after.?;
         if (af.kind == .link) return .{ .path = path, .note = "symlink created" };
@@ -157,7 +157,7 @@ fn diffOne(a: std.mem.Allocator, path: []const u8, before: ?FileState, after: ?F
     return .{ .path = path, .note = noteFor(a, if (af.content == null) af.kind else bf.kind, "changed") };
 }
 
-pub fn diffTrees(a: std.mem.Allocator, before: Tree, after: Tree) ![]common.FileDiff {
+pub fn diffTrees(a: std.mem.Allocator, before: Tree, after: Tree) ![]tools.FileDiff {
     var paths: std.ArrayList([]const u8) = .empty;
     var it = before.iterator();
     while (it.next()) |e| try paths.append(a, e.key_ptr.*);
@@ -171,7 +171,7 @@ pub fn diffTrees(a: std.mem.Allocator, before: Tree, after: Tree) ![]common.File
         }
     }.lt);
 
-    var out: std.ArrayList(common.FileDiff) = .empty;
+    var out: std.ArrayList(tools.FileDiff) = .empty;
     for (paths.items) |p| {
         if (try diffOne(a, p, before.get(p), after.get(p))) |d| try out.append(a, d);
     }

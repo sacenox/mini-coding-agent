@@ -3,8 +3,7 @@ const filesystem = @import("../filesystem.zig");
 const text = @import("../text.zig");
 const platform = @import("../platform.zig");
 const diff = @import("../diff.zig");
-const common = @import("common.zig");
-const spec = @import("spec.zig");
+const tools = @import("../tools.zig");
 
 const Args = struct {
     path: []const u8,
@@ -20,28 +19,28 @@ const description =
     "To create a new file, pass an empty `oldText`; this fails if the file already exists. The result " ++
     "includes a unified diff of the change.";
 
-const params = [_]spec.Param{
+const params = [_]tools.Param{
     .{ .name = "path", .kind = .string, .description = "File to edit, or to create when `oldText` is empty." },
     .{ .name = "oldText", .kind = .string, .description = "Exact text to replace. Must occur exactly once. Leave empty to create a new file." },
     .{ .name = "newText", .kind = .string, .description = "Replacement text." },
 };
 
-fn describe(_: std.mem.Allocator, _: spec.Describe) []const u8 {
+fn describe(_: std.mem.Allocator, _: tools.Describe) []const u8 {
     return description;
 }
 
-pub const tool = spec.Descriptor{
+pub const tool = tools.Descriptor{
     .name = .edit,
     .description = describe,
     .params = &params,
     .run = run,
 };
 
-fn fail(a: std.mem.Allocator, comptime fmt: []const u8, args: anytype) common.Result {
-    return common.fail(a, "edit failed", fmt, args);
+fn fail(a: std.mem.Allocator, comptime fmt: []const u8, args: anytype) tools.Result {
+    return tools.fail(a, "edit failed", fmt, args);
 }
 
-pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const u8, ctx: common.Context) common.Result {
+pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const u8, ctx: tools.Context) tools.Result {
     const args = std.json.parseFromSliceLeaky(Args, scratch, args_json, .{ .ignore_unknown_fields = true }) catch {
         return fail(a, "edit failed: path, oldText and newText must be strings", .{});
     };

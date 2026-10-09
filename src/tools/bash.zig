@@ -1,9 +1,8 @@
 const std = @import("std");
 const platform = @import("../platform.zig");
 const text = @import("../text.zig");
-const common = @import("common.zig");
+const tools = @import("../tools.zig");
 const snapshot = @import("snapshot.zig");
-const spec = @import("spec.zig");
 
 const max_head = 10_000;
 const max_tail = 6_000;
@@ -17,16 +16,16 @@ const description_fmt =
     "builds, tests, git, package managers, and file work that read and edit do not cover. The output ends " ++
     "with an `exit code:` line. Pass `timeout` (seconds) to change the 120-second limit.";
 
-const params = [_]spec.Param{
+const params = [_]tools.Param{
     .{ .name = "command", .kind = .string, .description = "Bash command line to execute." },
     .{ .name = "timeout", .kind = .integer, .required = false, .description = "Seconds to allow before the command is killed. Defaults to 120." },
 };
 
-fn describe(a: std.mem.Allocator, ctx: spec.Describe) []const u8 {
+fn describe(a: std.mem.Allocator, ctx: tools.Describe) []const u8 {
     return std.fmt.allocPrint(a, description_fmt, .{ctx.cwd}) catch "Run a bash command.";
 }
 
-pub const tool = spec.Descriptor{
+pub const tool = tools.Descriptor{
     .name = .bash,
     .description = describe,
     .params = &params,
@@ -40,7 +39,7 @@ const Acc = struct {
     head: std.ArrayList(u8) = .empty,
     tail: std.ArrayList(u8) = .empty,
     truncated: bool = false,
-    on_output: ?common.OutputFn,
+    on_output: ?tools.OutputFn,
 
     fn append(self: *Acc, chunk: []const u8) !void {
         if (self.on_output) |cb| cb.call(chunk);
@@ -75,11 +74,11 @@ fn killGroup(pid: i32) void {
     std.posix.kill(-pid, .KILL) catch {};
 }
 
-fn fail(a: std.mem.Allocator, comptime fmt: []const u8, args: anytype) common.Result {
-    return common.fail(a, "bash failed", fmt, args);
+fn fail(a: std.mem.Allocator, comptime fmt: []const u8, args: anytype) tools.Result {
+    return tools.fail(a, "bash failed", fmt, args);
 }
 
-pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const u8, ctx: common.Context) common.Result {
+pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const u8, ctx: tools.Context) tools.Result {
     const args = std.json.parseFromSliceLeaky(Args, scratch, args_json, .{ .ignore_unknown_fields = true }) catch {
         return fail(a, "bash failed: command must be a string", .{});
     };
