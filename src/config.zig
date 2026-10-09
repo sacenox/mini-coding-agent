@@ -48,9 +48,11 @@ pub const Config = struct {
     custom_providers: []const CustomProvider,
     snapshot_ignore_dirs: []const []const u8,
     snapshot_uses_gitignore: bool,
+    history_size: usize,
 };
 
 const File = struct {
+    historySize: ?usize = null,
     sessionsDir: ?[]const u8 = null,
     systemPrompt: ?[]const u8 = null,
     discoverAgentFiles: ?bool = null,
@@ -76,14 +78,24 @@ pub fn configPath(a: std.mem.Allocator) []const u8 {
     return filesystem.join(a, &.{ configDir(a), "config.json" }) catch "config.json";
 }
 
-fn sessionsDir(a: std.mem.Allocator) []const u8 {
-    const state = platform.getEnv("XDG_STATE_HOME") orelse blk: {
-        const home = platform.home() orelse return "sessions";
-        break :blk filesystem.join(a, &.{ home, ".local/state" }) catch return "sessions";
+fn stateDir(a: std.mem.Allocator) []const u8 {
+    return platform.getEnv("XDG_STATE_HOME") orelse blk: {
+        const home = platform.home() orelse return "";
+        break :blk filesystem.join(a, &.{ home, ".local/state" }) catch "";
     };
-    return filesystem.join(a, &.{ state, "mini-coding-agent/sessions" }) catch "sessions";
 }
 
+pub fn historyPath(a: std.mem.Allocator) []const u8 {
+    const state = stateDir(a);
+    if (state.len == 0) return "history";
+    return filesystem.join(a, &.{ state, "mini-coding-agent/history" }) catch "history";
+}
+
+fn sessionsDir(a: std.mem.Allocator) []const u8 {
+    const state = stateDir(a);
+    if (state.len == 0) return "sessions";
+    return filesystem.join(a, &.{ state, "mini-coding-agent/sessions" }) catch "sessions";
+}
 pub fn load(a: std.mem.Allocator, override: ?[]const u8) !Config {
     var cfg = try defaults(a);
     try readInto(a, configPath(a), false, &cfg);
@@ -125,6 +137,7 @@ fn readInto(a: std.mem.Allocator, path: []const u8, required: bool, cfg: *Config
     if (file.programStatus) |v| cfg.program_status = v;
     if (file.snapshotIgnoreDirs) |v| cfg.snapshot_ignore_dirs = v;
     if (file.snapshotUsesGitignore) |v| cfg.snapshot_uses_gitignore = v;
+    if (file.historySize) |v| cfg.history_size = v;
 }
 
 pub const Update = struct {
@@ -175,5 +188,6 @@ fn defaults(a: std.mem.Allocator) !Config {
         .custom_providers = &.{},
         .snapshot_ignore_dirs = &.{},
         .snapshot_uses_gitignore = true,
+        .history_size = 100,
     };
 }

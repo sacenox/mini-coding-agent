@@ -54,6 +54,7 @@ tool output go to stderr, the assistant text to stdout; a failed turn exits 1.
 | `Esc` | pause the turn at the next step boundary |
 | `Ctrl+C` | cancel the turn |
 | `Ctrl+D` | exit on an empty draft |
+| `Ctrl+R` | reverse search past input |
 | `Tab` | complete command or path |
 
 While a turn is paused (`Esc`), submitting a message steers the running turn.
@@ -91,6 +92,7 @@ A full example:
   "tools": ["edit", "read", "bash"],
   "snapshotIgnoreDirs": [".git"],
   "snapshotUsesGitignore": true,
+  "historySize": 100,
   "customProviders": [
     {
       "id": "local",
@@ -132,6 +134,7 @@ Keys:
 | `customProviders` | `[]` | in-tree provider definitions |
 | `snapshotIgnoreDirs` | `[]` | directory names skipped when the `bash` tool snapshots the cwd for diffs |
 | `snapshotUsesGitignore` | `true` | also skip directories named in `.gitignore` when snapshotting |
+| `historySize` | `100` | past inputs kept in `<state dir>/mini-coding-agent/history` for `Ctrl+R` |
 
 Unknown keys are rejected. `provider` and `model` must both be set to make a
 request; a custom provider must list the model in its `models`.

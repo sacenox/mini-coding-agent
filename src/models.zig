@@ -200,13 +200,21 @@ pub fn listing(
         const info = db.info(provider_id, model.id) orelse continue;
         try out.append(a, .{ .id = model.id, .name = info.name });
     }
-    return out.toOwnedSlice(a);
+    const items = try out.toOwnedSlice(a);
+    std.mem.sort(Entry, items, {}, entryLess);
+    return items;
+}
+
+fn entryLess(_: void, a: Entry, b: Entry) bool {
+    return std.mem.order(u8, a.id, b.id) == .lt;
 }
 
 fn customListing(a: std.mem.Allocator, p: *const config.CustomProvider) ![]Entry {
     var out: std.ArrayList(Entry) = .empty;
     for (p.models) |m| try out.append(a, .{ .id = m.id, .name = m.name orelse m.id });
-    return out.toOwnedSlice(a);
+    const items = try out.toOwnedSlice(a);
+    std.mem.sort(Entry, items, {}, entryLess);
+    return items;
 }
 
 pub fn supportedLevels(a: std.mem.Allocator, cfg: *const config.Config, provider_id: []const u8, model_id: []const u8) []const []const u8 {

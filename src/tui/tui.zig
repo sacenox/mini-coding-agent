@@ -20,6 +20,7 @@ const usage_mod = @import("usage.zig");
 const diff_view = @import("diff_view.zig");
 const tool_view = @import("tool_view.zig");
 const screen = @import("screen.zig");
+const history = @import("../history.zig");
 const status = @import("../status.zig");
 
 const SPINNER = "⠀⠁⠂⠃⠄⠅⠆⠇⡀⡁⡂⡃⡄⡅⡆⡇⠈⠉⠊⠋⠌⠍⠎⠏⡈⡉⡊⡋⡌⡍⡎⡏⠐⠑⠒⠓⠔⠕⠖⠗⡐⡑⡒⡓⡔⡕⡖⡗⠘⠙⠚⠛⠜⠝⠞⠟⡘⡙⡚⡛⡜⡝⡞⡟⠠⠡⠢⠣⠤⠥⠦⠧⡠⡡⡢⡣⡤⡥⡦⡧⠨⠩⠪⠫⠬⠭⠮⠯⡨⡩⡪⡫⡬⡭⡮⡯⠰⠱⠲⠳⠴⠵⠶⠷⡰⡱⡲⡳⡴⡵⡶⡷⠸⠹⠺⠻⠼⠽⠾⠿⡸⡹⡺⡻⡼⡽⡾⡿⢀⢁⢂⢃⢄⢅⢆⢇⣀⣁⣂⣃⣄⣅⣆⣇⢈⢉⢊⢋⢌⢍⢎⢏⣈⣉⣊⣋⣌⣍⣎⣏⢐⢑⢒⢓⢔⢕⢖⢗⣐⣑⣒⣓⣔⣕⣖⣗⢘⢙⢚⢛⢜⢝⢞⢟⣘⣙⣚⣛⣜⣝⣞⣟⢠⢡⢢⢣⢤⢥⢦⢧⣠⣡⣢⣣⣤⣥⣦⣧⢨⢩⢪⢫⢬⢭⢮⢯⣨⣩⣪⣫⣬⣭⣮⣯⢰⢱⢲⢳⢴⢵⢶⢷⣰⣱⣲⣳⣴⣵⣶⣷⢸⢹⢺⢻⢼⢽⢾⢿⣸⣹⣺⣻⣼⣽⣾⣿";
@@ -33,6 +34,12 @@ const rowsForCells = render.rowsForCells;
 const PendingCall = tool_view.PendingCall;
 
 const Command = commands.Command;
+
+const Search = struct {
+    query: std.ArrayList(u8) = .empty,
+    saved: []const u8 = "",
+    match: ?[]const u8 = null,
+};
 
 var resize_flag = std.atomic.Value(bool).init(false);
 var exit_flag = std.atomic.Value(bool).init(false);
@@ -49,6 +56,7 @@ fn onExitSignal(_: std.posix.SIG) callconv(.c) void {
 const Tui = struct {
     opts: *agent.Options,
     cfg: *const config.Config,
+    history: history.Store = undefined,
     tool_names: []const config.ToolName,
     term: term.Terminal = .{},
     editor: editor_mod.Editor,
@@ -104,6 +112,8 @@ const Tui = struct {
     last_frame_ms: i64 = 0,
     last_input_ms: i64 = 0,
     command_active: bool = false,
+
+    search: ?Search = null,
 
     prompt_open: bool = false,
     prompt_options: []const []const u8 = &.{},
@@ -303,16 +313,48 @@ const Tui = struct {
 
         var lines: std.ArrayList([]const u8) = .empty;
         lines.append(self.s, status_line) catch {};
-        const caret_line = lines.items.len + ed.cursor_row;
-        for (ed.rows) |r| lines.append(self.s, r) catch {};
+        var caret_line: usize = 0;
+        var caret_col: usize = 0;
+        if (self.search) |sr| {
+            const prompt = std.fmt.allocPrint(self.s, "reverse: {s}", .{sr.query.items}) catch "reverse: ";
+            caret_line = 1;
+            caret_col = "reverse: ".len + sr.query.items.len;
+            lines.append(self.s, prompt) catch {};
+            if (self.searchMatch(&sr)) |m| {
+                const text = render.sanitize(self.s, m);
+                const budget_rows = @max(height -| 2, 1);
+                var used: usize = 0;
+                var it = std.mem.splitScalar(u8, text, '\n');
+                while (it.next()) |raw| {
+                    const part = if (raw.len == 0) " " else raw;
+                    for (render.wrapLine(self.s, part, width)) |row| {
+                        if (used >= budget_rows) break;
+                        used += 1;
+                        lines.append(self.s, styles.dim(self.s, row)) catch {};
+                    }
+                }
+            } else {
+                lines.append(self.s, styles.dim(self.s, "no matches")) catch {};
+            }
+        } else {
+            for (ed.rows) |r| lines.append(self.s, r) catch {};
+            caret_line = 1 + ed.cursor_row;
+            caret_col = ed.cursor_col;
+        }
 
-        const frame_text = self.live.draw(self.s, width, lines.items, caret_line, ed.cursor_col, self.scrollback.buf.items);
+        const frame_text = self.live.draw(self.s, width, lines.items, caret_line, caret_col, self.scrollback.buf.items);
         self.term.write(frame_text);
         self.scrollback.clear();
         _ = self.sarena.reset(.retain_capacity);
         self.sa = self.sarena.allocator();
     }
 
+    fn searchMatch(self: *Tui, sr: *const Search) ?[]const u8 {
+        for (self.history.entries.items) |entry| {
+            if (sr.query.items.len == 0 or std.ascii.indexOfIgnoreCase(entry, sr.query.items) != null) return entry;
+        }
+        return null;
+    }
     fn keepName(self: *Tui, slot: *?[]const u8, value: ?[]const u8) void {
         if (slot.*) |old| self.a.free(old);
         slot.* = if (value) |v| self.a.dupe(u8, v) catch null else null;
@@ -456,8 +498,63 @@ const Tui = struct {
         self.pending_calls.clearRetainingCapacity();
     }
 
+    fn openSearch(self: *Tui) void {
+        const draft = self.editor.contents();
+        self.search = .{ .saved = self.a.dupe(u8, draft) catch return };
+        self.editor.clear();
+        self.dirty = true;
+    }
+
+    fn closeSearch(self: *Tui, restore: bool, chosen: ?[]const u8) void {
+        const search = self.search orelse return;
+        self.search = null;
+        self.editor.clear();
+        defer self.dirty = true;
+        if (chosen) |text| self.editor.setText(text);
+        if (restore) self.editor.setText(search.saved);
+    }
+
+    fn searchKey(self: *Tui, key: input.Key) void {
+        const search = &(self.search orelse return);
+        switch (key) {
+            .text => |t| search.query.appendSlice(self.a, t) catch {},
+            .backspace => {
+                if (search.query.items.len > 0) {
+                    var start = search.query.items.len - 1;
+                    while (start > 0 and (search.query.items[start] & 0xc0) == 0x80) start -= 1;
+                    search.query.shrinkRetainingCapacity(start);
+                }
+            },
+            .interrupt => return self.closeSearch(true, null),
+            .escape => return self.closeSearch(true, null),
+            .submit => return self.searchSubmit(),
+            else => {},
+        }
+        self.dirty = true;
+    }
+
+    fn searchSubmit(self: *Tui) void {
+        var match: ?[]const u8 = null;
+        const query = self.search.?.query.items;
+        for (self.history.entries.items) |entry| {
+            if (query.len == 0 or std.ascii.indexOfIgnoreCase(entry, query) != null) {
+                match = entry;
+                break;
+            }
+        }
+        if (match) |text| self.closeSearch(false, text) else self.dirty = true;
+    }
+
     fn handleKey(self: *Tui, key: input.Key) void {
         self.resetScratch();
+        if (self.search != null) {
+            self.searchKey(key);
+            return;
+        }
+        if (key == .reverse_search) {
+            self.openSearch();
+            return;
+        }
         if (key == .eof) {
             if (!self.active and !self.command_active and self.editor.contents().len == 0) self.exit();
             return;
@@ -545,6 +642,7 @@ const Tui = struct {
             return;
         };
         self.commitUser(text);
+        self.history.add(text);
         self.startTurn();
     }
 
@@ -874,6 +972,7 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
     const self = try gpa.create(Tui);
     self.* = Tui.init(gpa, opts_ptr, cfg, tool_names);
     self.bindAllocators();
+    self.history = history.Store.init(gpa, config.historyPath(gpa), cfg.history_size);
 
     self.term.start();
     defer self.term.stop();

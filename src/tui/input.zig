@@ -22,6 +22,7 @@ pub const Key = union(enum) {
     escape,
     interrupt,
     eof,
+    reverse_search,
 };
 
 const SHIFT: u32 = 1;
@@ -70,6 +71,7 @@ fn lookup(code: u32, mods: u32) ?Key {
         100 * 8 + CTRL => .eof,
         101 * 8 + CTRL => .end,
         106 * 8 + CTRL => .newline,
+        114 * 8 + CTRL => .reverse_search,
         119 * 8 + CTRL => .word_back,
         else => null,
     };
