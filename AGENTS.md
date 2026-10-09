@@ -50,8 +50,12 @@ runs.
 
 ### Provider
 
+- Bash env has `OPENCODE_API_KEY` available.
+
 Verify against the real provider. Use the `OPENCODE_API_KEY` environment
 variable and a `config.json` that declares the provider under test.
+
+- Never edit the user's config unless explicitly asked.
 
 Use these models:
 
@@ -63,15 +67,4 @@ Use these models:
 ### Driving the TUI with kitty
 
 There is no `tmux` here. `tools/stress.sh` drives the TUI in a real kitty
-window over remote control on a private socket, one window per run: it launches
-the app in a scratch cwd, waits for the banner, types the prompt, and
-screenshots the window at 15fps until the capture window ends or the app exits.
-
-    tools/stress.sh -C <scratch cwd> -o /tmp/mini-runs/<name> -d 60 -p '<prompt>'
-
-Frames land in `frame-NNNNN.png`. At the end of a run the pane is written with
-its truecolor SGR to `final.txt` (scrollback) and `final-screen.txt` (live
-screen). The last line reports frames, wall time, and achieved fps; an
-`ended early: MINI-EXIT <n>` line means the app died, and `final.txt` holds the
-dump.
-Make sure to review both images and text, so you can inspect the TUI themeing.
+window. Make sure to review both screenshots and text output.
