@@ -259,7 +259,7 @@ pub fn bodyRows(a: std.mem.Allocator, lines: []const BodyLine, width: usize) []c
         for (rows[tail_at..]) |r| n -= physicalRows(r, width);
         break :blk n;
     };
-    out.append(a, styles.dim(a, std.fmt.allocPrint(a, "... {d} lines not shown ...", .{hidden_rows}) catch "")) catch {};
+    out.append(a, styles.comment(a, std.fmt.allocPrint(a, "... {d} lines not shown ...", .{hidden_rows}) catch "")) catch {};
     for (rows[tail_at..]) |r| out.append(a, r) catch {};
     return out.items;
 }

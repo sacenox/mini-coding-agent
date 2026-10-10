@@ -9,7 +9,7 @@ const BodyLine = render.BodyLine;
 pub const PendingCall = struct { name: []const u8, summary: []const u8 };
 
 fn callHead(a: std.mem.Allocator, name: []const u8) []const u8 {
-    return styles.teal(a, std.fmt.allocPrint(a, "-> {s}", .{name}) catch "->");
+    return styles.accent(a, std.fmt.allocPrint(a, "-> {s}", .{name}) catch "->");
 }
 
 pub fn diffHead(a: std.mem.Allocator, name: []const u8, path: []const u8) []const u8 {
@@ -53,7 +53,7 @@ pub fn callBody(a: std.mem.Allocator, name: []const u8, summary: []const u8, met
             std.fmt.allocPrint(a, "{s}  {s}{s}", .{
                 head,
                 line,
-                if (meta) |m| styles.dim(a, std.fmt.allocPrint(a, " [{s}]", .{m}) catch "") else "",
+                if (meta) |m| styles.comment(a, std.fmt.allocPrint(a, " [{s}]", .{m}) catch "") else "",
             }) catch line
         else
             line;
@@ -94,5 +94,5 @@ pub fn exitLine(a: std.mem.Allocator, text: []const u8, is_error: bool) ?[]const
     const last = if (std.mem.lastIndexOfScalar(u8, trimmed, '\n')) |i| trimmed[i + 1 ..] else trimmed;
     if (!std.mem.startsWith(u8, last, "exit code: ")) return null;
     const label = std.fmt.allocPrint(a, " └ exit {s}", .{last["exit code: ".len..]}) catch return null;
-    return if (is_error) styles.red(a, label) else styles.dim(a, label);
+    return if (is_error) styles.err(a, label) else styles.comment(a, label);
 }

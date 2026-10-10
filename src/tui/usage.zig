@@ -60,9 +60,9 @@ pub fn contextUsageLine(a: std.mem.Allocator, used: u64, model: *const models.Mo
     const cw = @max(model.context_window, 1);
     const percent = @as(f64, @floatFromInt(used)) / @as(f64, @floatFromInt(cw)) * 100.0;
     const sizes = std.fmt.allocPrint(a, "{s}/{s}", .{ formatTokens(a, used), formatTokens(a, cw) }) catch "";
-    if (used + model.max_tokens > cw) return styles.red(a, std.fmt.allocPrint(a, "ctx full · {s}", .{sizes}) catch "ctx full");
+    if (used + model.max_tokens > cw) return styles.err(a, std.fmt.allocPrint(a, "ctx full · {s}", .{sizes}) catch "ctx full");
     const text = std.fmt.allocPrint(a, "ctx {s} · {d}%", .{ sizes, @as(u64, @intFromFloat(percent + 0.5)) }) catch "ctx";
-    return if (percent >= 85) styles.yellow(a, text) else styles.dim(a, text);
+    return if (percent >= 85) styles.warn(a, text) else styles.comment(a, text);
 }
 
 pub fn lastUsage(messages: []const message_mod.Message) message_mod.Usage {
@@ -83,5 +83,5 @@ pub fn cacheLine(a: std.mem.Allocator, usage: message_mod.Usage) []const u8 {
         0
     else
         @intFromFloat(@as(f64, @floatFromInt(usage.cache_read)) / @as(f64, @floatFromInt(prompt)) * 100.0 + 0.5);
-    return styles.dim(a, std.fmt.allocPrint(a, "cache {d}%", .{pct}) catch "cache");
+    return styles.comment(a, std.fmt.allocPrint(a, "cache {d}%", .{pct}) catch "cache");
 }

@@ -53,5 +53,5 @@ pub fn helpRow(a: std.mem.Allocator, key: []const u8, description: []const u8, w
     padded.appendSlice(a, key) catch {};
     var i = key.len;
     while (i < width) : (i += 1) padded.append(a, ' ') catch {};
-    return std.fmt.allocPrint(a, "  {s}  {s}", .{ styles.dim(a, padded.items), description }) catch key;
+    return std.fmt.allocPrint(a, "  {s}  {s}", .{ styles.comment(a, padded.items), description }) catch key;
 }

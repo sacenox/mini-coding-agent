@@ -102,10 +102,10 @@ fi
 
 # The banner lands in scrollback, not the live region, so wait on all of it.
 for _ in $(seq 300); do
-    pane all | grep -q 'mini ·' && break
+    pane all | grep -q 'mini-coding-agent' && break
     sleep 0.1
 done
-if ! pane all | grep -q 'mini ·'; then
+if ! pane all | grep -q 'mini-coding-agent'; then
     echo "stress: mini did not start; pane says:" >&2
     pane all >&2
     exit 1

@@ -191,7 +191,7 @@ const Tui = struct {
     }
 
     fn fail(self: *Tui, comptime fmt: []const u8, args: anytype) void {
-        self.note(styles.red(self.s, std.fmt.allocPrint(self.s, fmt, args) catch "! error"));
+        self.note(styles.err(self.s, std.fmt.allocPrint(self.s, fmt, args) catch "! error"));
     }
 
     fn commitUser(self: *Tui, text: []const u8) void {
@@ -202,13 +202,14 @@ const Tui = struct {
     fn pushBanner(self: *Tui) void {
         self.scrollback.separator = true;
         const model = self.opts.model;
+        const brand = styles.accent(self.s, "mini-coding-agent");
         self.push(if (model) |m|
             if (m.effort.len == 0)
-                std.fmt.allocPrint(self.s, "mini · {s}/{s}", .{ m.provider, m.id }) catch "mini"
+                std.fmt.allocPrint(self.s, "{s} · {s}/{s}", .{ brand, m.provider, m.id }) catch brand
             else
-                std.fmt.allocPrint(self.s, "mini · {s}/{s} · {s}", .{ m.provider, m.id, m.effort }) catch "mini"
+                std.fmt.allocPrint(self.s, "{s} · {s}/{s} · {s}", .{ brand, m.provider, m.id, m.effort }) catch brand
         else
-            "mini · no model configured");
+            std.fmt.allocPrint(self.s, "{s} · no model configured", .{brand}) catch brand);
         const loaded = self.opts.loaded;
         self.push(std.fmt.allocPrint(self.s, "{d} agent files · {d} skills", .{
             loaded.agent_files, loaded.skills,
@@ -217,7 +218,7 @@ const Tui = struct {
     }
 
     fn statusLine(self: *Tui) []const u8 {
-        const model = self.opts.model orelse return styles.dim(self.s, "no model configured");
+        const model = self.opts.model orelse return styles.comment(self.s, "no model configured");
         self.messages_mutex.lockUncancelable(platform.io);
         const used = usage_mod.estimateContextTokens(self.messages.items, self.opts.system_prompt, self.opts.tools_json);
         const cache = usage_mod.lastUsage(self.messages.items);
@@ -227,17 +228,17 @@ const Tui = struct {
             usage_mod.cacheLine(self.s, cache),
         }) catch "ctx";
         if (self.paused or self.phase == .pausing) {
-            return std.fmt.allocPrint(self.s, "{s} · {s}", .{ styles.dim(self.s, "paused - type steering, Enter to submit"), info }) catch info;
+            return std.fmt.allocPrint(self.s, "{s} · {s}", .{ styles.comment(self.s, "paused - type steering, Enter to submit"), info }) catch info;
         }
         if (self.active and self.pause_requested.load(.seq_cst)) {
-            return std.fmt.allocPrint(self.s, "{s} · {s}", .{ styles.dim(self.s, "pausing - waiting for the step boundary"), info }) catch info;
+            return std.fmt.allocPrint(self.s, "{s} · {s}", .{ styles.comment(self.s, "pausing - waiting for the step boundary"), info }) catch info;
         }
         if (!self.active or self.phase == .idle) return info;
         const elapsed = @max(0, @divFloor(time.nowMs() - self.turn_start, 1000));
         return std.fmt.allocPrint(self.s, "{s} {s} · {s} · {s}", .{
-            styles.teal(self.s, spinnerChar(self.frame)),
+            styles.accent(self.s, spinnerChar(self.frame)),
             self.stateLabel(),
-            styles.dim(self.s, std.fmt.allocPrint(self.s, "{d}s", .{elapsed}) catch ""),
+            styles.comment(self.s, std.fmt.allocPrint(self.s, "{d}s", .{elapsed}) catch ""),
             info,
         }) catch info;
     }
@@ -279,14 +280,14 @@ const Tui = struct {
             else => {},
         }
         var out: std.ArrayList(u8) = .empty;
-        out.appendSlice(a, if (color) |c| styles.styledWith(a, .{ .fg = c }, text) else styles.dim(a, text)) catch {};
+        out.appendSlice(a, if (color) |c| styles.styledWith(a, .{ .fg = c }, text) else styles.comment(a, text)) catch {};
         if (bytes > 0) {
             const n = usage_mod.formatTokens(a, (bytes + 3) / 4);
-            out.appendSlice(a, styles.dim(a, std.fmt.allocPrint(a, " · ~{s} tok", .{n}) catch "")) catch {};
+            out.appendSlice(a, styles.comment(a, std.fmt.allocPrint(a, " · ~{s} tok", .{n}) catch "")) catch {};
         }
         const queued = self.pending_calls.items.len -| @intFromBool(self.phase == .running_tool);
         if (queued > 0) {
-            out.appendSlice(a, styles.dim(a, std.fmt.allocPrint(a, " · {d} queued", .{queued}) catch "")) catch {};
+            out.appendSlice(a, styles.comment(a, std.fmt.allocPrint(a, " · {d} queued", .{queued}) catch "")) catch {};
         }
         return out.items;
     }
@@ -332,11 +333,11 @@ const Tui = struct {
                     for (render.wrapLine(self.s, part, width)) |row| {
                         if (used >= budget_rows) break;
                         used += 1;
-                        lines.append(self.s, styles.dim(self.s, row)) catch {};
+                        lines.append(self.s, styles.comment(self.s, row)) catch {};
                     }
                 }
             } else {
-                lines.append(self.s, styles.dim(self.s, "no matches")) catch {};
+                lines.append(self.s, styles.comment(self.s, "no matches")) catch {};
             }
         } else {
             for (ed.rows) |r| lines.append(self.s, r) catch {};
@@ -417,19 +418,19 @@ const Tui = struct {
             .tool_result => |tr| self.commitToolResult(tr.name, tr.text, tr.is_error, tr.diffs, tr.body),
             .err => |m| {
                 self.reportStatus("error", null, m);
-                self.endTurn(styles.red(self.s, std.fmt.allocPrint(self.s, "! {s}", .{m}) catch "! error"));
+                self.endTurn(styles.err(self.s, std.fmt.allocPrint(self.s, "! {s}", .{m}) catch "! error"));
             },
             .no_model => {
                 self.reportStatus("error", null, "no model configured");
-                self.endTurn(styles.red(self.s, "! no model configured"));
+                self.endTurn(styles.err(self.s, "! no model configured"));
             },
             .cancelled => {
                 self.reportStatus("idle", null, null);
-                self.endTurn(styles.red(self.s, "! cancelled"));
+                self.endTurn(styles.err(self.s, "! cancelled"));
             },
             .complete => {
                 self.reportStatus("done", null, null);
-                self.endTurn(styles.dim(self.s, std.fmt.allocPrint(self.s, "[complete · {d}s]", .{@max(0, @divFloor(time.nowMs() - self.turn_start, 1000))}) catch "[complete]"));
+                self.endTurn(styles.comment(self.s, std.fmt.allocPrint(self.s, "[complete · {d}s]", .{@max(0, @divFloor(time.nowMs() - self.turn_start, 1000))}) catch "[complete]"));
             },
         }
         self.dirty = true;
@@ -478,7 +479,7 @@ const Tui = struct {
             const rows = if (std.mem.eql(u8, name, "edit")) render.plainRows(self.s, lines) else render.bodyRows(self.s, lines, width);
             const mark_error = is_error and bash_exit == null;
             for (rows, 0..) |row, i| {
-                const prefix = if (mark_error and i == rows.len - 1) styles.red(self.s, ERROR_PREFIX) else styles.dim(self.s, BODY_PREFIX);
+                const prefix = if (mark_error and i == rows.len - 1) styles.err(self.s, ERROR_PREFIX) else styles.comment(self.s, BODY_PREFIX);
                 self.push(std.fmt.allocPrint(self.s, "{s}{s}", .{ prefix, row }) catch row);
             }
             if (bash_exit) |status_line| self.push(status_line);
@@ -486,7 +487,7 @@ const Tui = struct {
         for (diffs) |d| {
             self.push(tool_view.diffHead(self.s, name, d.path));
             for (render.plainRows(self.s, diff_view.diffBody(self.s, d))) |row| {
-                self.push(std.fmt.allocPrint(self.s, "{s}{s}", .{ styles.dim(self.s, BODY_PREFIX), row }) catch row);
+                self.push(std.fmt.allocPrint(self.s, "{s}{s}", .{ styles.comment(self.s, BODY_PREFIX), row }) catch row);
             }
         }
         self.scrollback.separator = true;
@@ -569,7 +570,7 @@ const Tui = struct {
                 if (!self.aborting) {
                     self.aborting = true;
                     self.reportStatus("idle", null, null);
-                    self.endTurn(styles.red(self.s, "! cancelled"));
+                    self.endTurn(styles.err(self.s, "! cancelled"));
                 }
                 self.dirty = true;
             } else if (self.command_active) {
@@ -669,7 +670,7 @@ const Tui = struct {
                 self.newSession();
                 self.push("");
                 self.pushBanner();
-                self.note(styles.dim(self.s, "new session"));
+                self.note(styles.comment(self.s, "new session"));
             },
             .provider => self.startProviderSelect(),
             .model => {
@@ -752,7 +753,7 @@ const Tui = struct {
         };
         self.command_active = true;
         self.prompt_open = false;
-        self.note(styles.dim(self.s, "querying models..."));
+        self.note(styles.comment(self.s, "querying models..."));
         self.dirty = true;
     }
 
