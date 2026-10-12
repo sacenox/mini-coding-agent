@@ -52,13 +52,23 @@ fn agentFiles(a: std.mem.Allocator) ![]const []const u8 {
     const cwd = try std.process.currentPathAlloc(platform.io, a);
     try roots.append(a, cwd);
     var found: std.ArrayList([]const u8) = .empty;
+    var seen: std.ArrayList([]const u8) = .empty;
     for (roots.items) |root| {
         for ([_][]const u8{ "AGENTS.md", "CLAUDE.md" }) |name| {
             const path = try filesystem.join(a, &.{ root, name });
-            if (filesystem.fileExists(path)) try found.append(a, path);
+            if (!filesystem.fileExists(path)) continue;
+            const real = filesystem.realPath(a, path) orelse path;
+            if (contains(seen.items, real)) continue;
+            try seen.append(a, real);
+            try found.append(a, path);
         }
     }
     return found.items;
+}
+
+fn contains(haystack: []const []const u8, needle: []const u8) bool {
+    for (haystack) |item| if (std.mem.eql(u8, item, needle)) return true;
+    return false;
 }
 
 pub const Loaded = struct { agent_files: usize = 0, skills: usize = 0 };

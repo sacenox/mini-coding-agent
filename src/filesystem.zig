@@ -23,6 +23,14 @@ pub fn fileExists(path: []const u8) bool {
     return true;
 }
 
+pub fn realPath(a: std.mem.Allocator, path: []const u8) ?[]const u8 {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = std.Io.Dir.cwd().openFile(platform.io, path, .{}) catch return null;
+    defer file.close(platform.io);
+    const n = file.realPath(platform.io, &buf) catch return null;
+    return a.dupe(u8, buf[0..n]) catch null;
+}
+
 pub fn listDir(a: std.mem.Allocator, root: []const u8) ![]const []const u8 {
     var dir = try std.Io.Dir.cwd().openDir(platform.io, root, .{ .iterate = true });
     defer dir.close(platform.io);
