@@ -3,10 +3,12 @@ const platform = @import("../platform.zig");
 const filesystem = @import("../filesystem.zig");
 const text = @import("../text.zig");
 const diff = @import("../diff.zig");
+const gitignore = @import("../gitignore.zig");
 const tools = @import("../tools.zig");
 
 const max_file_bytes = 1 << 20;
 const max_total_bytes = 32 << 20;
+const max_ignore_bytes = 1 << 20;
 
 const Kind = enum { text, binary, large, link, untracked };
 
@@ -25,66 +27,6 @@ pub const Ignore = struct {
     uses_gitignore: bool = true,
 };
 
-const Pattern = struct { text: []const u8, anchored: bool };
-
-fn normalizePattern(raw: []const u8) ?Pattern {
-    var line = std.mem.trim(u8, raw, " \t\r");
-    if (line.len == 0 or line[0] == '#') return null;
-    if (std.mem.startsWith(u8, line, "./")) line = line[2..];
-    const anchored = line.len > 0 and line[0] == '/';
-    if (anchored) line = line[1..];
-    line = std.mem.trimEnd(u8, line, "/");
-    return if (line.len == 0) null else .{ .text = line, .anchored = anchored };
-}
-
-fn ignorePatterns(tmp: std.mem.Allocator, ignore: Ignore) ![]const Pattern {
-    var list: std.ArrayList([]const u8) = .empty;
-    try list.appendSlice(tmp, ignore.dirs);
-    if (ignore.uses_gitignore) {
-        if (filesystem.readFileAlloc(tmp, ".gitignore", 1 << 20)) |gitignore| {
-            var it = std.mem.tokenizeScalar(u8, gitignore, '\n');
-            while (it.next()) |line| try list.append(tmp, line);
-        } else |_| {}
-    }
-    var out: std.ArrayList(Pattern) = .empty;
-    for (list.items) |line| {
-        if (normalizePattern(line)) |p| try out.append(tmp, p);
-    }
-    return out.items;
-}
-
-fn glob(pat: []const u8, str: []const u8) bool {
-    var p: usize = 0;
-    var s: usize = 0;
-    var star: ?usize = null;
-    var star_s: usize = 0;
-    while (s < str.len) {
-        if (p < pat.len and (pat[p] == '?' or pat[p] == str[s])) {
-            p += 1;
-            s += 1;
-        } else if (p < pat.len and pat[p] == '*') {
-            star = p;
-            star_s = s;
-            p += 1;
-        } else if (star) |sp| {
-            star_s += 1;
-            s = star_s;
-            p = sp + 1;
-        } else return false;
-    }
-    while (p < pat.len and pat[p] == '*') p += 1;
-    return p == pat.len;
-}
-
-fn ignored(patterns: []const Pattern, rel: []const u8) bool {
-    const name = std.fs.path.basename(rel);
-    for (patterns) |p| {
-        const subject = if (p.anchored or std.mem.indexOfScalar(u8, p.text, '/') != null) rel else name;
-        if (glob(p.text, subject)) return true;
-    }
-    return false;
-}
-
 pub fn capture(a: std.mem.Allocator, ignore: Ignore) !Tree {
     var tree = Tree.init(a);
 
@@ -92,7 +34,13 @@ pub fn capture(a: std.mem.Allocator, ignore: Ignore) !Tree {
     defer arena.deinit();
     const tmp = arena.allocator();
 
-    const ignores = try ignorePatterns(tmp, ignore);
+    var matcher = gitignore.Matcher.init(tmp);
+    if (ignore.dirs.len > 0) try matcher.pushPatterns("", ignore.dirs);
+    if (ignore.uses_gitignore) {
+        if (filesystem.readFileAlloc(tmp, ".gitignore", max_ignore_bytes)) |content| {
+            try matcher.pushFile("", content);
+        } else |_| {}
+    }
 
     var stack: std.ArrayList([]const u8) = .empty;
     try stack.append(tmp, "");
@@ -110,8 +58,19 @@ pub fn capture(a: std.mem.Allocator, ignore: Ignore) !Tree {
             else
                 try std.fmt.allocPrint(a, "{s}/{s}", .{ dir_rel, entry.name });
 
-            if (entry.kind == .directory) {
-                if (!ignored(ignores, rel)) try stack.append(tmp, rel);
+            const is_dir = entry.kind == .directory;
+            if (matcher.check(rel, is_dir)) |ig| {
+                if (ig) continue;
+            }
+
+            if (is_dir) {
+                if (ignore.uses_gitignore) {
+                    const gi = try std.fmt.allocPrint(tmp, "{s}/.gitignore", .{rel});
+                    if (filesystem.readFileAlloc(tmp, gi, max_ignore_bytes)) |content| {
+                        try matcher.pushFile(rel, content);
+                    } else |_| {}
+                }
+                try stack.append(tmp, rel);
                 continue;
             }
 
