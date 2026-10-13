@@ -189,7 +189,7 @@ fn defaults(a: std.mem.Allocator) !Config {
         .model = null,
         .thinking_effort = null,
         .theme = "tokyonight",
-        .program_status = true,
+        .program_status = false,
         .custom_providers = &.{},
         .snapshot_ignore_dirs = &.{},
         .snapshot_uses_gitignore = true,

@@ -108,6 +108,9 @@ const Tui = struct {
     pending_calls: std.ArrayList(PendingCall) = .empty,
     streamed: std.ArrayList(u8) = .empty,
     turn_start: i64 = 0,
+    ctx_msgs: usize = std.math.maxInt(usize),
+    ctx_used: u64 = 0,
+    ctx_cache: message_mod.Usage = .{},
     frame: usize = 0,
     dirty: bool = true,
     closed: bool = false,
@@ -220,8 +223,14 @@ const Tui = struct {
     fn statusLine(self: *Tui) []const u8 {
         const model = self.opts.model orelse return styles.comment(self.s, "no model configured");
         self.messages_mutex.lockUncancelable(platform.io);
-        const used = usage_mod.estimateContextTokens(self.messages.items, self.opts.system_prompt, self.opts.tools_json);
-        const cache = usage_mod.lastUsage(self.messages.items);
+        const count = self.messages.items.len;
+        if (count != self.ctx_msgs) {
+            self.ctx_used = usage_mod.estimateContextTokens(self.messages.items, self.opts.system_prompt, self.opts.tools_json);
+            self.ctx_cache = usage_mod.lastUsage(self.messages.items);
+            self.ctx_msgs = count;
+        }
+        const used = self.ctx_used;
+        const cache = self.ctx_cache;
         self.messages_mutex.unlock(platform.io);
         const info = std.fmt.allocPrint(self.s, "{s} · {s}", .{
             usage_mod.contextUsageLine(self.s, used, model),
@@ -658,6 +667,11 @@ const Tui = struct {
         self.keepName(&self.detail, null);
         self.turn_start = time.nowMs();
         self.frame = 0;
+        self.event_mutex.lockUncancelable(platform.io);
+        self.events.clearRetainingCapacity();
+        _ = self.qarena.reset(.retain_capacity);
+        self.q = self.qarena.allocator();
+        self.event_mutex.unlock(platform.io);
         const t = std.Thread.spawn(.{}, turnThread, .{self}) catch return;
         t.detach();
         self.dirty = true;
@@ -962,6 +976,10 @@ fn copyEvent(a: std.mem.Allocator, e: agent.Event) agent.Event {
 
 fn eventTrampoline(ctx: *anyopaque, event: agent.Event) void {
     const self: *Tui = @ptrCast(@alignCast(ctx));
+    switch (event) {
+        .tool_output => return,
+        else => {},
+    }
     self.event_mutex.lockUncancelable(platform.io);
     self.events.append(platform.gpa, copyEvent(self.q, event)) catch {};
     self.event_mutex.unlock(platform.io);
