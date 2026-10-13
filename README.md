@@ -3,7 +3,9 @@
 A fast, transparent, config-first terminal coding agent.
 
 <p align="center">
-  <img src="preview.png" alt="mini TUI" width="931">
+  <img src="preview.png" alt="mini TUI: an edit diff, a streamed answer, and the three themes" width="931">
+  <br>
+  <a href="preview.mp4">10-second demo (mp4, 1.4 MB)</a>
 </p>
 
 ## Build
