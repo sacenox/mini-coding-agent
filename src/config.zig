@@ -32,6 +32,11 @@ pub const CustomProvider = struct {
     headers: ?std.json.ArrayHashMap([]const u8) = null,
 };
 
+pub const McpServer = struct {
+    url: []const u8,
+    headers: ?std.json.ArrayHashMap([]const u8) = null,
+};
+
 pub const Config = struct {
     path: []const u8,
     sessions_dir: []const u8,
@@ -45,6 +50,7 @@ pub const Config = struct {
     theme: []const u8,
     program_status: bool,
     custom_providers: []const CustomProvider,
+    mcp_servers: std.json.ArrayHashMap(McpServer),
     snapshot_ignore_dirs: []const []const u8,
     snapshot_uses_gitignore: bool,
     history_size: usize,
@@ -63,6 +69,7 @@ const File = struct {
     model: ?[]const u8 = null,
     thinkingEffort: ?[]const u8 = null,
     customProviders: ?[]const CustomProvider = null,
+    mcpServers: ?std.json.ArrayHashMap(McpServer) = null,
     theme: ?[]const u8 = null,
     programStatus: ?bool = null,
     snapshotIgnoreDirs: ?[]const []const u8 = null,
@@ -139,6 +146,7 @@ fn readInto(a: std.mem.Allocator, path: []const u8, required: bool, cfg: *Config
     if (file.skillsDirs) |v| cfg.skills_dirs = v;
     if (file.tools) |v| cfg.tools = v;
     if (file.customProviders) |v| cfg.custom_providers = v;
+    if (file.mcpServers) |v| cfg.mcp_servers = v;
     if (file.thinkingEffort) |v| cfg.thinking_effort = v;
     if (file.theme) |v| cfg.theme = v;
     if (file.programStatus) |v| cfg.program_status = v;
@@ -194,6 +202,7 @@ fn defaults(a: std.mem.Allocator) !Config {
         .theme = "tokyonight",
         .program_status = false,
         .custom_providers = &.{},
+        .mcp_servers = .{},
         .snapshot_ignore_dirs = &.{},
         .snapshot_uses_gitignore = true,
         .history_size = 100,

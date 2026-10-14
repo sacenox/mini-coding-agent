@@ -72,6 +72,23 @@ error.
 | `edit` | replaces `oldText`, which must occur exactly once; an empty `oldText` creates a new file and fails if it exists; prints a unified diff |
 | `bash` | runs `bash -c` in the cwd with a 120s default `timeout`; output keeps the first 10k and last 6k bytes; a before/after snapshot of the cwd reports changed files as diffs |
 
+## MCP
+
+`mini mcp` speaks the stateless MCP protocol to the servers in `mcpServers`.
+It probes a revision and, when a server rejects it, retries with the newest
+revision that server advertises, so no single revision is pinned. It lets the
+`bash` tool reach MCP tools without any MCP tool description entering the
+model's context: the model discovers and calls them with three commands,
+composing them like any other shell command.
+
+    mini mcp search <query>        # ranked { path, description } matches
+    mini mcp describe <path>       # the description and input signature
+    mini mcp invoke <path> <json>  # call a tool with a JSON argument object
+
+A tool path is `<server>.<tool>`, for example
+`mini mcp invoke context7.resolve-library-id '{"libraryName":"zig"}'`. Absent
+`mcpServers`, every command reports that no servers are configured.
+
 ## Configure
 
 The config is one JSON object. It is read from
@@ -92,6 +109,13 @@ A full example:
   "discoverAgentFiles": true,
   "skillsDirs": ["/home/me/.agents/skills"],
   "tools": ["edit", "read", "bash"],
+  "mcpServers": {
+    "context7": { "url": "https://mcp.context7.com/mcp" },
+    "firecrawl": {
+      "url": "https://mcp.firecrawl.dev/v2/mcp",
+      "headers": { "Authorization": "Bearer fc-YOUR-API-KEY" }
+    }
+  },
   "snapshotIgnoreDirs": [".git"],
   "snapshotUsesGitignore": true,
   "historySize": 100,
@@ -135,6 +159,7 @@ Keys:
 | `skillsDirs` | `[]` | directories holding `<name>/SKILL.md` skills; each `SKILL.md` needs a `name` in its frontmatter (optional `description`) |
 | `tools` | `["edit", "read", "bash"]` | which tools the model sees |
 | `customProviders` | `[]` | in-tree provider definitions |
+| `mcpServers` | `{}` | named MCP servers (`<name>: { url, headers }`) the `mini mcp` subcommand talks to |
 | `snapshotIgnoreDirs` | `[]` | directory names skipped when the `bash` tool snapshots the cwd for diffs |
 | `snapshotUsesGitignore` | `true` | also skip directories named in `.gitignore` when snapshotting |
 | `historySize` | `100` | past inputs kept in `<state dir>/mini-coding-agent/history` for `Ctrl+R` |

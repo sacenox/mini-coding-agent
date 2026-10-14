@@ -6,6 +6,7 @@ const models = @import("models.zig");
 const session = @import("session.zig");
 const agent = @import("agent.zig");
 const tools = @import("tools.zig");
+const mcp = @import("mcp.zig");
 const tui = @import("tui/tui.zig");
 const term = @import("tui/term.zig");
 const headless = @import("headless.zig");
@@ -62,8 +63,38 @@ pub fn main(init: std.process.Init) void {
     std.process.exit(code);
 }
 
+/// Splits a leading `mcp` subcommand from any configuration flags that precede
+/// it, so `mini -c <file> mcp …` behaves like every other mode. Returns null
+/// when `mcp` is not the subcommand.
+fn mcpArgs(a: std.mem.Allocator) !?struct { config: ?[]const u8, args: []const []const u8 } {
+    var it = std.process.Args.Iterator.init(platform.args);
+    _ = it.next();
+    var config_path: ?[]const u8 = null;
+    while (it.next()) |arg| {
+        if (std.mem.startsWith(u8, arg, "--config=")) {
+            config_path = try a.dupe(u8, arg["--config=".len..]);
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--config")) {
+            config_path = try a.dupe(u8, it.next() orelse return null);
+            continue;
+        }
+        if (!std.mem.eql(u8, arg, "mcp")) return null;
+
+        var rest: std.ArrayList([]const u8) = .empty;
+        while (it.next()) |sub| try rest.append(a, sub);
+        return .{ .config = config_path, .args = try rest.toOwnedSlice(a) };
+    }
+    return null;
+}
+
 fn run() !u8 {
     const a = platform.gpa;
+
+    if (try mcpArgs(a)) |mcp_call| {
+        const cfg = config.load(a, mcp_call.config) catch return 1;
+        return mcp.run(a, &cfg, mcp_call.args);
+    }
 
     const args = parseArgs(a) catch |e| {
         switch (e) {

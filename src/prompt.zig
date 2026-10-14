@@ -107,6 +107,24 @@ pub fn buildSystemPrompt(a: std.mem.Allocator, cfg: *const config.Config) !Built
         }
     }
 
+    if (cfg.mcp_servers.map.count() > 0) {
+        var out: std.ArrayList(u8) = .empty;
+        try out.appendSlice(a, "## MCP\n\nConfigured servers: ");
+        var it = cfg.mcp_servers.map.iterator();
+        var first = true;
+        while (it.next()) |entry| {
+            if (!first) try out.appendSlice(a, ", ");
+            first = false;
+            try out.appendSlice(a, entry.key_ptr.*);
+        }
+        try out.appendSlice(
+            a,
+            "\n\nReach their tools with the bash tool: `mini mcp search <query>`, " ++
+                "`mini mcp describe <server>.<tool>`, `mini mcp invoke <server>.<tool> <json>`.",
+        );
+        try sections.append(a, out.items);
+    }
+
     var joined: std.ArrayList(u8) = .empty;
     for (sections.items, 0..) |section, i| {
         if (i > 0) try joined.appendSlice(a, "\n\n");
