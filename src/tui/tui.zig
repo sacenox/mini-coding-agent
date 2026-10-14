@@ -71,6 +71,8 @@ const Tui = struct {
     s: std.mem.Allocator,
     sarena: std.heap.ArenaAllocator,
     sa: std.mem.Allocator,
+    calls: std.heap.ArenaAllocator,
+    ca: std.mem.Allocator = undefined,
 
     input_bytes: std.ArrayList(u8) = .empty,
     input_batch: std.ArrayList(u8) = .empty,
@@ -150,6 +152,7 @@ const Tui = struct {
             .s = undefined,
             .sarena = std.heap.ArenaAllocator.init(a),
             .sa = undefined,
+            .calls = std.heap.ArenaAllocator.init(a),
             .qarena = std.heap.ArenaAllocator.init(a),
             .q = undefined,
             .model_arena = std.heap.ArenaAllocator.init(a),
@@ -161,6 +164,7 @@ const Tui = struct {
         self.a = self.arena.allocator();
         self.s = self.scratch.allocator();
         self.sa = self.sarena.allocator();
+        self.ca = self.calls.allocator();
         self.q = self.qarena.allocator();
         self.model_m = self.model_arena.allocator();
         self.editor = editor_mod.Editor.init(self.backing);
@@ -368,8 +372,8 @@ const Tui = struct {
         return null;
     }
     fn keepName(self: *Tui, slot: *?[]const u8, value: ?[]const u8) void {
-        if (slot.*) |old| self.a.free(old);
-        slot.* = if (value) |v| self.a.dupe(u8, v) catch null else null;
+        if (slot.*) |old| self.backing.free(old);
+        slot.* = if (value) |v| self.backing.dupe(u8, v) catch null else null;
     }
 
     fn handleAgentEvent(self: *Tui, event: agent.Event) void {
@@ -406,13 +410,13 @@ const Tui = struct {
                 self.stream_kind = .none;
                 self.keepName(&self.writing_tool, null);
                 self.commitLines(self.reply.flush(self.s));
-                const summary = tool_view.callSummary(self.a, tc.name, tc.arguments);
+                const summary = tool_view.callSummary(self.ca, tc.name, tc.arguments);
                 const display = if (std.mem.eql(u8, tc.name, "read") or std.mem.eql(u8, tc.name, "edit"))
                     tool_view.relativize(self.opts.session.cwd, summary)
                 else
                     summary;
                 self.pending_calls.append(self.a, .{
-                    .name = self.a.dupe(u8, tc.name) catch "",
+                    .name = self.ca.dupe(u8, tc.name) catch "",
                     .summary = display,
                 }) catch {};
             },
@@ -508,28 +512,32 @@ const Tui = struct {
             self.commitLines(tool_view.callBody(self.s, call.name, call.summary, null));
         }
         self.pending_calls.clearRetainingCapacity();
+        _ = self.calls.reset(.retain_capacity);
+        self.ca = self.calls.allocator();
     }
 
     fn openSearch(self: *Tui) void {
         const draft = self.editor.contents();
-        self.search = .{ .saved = self.a.dupe(u8, draft) catch return };
+        self.search = .{ .saved = self.backing.dupe(u8, draft) catch return };
         self.editor.clear();
         self.dirty = true;
     }
 
     fn closeSearch(self: *Tui, restore: bool, chosen: ?[]const u8) void {
-        const search = self.search orelse return;
+        var search = self.search orelse return;
         self.search = null;
         self.editor.clear();
         defer self.dirty = true;
         if (chosen) |text| self.editor.setText(text);
         if (restore) self.editor.setText(search.saved);
+        self.backing.free(search.saved);
+        search.query.deinit(self.backing);
     }
 
     fn searchKey(self: *Tui, key: input.Key) void {
         const search = &(self.search orelse return);
         switch (key) {
-            .text => |t| search.query.appendSlice(self.a, t) catch {},
+            .text => |t| search.query.appendSlice(self.backing, t) catch {},
             .backspace => {
                 if (search.query.items.len > 0) {
                     var start = search.query.items.len - 1;
@@ -723,11 +731,26 @@ const Tui = struct {
 
     fn newSession(self: *Tui) void {
         self.opts.session.close();
-        const cwd = std.process.currentPathAlloc(platform.io, self.a) catch ".";
-        self.opts.session.* = session_mod.Session.init(self.a, self.cfg.sessions_dir, cwd);
+        const cwd = std.process.currentPathAlloc(platform.io, self.backing) catch ".";
+        self.opts.session.* = session_mod.Session.init(self.backing, self.cfg.sessions_dir, cwd);
         self.messages_mutex.lockUncancelable(platform.io);
         self.messages.clearRetainingCapacity();
         self.messages_mutex.unlock(platform.io);
+        self.pending_calls.clearRetainingCapacity();
+        self.streamed.clearRetainingCapacity();
+        self.reply.reset();
+        if (self.search) |*sr| {
+            self.backing.free(sr.saved);
+            sr.query.deinit(self.backing);
+            self.search = null;
+        }
+        self.keepName(&self.detail, null);
+        self.keepName(&self.writing_tool, null);
+        self.steering_text = "";
+        self.phase = .idle;
+        self.stream_kind = .none;
+        _ = self.calls.reset(.retain_capacity);
+        self.ca = self.calls.allocator();
         self.dirty = true;
     }
 

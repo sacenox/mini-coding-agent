@@ -114,7 +114,8 @@ fn pushMessage(opts: Options, messages: *std.ArrayList(message_mod.Message), mes
 
 fn steer(opts: Options, messages: *std.ArrayList(message_mod.Message), content: []const u8) !void {
     if (content.len == 0) return;
-    const message = message_mod.Message{ .user = .{ .content = content, .timestamp = time.nowMs() } };
+    const owned = try opts.a.dupe(u8, content);
+    const message = message_mod.Message{ .user = .{ .content = owned, .timestamp = time.nowMs() } };
     try pushMessage(opts, messages, message);
     try opts.session.appendMessage(opts.a, message);
 }
