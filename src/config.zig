@@ -48,10 +48,12 @@ pub const Config = struct {
     snapshot_ignore_dirs: []const []const u8,
     snapshot_uses_gitignore: bool,
     history_size: usize,
+    max_diff_lines: usize,
 };
 
 const File = struct {
     historySize: ?usize = null,
+    maxDiffLines: ?usize = null,
     sessionsDir: ?[]const u8 = null,
     systemPrompt: ?[]const u8 = null,
     discoverAgentFiles: ?bool = null,
@@ -143,6 +145,7 @@ fn readInto(a: std.mem.Allocator, path: []const u8, required: bool, cfg: *Config
     if (file.snapshotIgnoreDirs) |v| cfg.snapshot_ignore_dirs = v;
     if (file.snapshotUsesGitignore) |v| cfg.snapshot_uses_gitignore = v;
     if (file.historySize) |v| cfg.history_size = v;
+    if (file.maxDiffLines) |v| cfg.max_diff_lines = v;
 }
 
 pub const Update = struct {
@@ -194,5 +197,6 @@ fn defaults(a: std.mem.Allocator) !Config {
         .snapshot_ignore_dirs = &.{},
         .snapshot_uses_gitignore = true,
         .history_size = 100,
+        .max_diff_lines = 2000,
     };
 }

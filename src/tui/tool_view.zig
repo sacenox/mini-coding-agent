@@ -62,7 +62,7 @@ pub fn callBody(a: std.mem.Allocator, name: []const u8, summary: []const u8, met
     return out.items;
 }
 
-pub fn resultLines(a: std.mem.Allocator, name: []const u8, text: []const u8) []const BodyLine {
+pub fn resultLines(a: std.mem.Allocator, name: []const u8, text: []const u8, max_diff_lines: usize) []const BodyLine {
     const trimmed = std.mem.trimEnd(u8, text, " \t\r\n");
     var lines: std.ArrayList([]const u8) = .empty;
     var it = std.mem.splitScalar(u8, trimmed, '\n');
@@ -81,7 +81,7 @@ pub fn resultLines(a: std.mem.Allocator, name: []const u8, text: []const u8) []c
         if (verb.len > 0) {
             const path = lines.items[0][verb.len..];
             _ = lines.orderedRemove(0);
-            return diff_view.diffLines(a, path, lines.items);
+            return diff_view.diffLines(a, path, lines.items, max_diff_lines);
         }
     }
     var out: std.ArrayList(BodyLine) = .empty;
@@ -89,10 +89,10 @@ pub fn resultLines(a: std.mem.Allocator, name: []const u8, text: []const u8) []c
     return out.items;
 }
 
-pub fn exitLine(a: std.mem.Allocator, text: []const u8, is_error: bool) ?[]const u8 {
+pub fn exitLine(a: std.mem.Allocator, text: []const u8) ?[]const u8 {
     const trimmed = std.mem.trimEnd(u8, text, " \t\r\n");
     const last = if (std.mem.lastIndexOfScalar(u8, trimmed, '\n')) |i| trimmed[i + 1 ..] else trimmed;
     if (!std.mem.startsWith(u8, last, "exit code: ")) return null;
     const label = std.fmt.allocPrint(a, " └ exit {s}", .{last["exit code: ".len..]}) catch return null;
-    return if (is_error) styles.err(a, label) else styles.comment(a, label);
+    return styles.comment(a, label);
 }

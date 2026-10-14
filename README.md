@@ -95,6 +95,7 @@ A full example:
   "snapshotIgnoreDirs": [".git"],
   "snapshotUsesGitignore": true,
   "historySize": 100,
+  "maxDiffLines": 2000,
   "customProviders": [
     {
       "id": "local",
@@ -137,6 +138,7 @@ Keys:
 | `snapshotIgnoreDirs` | `[]` | directory names skipped when the `bash` tool snapshots the cwd for diffs |
 | `snapshotUsesGitignore` | `true` | also skip directories named in `.gitignore` when snapshotting |
 | `historySize` | `100` | past inputs kept in `<state dir>/mini-coding-agent/history` for `Ctrl+R` |
+| `maxDiffLines` | `2000` | diffs longer than this render as a "too large" notice instead of highlighting every line |
 
 Unknown keys are rejected. `provider` and `model` must both be set to make a
 request; a custom provider must list the model in its `models`.

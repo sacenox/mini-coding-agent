@@ -483,8 +483,8 @@ const Tui = struct {
         if (meta == null) {
             const width = @max(self.term.width() - BODY_PREFIX.len, 1);
             const is_bash = std.mem.eql(u8, name, "bash");
-            const bash_exit: ?[]const u8 = if (is_bash) tool_view.exitLine(self.s, shown, is_error) else null;
-            const lines = tool_view.resultLines(self.s, name, shown);
+            const bash_exit: ?[]const u8 = if (is_bash) tool_view.exitLine(self.s, shown) else null;
+            const lines = tool_view.resultLines(self.s, name, shown, self.cfg.max_diff_lines);
             const rows = if (std.mem.eql(u8, name, "edit")) render.plainRows(self.s, lines) else render.bodyRows(self.s, lines, width);
             const mark_error = is_error and bash_exit == null;
             for (rows, 0..) |row, i| {
@@ -495,7 +495,7 @@ const Tui = struct {
         }
         for (diffs) |d| {
             self.push(tool_view.diffHead(self.s, name, d.path));
-            for (render.plainRows(self.s, diff_view.diffBody(self.s, d))) |row| {
+            for (render.plainRows(self.s, diff_view.diffBody(self.s, d, self.cfg.max_diff_lines))) |row| {
                 self.push(std.fmt.allocPrint(self.s, "{s}{s}", .{ styles.comment(self.s, BODY_PREFIX), row }) catch row);
             }
         }

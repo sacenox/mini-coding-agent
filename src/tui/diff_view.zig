@@ -59,7 +59,15 @@ fn rebaseSpans(a: std.mem.Allocator, spans: []const highlight.Span, lo: u32, hi:
     return out.items;
 }
 
-pub fn diffLines(a: std.mem.Allocator, path: []const u8, lines: []const []const u8) []const BodyLine {
+pub fn diffLines(a: std.mem.Allocator, path: []const u8, lines: []const []const u8, max_diff_lines: usize) []const BodyLine {
+    if (lines.len > max_diff_lines) {
+        var warn: std.ArrayList(BodyLine) = .empty;
+        warn.append(a, .{
+            .text = "Diff too large to render efficiently. Full contents in session.jsonl",
+            .style = .{ .fg = theme.current.comment },
+        }) catch {};
+        return warn.items;
+    }
     var joined: std.ArrayList(u8) = .empty;
     var starts = a.alloc(u32, lines.len) catch return &.{};
     for (lines, 0..) |l, i| {
@@ -119,13 +127,13 @@ pub fn diffLines(a: std.mem.Allocator, path: []const u8, lines: []const []const 
     return out.items;
 }
 
-pub fn diffBody(a: std.mem.Allocator, d: tools.FileDiff) []const BodyLine {
+pub fn diffBody(a: std.mem.Allocator, d: tools.FileDiff, max_diff_lines: usize) []const BodyLine {
     if (d.patch) |patch| {
         const trimmed = std.mem.trimEnd(u8, patch, " \t\r\n");
         var it = std.mem.splitScalar(u8, trimmed, '\n');
         var body: std.ArrayList([]const u8) = .empty;
         while (it.next()) |l| body.append(a, l) catch {};
-        return diffLines(a, d.path, body.items);
+        return diffLines(a, d.path, body.items, max_diff_lines);
     }
     var out: std.ArrayList(BodyLine) = .empty;
     if (d.note) |note| out.append(a, .{ .text = note, .style = .{ .fg = theme.current.comment } }) catch {};
