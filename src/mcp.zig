@@ -49,7 +49,11 @@ pub fn run(a: std.mem.Allocator, cfg: *const config.Config, args: []const []cons
 
     const cmd = args[0];
     if (std.mem.eql(u8, cmd, "search")) {
-        return search(al, cfg, if (args.len > 1) args[1] else "");
+        if (args.len < 2 or args[1].len == 0) {
+            platform.printErr("usage: mini mcp search <query>\n", .{});
+            return 1;
+        }
+        return search(al, cfg, args[1]);
     }
     if (std.mem.eql(u8, cmd, "describe")) {
         if (args.len < 2) {
@@ -103,7 +107,6 @@ fn search(al: std.mem.Allocator, cfg: *const config.Config, query: []const u8) u
 }
 
 fn score(t: Tool, query: []const u8) ?i32 {
-    if (query.len == 0) return 0;
     if (std.ascii.eqlIgnoreCase(t.name, query)) return 1000;
     if (std.ascii.eqlIgnoreCase(t.path, query)) return 900;
     if (std.ascii.startsWithIgnoreCase(t.path, query)) return 600;
