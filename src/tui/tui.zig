@@ -122,6 +122,9 @@ const Tui = struct {
 
     search: ?Search = null,
 
+    hist_index: ?usize = null,
+    hist_saved: []const u8 = "",
+
     prompt_open: bool = false,
     prompt_options: []const []const u8 = &.{},
     prompt_ids: []const []const u8 = &.{},
@@ -516,7 +519,35 @@ const Tui = struct {
         self.ca = self.calls.allocator();
     }
 
+    fn resetHistory(self: *Tui) void {
+        if (self.hist_index == null) return;
+        self.backing.free(self.hist_saved);
+        self.hist_saved = "";
+        self.hist_index = null;
+    }
+
+    fn historyWalk(self: *Tui, delta: isize) void {
+        const n = self.history.entries.items.len;
+        if (n == 0) return;
+        if (self.hist_index == null) {
+            self.hist_saved = self.backing.dupe(u8, self.editor.contents()) catch return;
+            self.hist_index = n;
+        }
+        const idx = @as(isize, @intCast(self.hist_index.?)) + delta;
+        if (idx < 0) return;
+        if (idx >= @as(isize, @intCast(n))) {
+            self.editor.setText(self.hist_saved);
+            self.resetHistory();
+            self.dirty = true;
+            return;
+        }
+        self.hist_index = @intCast(idx);
+        self.editor.setText(self.history.entries.items[@intCast(idx)]);
+        self.dirty = true;
+    }
+
     fn openSearch(self: *Tui) void {
+        self.resetHistory();
         const draft = self.editor.contents();
         self.search = .{ .saved = self.backing.dupe(u8, draft) catch return };
         self.editor.clear();
@@ -575,6 +606,14 @@ const Tui = struct {
             self.openSearch();
             return;
         }
+        if (key == .history_prev) {
+            self.historyWalk(-1);
+            return;
+        }
+        if (key == .history_next) {
+            self.historyWalk(1);
+            return;
+        }
         if (key == .eof) {
             if (!self.active and !self.command_active and self.editor.contents().len == 0) self.exit();
             return;
@@ -618,10 +657,16 @@ const Tui = struct {
             return;
         }
         const result = self.editor.handle(key);
-        if (result == .submit) self.submit() else if (result == .changed) self.dirty = true;
+        if (result == .submit) {
+            self.submit();
+        } else if (result == .changed) {
+            self.resetHistory();
+            self.dirty = true;
+        }
     }
 
     fn submit(self: *Tui) void {
+        self.resetHistory();
         const text = self.a.dupe(u8, self.editor.contents()) catch return;
         if (self.active) {
             if (self.paused) {
@@ -712,6 +757,7 @@ const Tui = struct {
         const keys = [_][2][]const u8{
             .{ "Enter", "submit" },
             .{ "Shift+Enter", "newline (Ctrl+J also works)" },
+            .{ "Shift+Up/Down", "walk input history (Ctrl+R to search)" },
             .{ "Esc", "pause the turn at the next step boundary" },
             .{ "Ctrl+C", "cancel the turn" },
             .{ "Ctrl+D", "exit on an empty draft" },
