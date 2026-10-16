@@ -83,21 +83,36 @@ pub const Scrollback = struct {
         self.buf.clearRetainingCapacity();
     }
 
+    fn appendBytes(self: *Scrollback, bytes: []const u8) void {
+        self.buf.appendSlice(self.a, bytes) catch {};
+    }
+
+    /// Append a committed row: bytes plus a line break, marking progress.
+    fn appendRow(self: *Scrollback, bytes: []const u8) void {
+        self.appendBytes(bytes);
+        self.appendBytes("\r\n");
+        self.wrote = true;
+        self.last_blank = false;
+    }
+
     pub fn push(self: *Scrollback, line: []const u8) void {
         const clean = render.sanitize(self.scratch, line);
         const blank = clean.len == 0 or (self.separator and self.wrote);
         self.separator = false;
         if (blank and self.wrote and !self.last_blank) {
-            self.buf.appendSlice(self.a, render.paintRow(self.scratch, "")) catch {};
-            self.buf.appendSlice(self.a, "\r\n") catch {};
+            self.appendBytes(render.paintRow(self.scratch, ""));
+            self.appendBytes("\r\n");
             self.last_blank = true;
         }
-        if (clean.len != 0) {
-            self.buf.appendSlice(self.a, render.paintRow(self.scratch, clean)) catch {};
-            self.buf.appendSlice(self.a, "\r\n") catch {};
-            self.wrote = true;
-            self.last_blank = false;
-        }
+        if (clean.len != 0) self.appendRow(render.paintRow(self.scratch, clean));
+    }
+
+    /// Append pre-built bytes verbatim, bypassing sanitizing and wrapping. Used
+    /// for terminal escape sequences such as image graphics.
+    pub fn pushRaw(self: *Scrollback, bytes: []const u8) void {
+        if (bytes.len == 0) return;
+        self.separator = false;
+        self.appendRow(bytes);
     }
 
     pub fn commitLines(self: *Scrollback, lines: []const render.BodyLine) void {

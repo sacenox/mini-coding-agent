@@ -49,6 +49,7 @@ pub const Config = struct {
     thinking_effort: ?[]const u8,
     theme: []const u8,
     program_status: bool,
+    show_images: bool,
     custom_providers: []const CustomProvider,
     mcp_servers: std.json.ArrayHashMap(McpServer),
     snapshot_ignore_dirs: []const []const u8,
@@ -72,6 +73,7 @@ const File = struct {
     mcpServers: ?std.json.ArrayHashMap(McpServer) = null,
     theme: ?[]const u8 = null,
     programStatus: ?bool = null,
+    showImages: ?bool = null,
     snapshotIgnoreDirs: ?[]const []const u8 = null,
     snapshotUsesGitignore: ?bool = null,
 };
@@ -150,6 +152,7 @@ fn readInto(a: std.mem.Allocator, path: []const u8, required: bool, cfg: *Config
     if (file.thinkingEffort) |v| cfg.thinking_effort = v;
     if (file.theme) |v| cfg.theme = v;
     if (file.programStatus) |v| cfg.program_status = v;
+    if (file.showImages) |v| cfg.show_images = v;
     if (file.snapshotIgnoreDirs) |v| cfg.snapshot_ignore_dirs = v;
     if (file.snapshotUsesGitignore) |v| cfg.snapshot_uses_gitignore = v;
     if (file.historySize) |v| cfg.history_size = v;
@@ -201,6 +204,7 @@ fn defaults(a: std.mem.Allocator) !Config {
         .thinking_effort = null,
         .theme = "tokyonight",
         .program_status = false,
+        .show_images = false,
         .custom_providers = &.{},
         .mcp_servers = .{},
         .snapshot_ignore_dirs = &.{},

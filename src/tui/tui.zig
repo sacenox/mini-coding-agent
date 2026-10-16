@@ -19,6 +19,7 @@ const commands = @import("commands.zig");
 const usage_mod = @import("usage.zig");
 const diff_view = @import("diff_view.zig");
 const tool_view = @import("tool_view.zig");
+const image_view = @import("image.zig");
 const screen = @import("screen.zig");
 const history = @import("../history.zig");
 const status = @import("../status.zig");
@@ -73,6 +74,7 @@ const Tui = struct {
     sa: std.mem.Allocator,
     calls: std.heap.ArenaAllocator,
     ca: std.mem.Allocator = undefined,
+    image_seq: u32 = 0,
 
     input_bytes: std.ArrayList(u8) = .empty,
     input_batch: std.ArrayList(u8) = .empty,
@@ -431,7 +433,7 @@ const Tui = struct {
             .tool_args => |n| self.writing_bytes = n,
             .tool_output => {},
             .message => |am| self.commitMessage(am),
-            .tool_result => |tr| self.commitToolResult(tr.name, tr.text, tr.is_error, tr.diffs, tr.body),
+            .tool_result => |tr| self.commitToolResult(tr.name, tr.text, tr.is_error, tr.diffs, tr.body, tr.images),
             .err => |m| {
                 self.reportStatus("error", null, m);
                 self.endTurn(styles.err(self.s, std.fmt.allocPrint(self.s, "! {s}", .{m}) catch "! error"));
@@ -479,7 +481,7 @@ const Tui = struct {
         }
     }
 
-    fn commitToolResult(self: *Tui, name: []const u8, text: []const u8, is_error: bool, diffs: []const tools_index.FileDiff, body: ?[]const u8) void {
+    fn commitToolResult(self: *Tui, name: []const u8, text: []const u8, is_error: bool, diffs: []const tools_index.FileDiff, body: ?[]const u8, images: []const message_mod.ImageContent) void {
         self.scrollback.separator = true;
         const shown = render.stripAnsi(self.s, text);
         const meta: ?[]const u8 = if (!is_error) body else null;
@@ -487,6 +489,7 @@ const Tui = struct {
             const call = self.pending_calls.orderedRemove(0);
             self.commitLines(tool_view.callBody(self.s, call.name, call.summary, meta));
         }
+        if (self.cfg.show_images) self.commitImages(images);
         if (meta == null) {
             const width = @max(self.term.width() - BODY_PREFIX.len, 1);
             const is_bash = std.mem.eql(u8, name, "bash");
@@ -507,6 +510,21 @@ const Tui = struct {
             }
         }
         self.scrollback.separator = true;
+    }
+
+    fn commitImages(self: *Tui, images: []const message_mod.ImageContent) void {
+        if (images.len == 0) return;
+        const width = @max(self.term.width(), 1);
+        const max_rows = @max(self.term.height() -| 2, 1);
+        const cell = self.term.cell();
+        const salt: u8 = @truncate(@as(u64, @bitCast(time.nowMs())));
+        for (images) |image| {
+            self.image_seq +%= 1;
+            const id = image_view.imageId(salt, self.image_seq);
+            if (image_view.block(self.s, id, image, width, max_rows, cell[0], cell[1])) |bytes| {
+                self.scrollback.pushRaw(bytes);
+            }
+        }
     }
 
     fn flushCalls(self: *Tui) void {
@@ -1009,7 +1027,7 @@ fn turnThread(self: *Tui) void {
     self.turn_done.store(true, .seq_cst);
 }
 
-fn copyEvent(a: std.mem.Allocator, e: agent.Event) agent.Event {
+fn copyEvent(a: std.mem.Allocator, e: agent.Event, with_images: bool) agent.Event {
     return switch (e) {
         .phase => |p| .{ .phase = .{ .phase = p.phase, .detail = if (p.detail) |d| a.dupe(u8, d) catch "" else null } },
         .text => |s| .{ .text = a.dupe(u8, s) catch "" },
@@ -1031,12 +1049,23 @@ fn copyEvent(a: std.mem.Allocator, e: agent.Event) agent.Event {
                 };
                 diffs = buf;
             } else |_| {}
+            var images: []const message_mod.ImageContent = &.{};
+            if (with_images) {
+                if (a.alloc(message_mod.ImageContent, tr.images.len)) |buf| {
+                    for (tr.images, 0..) |img, i| buf[i] = .{
+                        .data = a.dupe(u8, img.data) catch "",
+                        .mime_type = a.dupe(u8, img.mime_type) catch "",
+                    };
+                    images = buf;
+                } else |_| {}
+            }
             break :blk .{ .tool_result = .{
                 .name = a.dupe(u8, tr.name) catch "",
                 .text = a.dupe(u8, tr.text) catch "",
                 .is_error = tr.is_error,
                 .diffs = diffs,
                 .body = if (tr.body) |b| a.dupe(u8, b) catch "" else null,
+                .images = images,
             } };
         },
         else => e,
@@ -1050,7 +1079,7 @@ fn eventTrampoline(ctx: *anyopaque, event: agent.Event) void {
         else => {},
     }
     self.event_mutex.lockUncancelable(platform.io);
-    self.events.append(platform.gpa, copyEvent(self.q, event)) catch {};
+    self.events.append(platform.gpa, copyEvent(self.q, event, self.cfg.show_images)) catch {};
     self.event_mutex.unlock(platform.io);
 }
 

@@ -104,6 +104,7 @@ A full example:
   "model": "deepseek-v4.1-flash",
   "thinkingEffort": "medium",
   "theme": "tokyonight",
+  "showImages": false,
   "systemPrompt": "Be terse.",
   "sessionsDir": "/home/me/.local/state/mini-coding-agent/sessions",
   "discoverAgentFiles": true,
@@ -153,6 +154,7 @@ Keys:
 | `model` | unset | model id |
 | `thinkingEffort` | unset | one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; unset sends no reasoning parameter and clamps to what the model accepts |
 | `theme` | `tokyonight` | TUI palette: `tokyonight`, `oxocarbon`, or `kanagawa`. Read at startup; there is no live reload |
+| `showImages` | `false` | display PNGs the `read` tool returns inline using the kitty graphics protocol; requires kitty 0.28+ |
 | `systemPrompt` | `""` | prepended to the system prompt |
 | `sessionsDir` | `$XDG_STATE_HOME/mini-coding-agent/sessions`, else `$HOME/.local/state/mini-coding-agent/sessions`, else `sessions` | where JSONL session logs go |
 | `discoverAgentFiles` | `true` | load `AGENTS.md`/`CLAUDE.md` from `$HOME/.agents` and the cwd |

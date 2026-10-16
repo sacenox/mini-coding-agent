@@ -18,7 +18,7 @@ pub const Event = union(enum) {
     tool_args: usize,
     tool_call: struct { name: []const u8, arguments: []const u8 },
     tool_output: []const u8,
-    tool_result: struct { name: []const u8, text: []const u8, is_error: bool, diffs: []const tools.FileDiff, body: ?[]const u8 },
+    tool_result: struct { name: []const u8, text: []const u8, is_error: bool, diffs: []const tools.FileDiff, body: ?[]const u8, images: []const message_mod.ImageContent },
     message: *message_mod.AssistantMessage,
     no_model,
     err: []const u8,
@@ -290,6 +290,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(message_mod.Message), int
                 .is_error = tool_message.tool_result.is_error,
                 .diffs = if (result) |r| r.diffs else &.{},
                 .body = if (result) |r| r.body else null,
+                .images = if (result) |r| r.images else &.{},
             } });
         }
         if (!run_tools) {
