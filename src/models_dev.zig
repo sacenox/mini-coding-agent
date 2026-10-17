@@ -38,7 +38,7 @@ fn wire(npm: []const u8) ?[]const u8 {
 const Effort = struct { type: []const u8 = "", values: []const []const u8 = &.{} };
 const Limit = struct { context: u64 = 0, output: u64 = 0 };
 const Cost = struct { input: f64 = 0, output: f64 = 0, cache_read: f64 = 0 };
-const Package = struct { npm: []const u8 = "" };
+const Package = struct { npm: []const u8 = "", api: []const u8 = "" };
 
 const Model = struct {
     name: []const u8 = "",
@@ -58,19 +58,31 @@ const Provider = struct {
 
 const File = std.json.ArrayHashMap(Provider);
 
+/// Wire directories a gateway inserts between its API root and the version
+/// when it fronts several wires (`/openai/v1`, `/anthropic/v1`).
+const wire_dirs = [_][]const u8{ "openai", "anthropic", "google" };
+
 /// A parsed models.dev document. The provider listing and each model's wire,
 /// base URL and metadata all come from here.
 pub const Db = struct {
+    a: std.mem.Allocator,
     file: File,
 
     pub fn open(a: std.mem.Allocator) !Db {
-        return .{ .file = try std.json.parseFromSliceLeaky(File, a, raw, .{ .ignore_unknown_fields = true }) };
+        return .{ .a = a, .file = try std.json.parseFromSliceLeaky(File, a, raw, .{ .ignore_unknown_fields = true }) };
     }
 
+    /// The provider's API root, where its model list lives. A provider's `api`
+    /// is the base URL of its default wire; when it carries a wire directory
+    /// the list sits one level up (`.../openai/v1` -> `.../v1`).
     pub fn baseUrl(self: Db, provider_id: []const u8) ?[]const u8 {
         const p = self.file.map.get(provider_id) orelse return null;
-        if (p.api.len == 0) return null;
-        return std.mem.trimEnd(u8, p.api, "/");
+        const api = std.mem.trimEnd(u8, p.api, "/");
+        if (api.len == 0) return null;
+        const version_at = std.mem.lastIndexOfScalar(u8, api, '/') orelse return api;
+        const root_at = std.mem.lastIndexOfScalar(u8, api[0..version_at], '/') orelse return api;
+        if (!isWireDir(api[root_at + 1 .. version_at])) return api;
+        return std.fmt.allocPrint(self.a, "{s}{s}", .{ api[0..root_at], api[version_at..] }) catch null;
     }
 
     pub fn info(self: Db, provider_id: []const u8, model_id: []const u8) ?Info {
@@ -79,8 +91,8 @@ pub const Db = struct {
         const m = p.models.map.get(model_id) orelse return null;
         return .{
             .name = if (m.name.len > 0) m.name else model_id,
-            .api = wire(if (m.provider) |pkg| pkg.npm else p.npm) orelse return null,
-            .base_url = std.mem.trimEnd(u8, p.api, "/"),
+            .api = wire(modelNpm(m, p)) orelse return null,
+            .base_url = std.mem.trimEnd(u8, modelApi(m, p), "/"),
             .images = m.attachment,
             .reasoning = m.reasoning,
             .context = m.limit.context,
@@ -93,6 +105,29 @@ pub const Db = struct {
         };
     }
 };
+
+fn isWireDir(seg: []const u8) bool {
+    for (wire_dirs) |w| {
+        if (std.mem.eql(u8, w, seg)) return true;
+    }
+    return false;
+}
+
+/// A model's wire package overrides its provider's; a model override that only
+/// names an `api` keeps the provider's wire.
+fn modelNpm(m: Model, p: Provider) []const u8 {
+    if (m.provider) |pkg| {
+        if (pkg.npm.len > 0) return pkg.npm;
+    }
+    return p.npm;
+}
+
+fn modelApi(m: Model, p: Provider) []const u8 {
+    if (m.provider) |pkg| {
+        if (pkg.api.len > 0) return pkg.api;
+    }
+    return p.api;
+}
 
 fn effortOf(m: Model) []const []const u8 {
     for (m.reasoning_options) |opt| {
