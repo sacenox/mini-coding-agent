@@ -44,7 +44,7 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
     const args = std.json.parseFromSliceLeaky(Args, scratch, args_json, .{ .ignore_unknown_fields = true }) catch {
         return fail(a, "edit failed: path, oldText and newText must be strings", .{});
     };
-    const path = args.path;
+    const path = filesystem.expandTilde(scratch, args.path);
 
     if (args.oldText.len == 0) {
         if (filesystem.fileExists(path)) return fail(a, "edit failed: {s} already exists", .{path});

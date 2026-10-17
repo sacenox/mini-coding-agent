@@ -106,7 +106,7 @@ fn bodyLine(a: std.mem.Allocator, args: Args, lines: usize, truncated: bool) ?[]
 pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const u8, ctx: tools.Context) tools.Result {
     const args = std.json.parseFromSliceLeaky(Args, scratch, args_json, .{ .ignore_unknown_fields = true }) catch
         return fail(a, "read failed: invalid arguments", .{});
-    const path = args.path;
+    const path = filesystem.expandTilde(scratch, args.path);
     if (args.offset) |o| if (o < 1) return fail(a, "read failed: offset must be at least 1", .{});
     if (args.range) |r| if (r < 1) return fail(a, "read failed: range must be at least 1", .{});
 

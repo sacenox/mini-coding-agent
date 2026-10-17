@@ -5,6 +5,12 @@ pub fn join(a: std.mem.Allocator, parts: []const []const u8) ![]u8 {
     return std.fs.path.join(a, parts);
 }
 
+pub fn expandTilde(a: std.mem.Allocator, path: []const u8) []const u8 {
+    if (!std.mem.startsWith(u8, path, "~/")) return path;
+    const home = platform.home() orelse return path;
+    return join(a, &.{ home, path[2..] }) catch path;
+}
+
 pub fn readFileAlloc(a: std.mem.Allocator, path: []const u8, max: usize) ![]u8 {
     return std.Io.Dir.cwd().readFileAlloc(platform.io, path, a, .limited(max));
 }
