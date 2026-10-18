@@ -17,7 +17,7 @@ const description_base =
     "lines) to read part of it.";
 
 const text_description = description_base ++
-    "\n\nText longer than 100,000 characters is truncated, and binary files are rejected; use bash to read those.";
+    "\n\nText longer than 100,000 characters is truncated, and binary files are rejected; use bash, if available, to read those.";
 
 const image_description = description_base ++
     "\n\nImages (png, jpg, jpeg, webp) are returned as image content. Text longer than 100,000 characters is " ++
