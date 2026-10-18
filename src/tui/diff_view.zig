@@ -6,6 +6,12 @@ const render = @import("render.zig");
 
 const BodyLine = render.BodyLine;
 
+pub const Rendered = struct {
+    lines: []const BodyLine = &.{},
+    added: usize = 0,
+    removed: usize = 0,
+};
+
 fn diffHunk() theme.Style {
     return .{ .fg = theme.current.prompt };
 }
@@ -59,17 +65,17 @@ fn rebaseSpans(a: std.mem.Allocator, spans: []const highlight.Span, lo: u32, hi:
     return out.items;
 }
 
-pub fn diffLines(a: std.mem.Allocator, path: []const u8, lines: []const []const u8, max_diff_lines: usize) []const BodyLine {
+pub fn diffLines(a: std.mem.Allocator, path: []const u8, lines: []const []const u8, max_diff_lines: usize) Rendered {
     if (lines.len > max_diff_lines) {
         var warn: std.ArrayList(BodyLine) = .empty;
         warn.append(a, .{
             .text = "Diff too large to render efficiently. Full contents in session.jsonl",
             .style = .{ .fg = theme.current.comment },
         }) catch {};
-        return warn.items;
+        return .{ .lines = warn.items };
     }
     var joined: std.ArrayList(u8) = .empty;
-    var starts = a.alloc(u32, lines.len) catch return &.{};
+    var starts = a.alloc(u32, lines.len) catch return .{};
     for (lines, 0..) |l, i| {
         if (i > 0) joined.append(a, '\n') catch {};
         starts[i] = @intCast(joined.items.len);
@@ -83,9 +89,9 @@ pub fn diffLines(a: std.mem.Allocator, path: []const u8, lines: []const []const 
     }.lt);
 
     var code: std.ArrayList(u8) = .empty;
-    var kinds = a.alloc(DiffKind, lines.len) catch return &.{};
-    var los = a.alloc(u32, lines.len) catch return &.{};
-    var his = a.alloc(u32, lines.len) catch return &.{};
+    var kinds = a.alloc(DiffKind, lines.len) catch return .{};
+    var los = a.alloc(u32, lines.len) catch return .{};
+    var his = a.alloc(u32, lines.len) catch return .{};
     var cursor: usize = 0;
     for (lines, 0..) |l, i| {
         while (cursor < nodes.len and nodes[cursor].end <= starts[i]) cursor += 1;
@@ -108,13 +114,17 @@ pub fn diffLines(a: std.mem.Allocator, path: []const u8, lines: []const []const 
     const spans = highlight.spansFor(a, langFor(path), code.items);
 
     var out: std.ArrayList(BodyLine) = .empty;
+    var added: usize = 0;
+    var removed: usize = 0;
     for (lines, 0..) |l, i| {
         switch (kinds[i]) {
             .hunk => out.append(a, .{ .text = l, .style = diffHunk() }) catch {},
             .note => out.append(a, .{ .text = l, .style = .{ .fg = theme.current.comment } }) catch {},
             .ctx => out.append(a, .{ .text = l, .style = .{ .fg = theme.current.comment } }) catch {},
             .add, .del => {
-                const bg = if (kinds[i] == .add) theme.current.diff_add else theme.current.diff_delete;
+                const is_add = kinds[i] == .add;
+                if (is_add) added += 1 else removed += 1;
+                const bg = if (is_add) theme.current.diff_add else theme.current.diff_delete;
                 const content = l[1..];
                 const painted = highlight.paint(a, content, rebaseSpans(a, spans, los[i], his[i]), .{ .bg = bg });
                 out.append(a, .{
@@ -124,10 +134,10 @@ pub fn diffLines(a: std.mem.Allocator, path: []const u8, lines: []const []const 
             },
         }
     }
-    return out.items;
+    return .{ .lines = out.items, .added = added, .removed = removed };
 }
 
-pub fn diffBody(a: std.mem.Allocator, d: tools.FileDiff, max_diff_lines: usize) []const BodyLine {
+pub fn diffBody(a: std.mem.Allocator, d: tools.FileDiff, max_diff_lines: usize) Rendered {
     if (d.patch) |patch| {
         const trimmed = std.mem.trimEnd(u8, patch, " \t\r\n");
         var it = std.mem.splitScalar(u8, trimmed, '\n');
@@ -137,5 +147,5 @@ pub fn diffBody(a: std.mem.Allocator, d: tools.FileDiff, max_diff_lines: usize) 
     }
     var out: std.ArrayList(BodyLine) = .empty;
     if (d.note) |note| out.append(a, .{ .text = note, .style = .{ .fg = theme.current.comment } }) catch {};
-    return out.items;
+    return .{ .lines = out.items };
 }

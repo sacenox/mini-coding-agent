@@ -58,7 +58,18 @@ pub fn callBody(a: std.mem.Allocator, name: []const u8, summary: []const u8) []c
     return out.items;
 }
 
-pub fn resultLines(a: std.mem.Allocator, name: []const u8, text: []const u8, max_diff_lines: usize) []const BodyLine {
+pub const Result = struct {
+    lines: []const BodyLine,
+    footer: ?[]const u8 = null,
+};
+
+pub fn diffFooter(a: std.mem.Allocator, r: diff_view.Rendered) ?[]const u8 {
+    if (r.added == 0 and r.removed == 0) return null;
+    const stats = std.fmt.allocPrint(a, "+{d} -{d}", .{ r.added, r.removed }) catch return null;
+    return metaLine(a, stats);
+}
+
+pub fn resultLines(a: std.mem.Allocator, name: []const u8, text: []const u8, max_diff_lines: usize) Result {
     const trimmed = std.mem.trimEnd(u8, text, " \t\r\n");
     var lines: std.ArrayList([]const u8) = .empty;
     var it = std.mem.splitScalar(u8, trimmed, '\n');
@@ -77,12 +88,13 @@ pub fn resultLines(a: std.mem.Allocator, name: []const u8, text: []const u8, max
         if (verb.len > 0) {
             const path = lines.items[0][verb.len..];
             _ = lines.orderedRemove(0);
-            return diff_view.diffLines(a, path, lines.items, max_diff_lines);
+            const r = diff_view.diffLines(a, path, lines.items, max_diff_lines);
+            return .{ .lines = r.lines, .footer = diffFooter(a, r) };
         }
     }
     var out: std.ArrayList(BodyLine) = .empty;
     for (lines.items) |l| out.append(a, .{ .text = l }) catch {};
-    return out.items;
+    return .{ .lines = out.items };
 }
 
 pub fn metaLine(a: std.mem.Allocator, meta: []const u8) []const u8 {
