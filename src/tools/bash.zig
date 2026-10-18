@@ -14,7 +14,8 @@ const description_fmt =
     "Run a bash command and return its combined output.\n\n" ++
     "The command runs with `bash -c` starting in {s}, your working directory. Use it for " ++
     "builds, tests, git, package managers, and other file work. The output ends " ++
-    "with an `exit code:` line. Pass `timeout` (seconds) to change the 120-second limit.";
+    "with an `exit code:` line, or `killed: timed out after Ns` if it hits the time limit. " ++
+    "Pass `timeout` (seconds) to change the 120-second limit.";
 
 const params = [_]tools.Param{
     .{ .name = "command", .kind = .string, .description = "Bash command line to execute." },
@@ -164,22 +165,21 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
         .exited => |c| c,
         else => null,
     };
-    const label: []const u8 = if (timed_out)
-        std.fmt.allocPrint(scratch, "timed out after {d}s", .{timeout_s}) catch "timed out"
+    const status: []const u8 = if (timed_out)
+        std.fmt.allocPrint(scratch, "killed: timed out after {d}s", .{timeout_s}) catch "killed: timed out"
     else if (code) |c|
-        std.fmt.allocPrint(scratch, "{d}", .{c}) catch "unknown"
+        std.fmt.allocPrint(scratch, "exit code: {d}", .{c}) catch "exit code: unknown"
     else if (cancelled)
-        "aborted"
+        "exit code: aborted"
     else
-        "unknown";
+        "exit code: unknown";
 
     const raw_body = acc.body(scratch) catch return fail(a, "bash failed: out of memory", .{});
     const body = text.utf8Clean(scratch, raw_body) catch return fail(a, "bash failed: out of memory", .{});
     var out: std.ArrayList(u8) = .empty;
     out.appendSlice(a, body) catch return fail(a, "bash failed: out of memory", .{});
     if (body.len > 0 and body[body.len - 1] != '\n') out.append(a, '\n') catch return fail(a, "bash failed: out of memory", .{});
-    out.appendSlice(a, std.fmt.allocPrint(scratch, "exit code: {s}", .{label}) catch "exit code: unknown") catch
-        return fail(a, "bash failed: out of memory", .{});
+    out.appendSlice(a, status) catch return fail(a, "bash failed: out of memory", .{});
 
     if (ctx.on_phase) |p| p.call(.snapshotting);
     const after = snapshot.capture(scratch, ignore) catch return fail(a, "bash failed: out of memory", .{});
