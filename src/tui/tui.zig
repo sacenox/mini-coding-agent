@@ -390,6 +390,7 @@ const Tui = struct {
                 self.phase = p.phase;
                 self.keepName(&self.detail, p.detail);
                 if (p.phase == .pausing) self.paused = true;
+                if (p.phase == .running_tool) self.renderPendingCall();
                 if (p.phase == .waiting_model) {
                     self.stream_kind = .none;
                     self.text_bytes = 0;
@@ -481,16 +482,32 @@ const Tui = struct {
         }
     }
 
-    fn commitToolResult(self: *Tui, name: []const u8, text: []const u8, is_error: bool, diffs: []const tools_index.FileDiff, body: ?[]const u8, images: []const message_mod.ImageContent) void {
+    fn renderPendingCall(self: *Tui) void {
+        if (self.pending_calls.items.len == 0) return;
+        const call = &self.pending_calls.items[0];
+        if (call.rendered) return;
         self.scrollback.separator = true;
+        self.commitLines(tool_view.callBody(self.s, call.name, call.summary));
+        call.rendered = true;
+    }
+
+    fn commitToolResult(self: *Tui, name: []const u8, text: []const u8, is_error: bool, diffs: []const tools_index.FileDiff, body: ?[]const u8, images: []const message_mod.ImageContent) void {
         const shown = render.stripAnsi(self.s, text);
         const meta: ?[]const u8 = if (!is_error) body else null;
+        var head_committed = false;
         if (self.pending_calls.items.len > 0) {
             const call = self.pending_calls.orderedRemove(0);
-            self.commitLines(tool_view.callBody(self.s, call.name, call.summary, meta));
+            head_committed = true;
+            if (!call.rendered) {
+                self.scrollback.separator = true;
+                self.commitLines(tool_view.callBody(self.s, call.name, call.summary));
+            }
         }
+        if (!head_committed) self.scrollback.separator = true;
         if (self.cfg.show_images) self.commitImages(images);
-        if (meta == null) {
+        if (meta) |m| {
+            self.push(tool_view.metaLine(self.s, m));
+        } else {
             const width = @max(self.term.width() - BODY_PREFIX.len, 1);
             const is_bash = std.mem.eql(u8, name, "bash");
             const bash_exit: ?[]const u8 = if (is_bash) tool_view.exitLine(self.s, shown) else null;
@@ -529,8 +546,9 @@ const Tui = struct {
 
     fn flushCalls(self: *Tui) void {
         for (self.pending_calls.items) |call| {
+            if (call.rendered) continue;
             self.scrollback.separator = true;
-            self.commitLines(tool_view.callBody(self.s, call.name, call.summary, null));
+            self.commitLines(tool_view.callBody(self.s, call.name, call.summary));
         }
         self.pending_calls.clearRetainingCapacity();
         _ = self.calls.reset(.retain_capacity);

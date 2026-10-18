@@ -6,7 +6,7 @@ const diff_view = @import("diff_view.zig");
 
 const BodyLine = render.BodyLine;
 
-pub const PendingCall = struct { name: []const u8, summary: []const u8 };
+pub const PendingCall = struct { name: []const u8, summary: []const u8, rendered: bool = false };
 
 fn callHead(a: std.mem.Allocator, name: []const u8) []const u8 {
     return styles.accent(a, std.fmt.allocPrint(a, "-> {s}", .{name}) catch "->");
@@ -39,7 +39,7 @@ pub fn callSummary(a: std.mem.Allocator, name: []const u8, args_json: []const u8
     return args_json;
 }
 
-pub fn callBody(a: std.mem.Allocator, name: []const u8, summary: []const u8, meta: ?[]const u8) []const BodyLine {
+pub fn callBody(a: std.mem.Allocator, name: []const u8, summary: []const u8) []const BodyLine {
     const head = callHead(a, name);
     const body = if (std.mem.eql(u8, name, "bash"))
         highlight.highlightOn(a, "bash", summary, .{})
@@ -50,11 +50,7 @@ pub fn callBody(a: std.mem.Allocator, name: []const u8, summary: []const u8, met
     var i: usize = 0;
     while (it.next()) |line| : (i += 1) {
         const text = if (i == 0)
-            std.fmt.allocPrint(a, "{s}  {s}{s}", .{
-                head,
-                line,
-                if (meta) |m| styles.comment(a, std.fmt.allocPrint(a, " [{s}]", .{m}) catch "") else "",
-            }) catch line
+            std.fmt.allocPrint(a, "{s}  {s}", .{ head, line }) catch line
         else
             line;
         out.append(a, .{ .text = text }) catch {};
@@ -87,6 +83,11 @@ pub fn resultLines(a: std.mem.Allocator, name: []const u8, text: []const u8, max
     var out: std.ArrayList(BodyLine) = .empty;
     for (lines.items) |l| out.append(a, .{ .text = l }) catch {};
     return out.items;
+}
+
+pub fn metaLine(a: std.mem.Allocator, meta: []const u8) []const u8 {
+    const label = std.fmt.allocPrint(a, " └ {s}", .{meta}) catch return "";
+    return styles.comment(a, label);
 }
 
 pub fn exitLine(a: std.mem.Allocator, text: []const u8) ?[]const u8 {
