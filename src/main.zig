@@ -10,6 +10,7 @@ const mcp = @import("mcp.zig");
 const tui = @import("tui/tui.zig");
 const term = @import("tui/term.zig");
 const headless = @import("headless.zig");
+const siwc = @import("siwc.zig");
 
 pub const panic = std.debug.FullPanic(panicRestore);
 
@@ -27,7 +28,7 @@ pub const debug = struct {
 
 var cancel = std.atomic.Value(bool).init(false);
 
-const ParsedArgs = struct { print: ?[]const u8 = null, config: ?[]const u8 = null };
+const ParsedArgs = struct { print: ?[]const u8 = null, config: ?[]const u8 = null, login: bool = false };
 
 fn parseArgs(a: std.mem.Allocator) !ParsedArgs {
     var it = std.process.Args.Iterator.init(platform.args);
@@ -43,6 +44,8 @@ fn parseArgs(a: std.mem.Allocator) !ParsedArgs {
             result.print = try a.dupe(u8, value);
         } else if (std.mem.startsWith(u8, arg, "--config=")) {
             result.config = try a.dupe(u8, arg["--config=".len..]);
+        } else if (std.mem.eql(u8, arg, "login")) {
+            result.login = true;
         } else if (std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--config")) {
             const value = it.next() orelse return error.MissingConfig;
             result.config = try a.dupe(u8, value);
@@ -106,6 +109,11 @@ fn run() !u8 {
     };
 
     const cfg = config.load(a, args.config) catch return 1;
+
+    if (args.login) {
+        siwc.login(a, &cfg) catch return 1;
+        return 0;
+    }
 
     var resolve_err: ?[]const u8 = null;
     const model = models.resolve(a, &cfg, &resolve_err);

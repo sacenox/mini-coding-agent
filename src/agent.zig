@@ -6,6 +6,7 @@ const platform = @import("platform.zig");
 const tools = @import("tools.zig");
 const session = @import("session.zig");
 const config = @import("config.zig");
+const auth = @import("auth.zig");
 const time = @import("time.zig");
 
 pub const Phase = enum { preparing, waiting_model, streaming, running_tool, snapshotting, pausing, idle };
@@ -185,6 +186,11 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(message_mod.Message), int
 
         if (cancelled(opts, listener)) return;
         listener.emit(.{ .phase = .{ .phase = .waiting_model } });
+        // An OAuth bearer expires, so it is renewed per step, not per session.
+        var wire_model = model.*;
+        if (wire_model.oauth) {
+            if (auth.token(opts.cancel)) |bearer| wire_model.api_key = bearer;
+        }
         var stream_ctx = StreamCtx{ .listener = listener };
         const assistant = opts.a.create(message_mod.AssistantMessage) catch {
             listener.emit(.{ .err = "out of memory" });
@@ -193,7 +199,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(message_mod.Message), int
         assistant.* = api.stream(.{
             .pers = opts.a,
             .scratch = scratch,
-            .model = model,
+            .model = &wire_model,
             .system_prompt = opts.system_prompt,
             .tools_json = opts.tools_json,
             .messages = messages.items,

@@ -22,6 +22,7 @@ pub const CustomModel = struct {
     reasoning: bool,
     effort: []const []const u8 = &.{},
     cost: [3]f64,
+    oauth: bool = false,
 };
 
 pub const CustomProvider = struct {
@@ -56,6 +57,7 @@ pub const Config = struct {
     snapshot_uses_gitignore: bool,
     history_size: usize,
     max_diff_lines: usize,
+    oauth_redirect_brand: ?[]const u8,
 };
 
 const File = struct {
@@ -76,6 +78,7 @@ const File = struct {
     showImages: ?bool = null,
     snapshotIgnoreDirs: ?[]const []const u8 = null,
     snapshotUsesGitignore: ?bool = null,
+    oauthRedirectBrand: ?[]const u8 = null,
 };
 
 /// An empty environment variable is treated as unset, per the XDG spec.
@@ -84,7 +87,7 @@ fn xdg(key: []const u8) ?[]const u8 {
     return if (value.len == 0) null else value;
 }
 
-fn configDir(a: std.mem.Allocator) []const u8 {
+pub fn configDir(a: std.mem.Allocator) []const u8 {
     const base = xdg("XDG_CONFIG_HOME") orelse
         filesystem.join(a, &.{ platform.home() orelse "", ".config" }) catch "";
     return filesystem.join(a, &.{ base, "mini-coding-agent" }) catch "mini-coding-agent";
@@ -157,6 +160,7 @@ fn readInto(a: std.mem.Allocator, path: []const u8, required: bool, cfg: *Config
     if (file.snapshotUsesGitignore) |v| cfg.snapshot_uses_gitignore = v;
     if (file.historySize) |v| cfg.history_size = v;
     if (file.maxDiffLines) |v| cfg.max_diff_lines = v;
+    if (file.oauthRedirectBrand) |v| cfg.oauth_redirect_brand = v;
 }
 
 pub const Update = struct {
@@ -211,5 +215,6 @@ fn defaults(a: std.mem.Allocator) !Config {
         .snapshot_uses_gitignore = true,
         .history_size = 100,
         .max_diff_lines = 2000,
+        .oauth_redirect_brand = null,
     };
 }

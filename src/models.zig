@@ -3,6 +3,7 @@ const platform = @import("platform.zig");
 const modelsdev = @import("models_dev.zig");
 const http = @import("http.zig");
 const config = @import("config.zig");
+const auth = @import("auth.zig");
 
 pub const Thinking = enum { off, budget, effort };
 
@@ -23,6 +24,8 @@ pub const Model = struct {
     session_header: ?[]const u8,
     headers: []const [2][]const u8 = &.{},
     thinking: Thinking = .budget,
+    /// The bearer comes from the OAuth credential record, not from the environment.
+    oauth: bool = false,
 };
 
 const Builtin = struct {
@@ -150,6 +153,11 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
     if (custom(cfg, provider_id)) |p| {
         for (p.models) |m| {
             if (!std.mem.eql(u8, m.id, model_id)) continue;
+            if (m.oauth and !auth.available(a)) {
+                err.* = std.fmt.allocPrint(a, "provider \"{s}\" is not signed in; run `mini login`", .{provider_id}) catch
+                    "not signed in; run `mini login`";
+                return null;
+            }
             return Model{
                 .id = m.id,
                 .name = m.name orelse m.id,
@@ -166,6 +174,7 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
                 .cost_cache_read = m.cost[2],
                 .session_header = null,
                 .headers = headerPairs(a, p.headers),
+                .oauth = m.oauth,
             };
         }
         err.* = unknownModel(a, model_id, provider_id);
