@@ -23,7 +23,7 @@ const Body = struct {
     store: bool = false,
     instructions: ?[]const u8 = null,
     max_output_tokens: ?u64 = null,
-    reasoning: ?struct { effort: []const u8 } = null,
+    reasoning: ?struct { effort: []const u8, summary: []const u8 = "concise" } = null,
     input: []const InputItem,
     tools: ?api.Tools = null,
 };

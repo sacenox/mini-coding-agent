@@ -171,6 +171,15 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(message_mod.Message), int
         };
 
         if (cancelled(opts, listener)) return;
+        // An OAuth bearer expires, so it is renewed per step, not per session. A
+        // record that cannot be renewed stops the turn before it is persisted.
+        var wire_model = model.*;
+        if (wire_model.oauth) {
+            wire_model.api_key = auth.token(opts.cancel) orelse {
+                listener.emit(.{ .err = "sign-in expired; run `mini login`" });
+                return;
+            };
+        }
         listener.emit(.{ .phase = .{ .phase = .preparing } });
         opts.session.appendRequest(scratch, .{
             .provider = model.provider,
@@ -186,11 +195,6 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(message_mod.Message), int
 
         if (cancelled(opts, listener)) return;
         listener.emit(.{ .phase = .{ .phase = .waiting_model } });
-        // An OAuth bearer expires, so it is renewed per step, not per session.
-        var wire_model = model.*;
-        if (wire_model.oauth) {
-            if (auth.token(opts.cancel)) |bearer| wire_model.api_key = bearer;
-        }
         var stream_ctx = StreamCtx{ .listener = listener };
         const assistant = opts.a.create(message_mod.AssistantMessage) catch {
             listener.emit(.{ .err = "out of memory" });

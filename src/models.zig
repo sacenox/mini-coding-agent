@@ -28,23 +28,20 @@ pub const Model = struct {
     oauth: bool = false,
 };
 
+/// How a provider proves who the user is. Everything else about it — name,
+/// environment keys, API root, models — comes from the models.dev document.
+const Credential = enum { env, chatgpt };
+
 const Builtin = struct {
     id: []const u8,
-    env_keys: []const []const u8,
-    session_header: ?[]const u8,
+    credential: Credential,
+    session_header: ?[]const u8 = null,
 };
 
 const builtins = [_]Builtin{
-    .{
-        .id = "opencode-go",
-        .env_keys = &.{"OPENCODE_API_KEY"},
-        .session_header = "x-opencode-session",
-    },
-    .{
-        .id = "opencode",
-        .env_keys = &.{"OPENCODE_API_KEY"},
-        .session_header = "x-opencode-session",
-    },
+    .{ .id = "opencode", .credential = .env, .session_header = "x-opencode-session" },
+    .{ .id = "opencode-go", .credential = .env, .session_header = "x-opencode-session" },
+    .{ .id = "openai", .credential = .chatgpt },
 };
 
 const ladder = [_][]const u8{ "off", "minimal", "low", "medium", "high", "xhigh", "max" };
@@ -127,17 +124,25 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
             err.* = "model metadata unavailable";
             return null;
         };
+        const p = db.provider(provider_id) orelse {
+            err.* = unknownProvider(a, provider_id);
+            return null;
+        };
         const info = db.info(provider_id, model_id) orelse {
             err.* = unknownModel(a, model_id, provider_id);
             return null;
         };
+        if (b.credential == .chatgpt and !auth.available(a)) {
+            err.* = notSignedIn(a, provider_id);
+            return null;
+        }
         return Model{
             .id = model_id,
             .name = info.name,
             .api = info.api,
             .provider = provider_id,
             .base_url = info.base_url,
-            .api_key = firstEnv(b.env_keys),
+            .api_key = if (b.credential == .env) firstEnv(p.env) else null,
             .effort = clampEffort(info.reasoning, info.effort, cfg.thinking_effort),
             .supports_images = info.images,
             .context_window = info.context,
@@ -147,6 +152,7 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
             .cost_output = info.cost_output,
             .cost_cache_read = info.cost_cache_read,
             .session_header = b.session_header,
+            .oauth = b.credential == .chatgpt,
         };
     }
 
@@ -154,8 +160,7 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
         for (p.models) |m| {
             if (!std.mem.eql(u8, m.id, model_id)) continue;
             if (m.oauth and !auth.available(a)) {
-                err.* = std.fmt.allocPrint(a, "provider \"{s}\" is not signed in; run `mini login`", .{provider_id}) catch
-                    "not signed in; run `mini login`";
+                err.* = notSignedIn(a, provider_id);
                 return null;
             }
             return Model{
@@ -181,7 +186,7 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
         return null;
     }
 
-    err.* = std.fmt.allocPrint(a, "unknown provider \"{s}\"", .{provider_id}) catch "unknown provider";
+    err.* = unknownProvider(a, provider_id);
     return null;
 }
 
@@ -193,15 +198,31 @@ fn headerPairs(a: std.mem.Allocator, headers: ?std.json.ArrayHashMap([]const u8)
     return out.toOwnedSlice(a) catch &.{};
 }
 
-const ProviderEntry = struct { id: []const u8, name: []const u8, key_present: bool };
+const ProviderEntry = struct { id: []const u8, name: []const u8, ready: bool };
+
+/// A built-in provider is usable when its credential is on hand: the first of
+/// the provider's own environment keys, or the sign-in with ChatGPT record.
+fn usable(b: Builtin, a: std.mem.Allocator, p: modelsdev.Provider) bool {
+    return switch (b.credential) {
+        .env => firstEnv(p.env) != null,
+        .chatgpt => auth.available(a),
+    };
+}
 
 pub fn providers(a: std.mem.Allocator, cfg: *const config.Config) []ProviderEntry {
     var out: std.ArrayList(ProviderEntry) = .empty;
+    var db: ?modelsdev.Db = modelsdev.Db.open(a) catch null;
     for (builtins) |b| {
-        out.append(a, .{ .id = b.id, .name = b.id, .key_present = firstEnv(b.env_keys) != null }) catch {};
+        // Name, environment keys and every model fact come from the document.
+        const p = (if (db) |*d| d.provider(b.id) else null) orelse continue;
+        out.append(a, .{
+            .id = b.id,
+            .name = if (p.name.len > 0) p.name else b.id,
+            .ready = usable(b, a, p),
+        }) catch {};
     }
     for (cfg.custom_providers) |p| {
-        out.append(a, .{ .id = p.id, .name = p.name orelse p.id, .key_present = p.envKeys.len == 0 or firstEnv(p.envKeys) != null }) catch {};
+        out.append(a, .{ .id = p.id, .name = p.name orelse p.id, .ready = p.envKeys.len == 0 or firstEnv(p.envKeys) != null }) catch {};
     }
     return out.toOwnedSlice(a) catch &.{};
 }
@@ -220,27 +241,53 @@ pub fn listing(
     if (custom(cfg, provider_id)) |p| return customListing(a, p);
     const b = builtin(provider_id) orelse return error.UnknownProvider;
     var db = modelsdev.Db.open(a) catch return error.ModelMetadataUnavailable;
+    const p = db.provider(provider_id) orelse return error.UnknownProvider;
     const base = db.baseUrl(provider_id) orelse return error.UnknownProvider;
-    const key = firstEnv(b.env_keys) orelse return error.MissingApiKey;
+    const key = switch (b.credential) {
+        .env => firstEnv(p.env) orelse return error.MissingApiKey,
+        .chatgpt => auth.token(cancel) orelse return error.NotSignedIn,
+    };
 
     const url = try std.fmt.allocPrint(a, "{s}/models", .{base});
     const authorization = try std.fmt.allocPrint(a, "Bearer {s}", .{key});
     const body = try http.get(a, url, &.{.{ .name = "Authorization", .value = authorization }}, cancel);
 
-    const List = struct {
-        data: []const struct { id: []const u8 },
-    };
-    const parsed = try std.json.parseFromSliceLeaky(List, a, body, .{ .ignore_unknown_fields = true });
-
+    const parsed = try std.json.parseFromSliceLeaky(Listed, a, body, .{ .ignore_unknown_fields = true });
     var out: std.ArrayList(Entry) = .empty;
-    for (parsed.data) |model| {
-        const info = db.info(provider_id, model.id) orelse continue;
-        try out.append(a, .{ .id = model.id, .name = info.name });
+    for (parsed.items()) |item| {
+        const id = item.offer() orelse continue;
+        const info = db.info(provider_id, id) orelse continue;
+        try out.append(a, .{ .id = id, .name = info.name });
     }
     const items = try out.toOwnedSlice(a);
     std.mem.sort(Entry, items, {}, entryLess);
     return items;
 }
+
+/// Providers decide the shape of their model list: OpenAI-compatible gateways
+/// answer `data[].id`, the ChatGPT plan answers `models[].slug` with a
+/// `visibility` that hides internal models.
+const Listed = struct {
+    data: ?[]const Item = null,
+    models: ?[]const Item = null,
+
+    const Item = struct {
+        id: ?[]const u8 = null,
+        slug: ?[]const u8 = null,
+        visibility: ?[]const u8 = null,
+
+        fn offer(self: Item) ?[]const u8 {
+            if (self.visibility) |v| {
+                if (!std.mem.eql(u8, v, "list")) return null;
+            }
+            return self.id orelse self.slug;
+        }
+    };
+
+    fn items(self: Listed) []const Item {
+        return self.data orelse self.models orelse &.{};
+    }
+};
 
 fn entryLess(_: void, a: Entry, b: Entry) bool {
     return std.mem.order(u8, a.id, b.id) == .lt;
@@ -289,4 +336,13 @@ pub fn clampNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id: 
 
 fn unknownModel(a: std.mem.Allocator, model_id: []const u8, provider_id: []const u8) []const u8 {
     return std.fmt.allocPrint(a, "unknown model \"{s}\" for provider \"{s}\"", .{ model_id, provider_id }) catch "unknown model";
+}
+
+fn unknownProvider(a: std.mem.Allocator, provider_id: []const u8) []const u8 {
+    return std.fmt.allocPrint(a, "unknown provider \"{s}\"", .{provider_id}) catch "unknown provider";
+}
+
+fn notSignedIn(a: std.mem.Allocator, provider_id: []const u8) []const u8 {
+    return std.fmt.allocPrint(a, "provider \"{s}\" is not signed in; run `mini login`", .{provider_id}) catch
+        "not signed in; run `mini login`";
 }

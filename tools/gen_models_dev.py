@@ -13,7 +13,11 @@ import urllib.request
 
 MODELS_DEV = "https://models.dev/api.json"
 
-PROVIDERS = ["opencode", "opencode-go"]
+PROVIDERS = ["opencode", "opencode-go", "openai"]
+
+# models.dev omits `api` where the AI SDK default applies. Storing it here keeps
+# the agent free of per-provider facts: it only ever reads the document.
+API_DEFAULTS = {"openai": "https://api.openai.com/v1"}
 
 
 def main():
@@ -26,7 +30,10 @@ def main():
     for pid in PROVIDERS:
         if pid not in data:
             sys.exit("models.dev: provider %r missing" % pid)
-        kept[pid] = data[pid]
+        provider = dict(data[pid])
+        if not provider.get("api") and pid in API_DEFAULTS:
+            provider["api"] = API_DEFAULTS[pid]
+        kept[pid] = provider
 
     with open(out, "w") as f:
         json.dump(kept, f, separators=(",", ":"))

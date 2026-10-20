@@ -23,6 +23,7 @@ it with `python3 tools/gen_models_dev.py`.
     mini                 # interactive TUI
     mini -p '<prompt>'   # one turn, print the reply, exit
     mini -c <file>       # overlay a config file for this run
+    mini login           # sign in with ChatGPT to use your plan
 
 Arguments:
 
@@ -150,7 +151,7 @@ Keys:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `provider` | unset | provider id; built-ins are `opencode` and `opencode-go`, or a `customProviders` id |
+| `provider` | unset | provider id; built-ins are `opencode`, `opencode-go` and `openai` (after `mini login`), or a `customProviders` id |
 | `model` | unset | model id |
 | `thinkingEffort` | unset | one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; unset sends no reasoning parameter and clamps to what the model accepts |
 | `theme` | `tokyonight` | TUI palette: `tokyonight`, `oxocarbon`, or `kanagawa`. Read at startup; there is no live reload |
@@ -198,9 +199,24 @@ so one provider may mix APIs and base URLs:
 
 ## Environment
 
-The built-in providers read `OPENCODE_API_KEY`. Custom providers read the first
-present variable in their `envKeys`. A provider without a key is listed but
-fails at request time.
+The built-in providers are named, keyed and described by the embedded models.dev
+document; the agent itself only knows how each one authenticates. `opencode` and
+`opencode-go` read the first present variable in their `env` list
+(`OPENCODE_API_KEY`). A provider without a key is listed but fails at request
+time.
+
+## Sign in with ChatGPT
+
+`mini login` runs the Sign in with ChatGPT flow and writes
+`$XDG_CONFIG_HOME/mini-coding-agent/auth.json` (0600). It is the credential for
+the `openai` provider, which then appears in `/provider` next to the keyed ones;
+set `provider` to `openai` and pick any model from `/model`. The record is
+refreshed under one lock per request, so a rotating refresh token is never
+raced. A record that cannot be refreshed stops the turn with `sign-in expired;
+run mini login` instead of sending an unauthenticated request.
+
+The account decides what is available: the model list comes from the provider
+and models the account hides are never offered.
 
 ## Sessions
 

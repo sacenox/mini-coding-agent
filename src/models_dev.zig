@@ -50,9 +50,11 @@ const Model = struct {
     provider: ?Package = null,
 };
 
-const Provider = struct {
+pub const Provider = struct {
     api: []const u8 = "",
     npm: []const u8 = "",
+    name: []const u8 = "",
+    env: []const []const u8 = &.{},
     models: std.json.ArrayHashMap(Model) = .{},
 };
 
@@ -70,6 +72,12 @@ pub const Db = struct {
 
     pub fn open(a: std.mem.Allocator) !Db {
         return .{ .a = a, .file = try std.json.parseFromSliceLeaky(File, a, raw, .{ .ignore_unknown_fields = true }) };
+    }
+
+    /// The provider's record: its name, environment keys and metadata all live
+    /// in the document, never in the agent.
+    pub fn provider(self: Db, provider_id: []const u8) ?Provider {
+        return self.file.map.get(provider_id);
     }
 
     /// The provider's API root, where its model list lives. A provider's `api`

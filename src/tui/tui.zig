@@ -844,7 +844,7 @@ const Tui = struct {
         var ids: std.ArrayList([]const u8) = .empty;
         var names: std.ArrayList([]const u8) = .empty;
         for (entries) |p| {
-            if (!p.key_present) continue;
+            if (!p.ready) continue;
             ids.append(self.a, p.id) catch {};
             names.append(self.a, p.name) catch {};
         }
