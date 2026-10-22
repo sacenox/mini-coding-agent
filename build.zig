@@ -1,8 +1,19 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const zon = @import("build.zig.zon");
 
+// A native query makes Zig link the system CRT, and GCC 16's `crt1.o` carries
+// `.sframe` relocations that Zig 0.16's linker rejects. Pinning linux-gnu keeps
+// the native CPU but uses Zig's bundled glibc CRT.
+const host_query: std.Target.Query = if (builtin.os.tag == .linux and builtin.abi == .gnu) .{
+    .cpu_arch = builtin.cpu.arch,
+    .os_tag = .linux,
+    .abi = .gnu,
+    .cpu_model = .native,
+} else .{};
+
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
+    const target = b.standardTargetOptions(.{ .default_target = host_query });
     const optimize = b.standardOptimizeOption(.{});
 
     const exe = b.addExecutable(.{
