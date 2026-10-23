@@ -99,6 +99,7 @@ const Tui = struct {
     reasoning_bytes: usize = 0,
     active: bool = false,
     paused: bool = false,
+    retry: bool = false,
     pause_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     aborting: bool = false,
     turn_done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -250,6 +251,9 @@ const Tui = struct {
         }
         if (self.active and self.pause_requested.load(.seq_cst)) {
             return std.fmt.allocPrint(self.s, "{s} · {s}", .{ styles.comment(self.s, "pausing - waiting for the step boundary"), info }) catch info;
+        }
+        if (self.retry) {
+            return std.fmt.allocPrint(self.s, "{s} · {s}", .{ styles.err(self.s, "failed - Enter to retry"), info }) catch info;
         }
         if (!self.active or self.phase == .idle) return info;
         const elapsed = @max(0, @divFloor(time.nowMs() - self.turn_start, 1000));
@@ -437,6 +441,7 @@ const Tui = struct {
             .tool_result => |tr| self.commitToolResult(tr.name, tr.text, tr.is_error, tr.diffs, tr.body, tr.images),
             .err => |m| {
                 self.reportStatus("error", null, m);
+                self.retry = true;
                 self.endTurn(styles.err(self.s, std.fmt.allocPrint(self.s, "! {s}", .{m}) catch "! error"));
             },
             .no_model => {
@@ -725,7 +730,10 @@ const Tui = struct {
             return;
         }
         if (self.command_active) return;
-        if (std.mem.trim(u8, text, " \t\r\n").len == 0) return;
+        if (std.mem.trim(u8, text, " \t\r\n").len == 0) {
+            self.retryTurn();
+            return;
+        }
         if (commands.findCommand(text)) |found| {
             self.editor.clear();
             self.runCommand(found);
@@ -750,8 +758,15 @@ const Tui = struct {
         self.startTurn();
     }
 
+    fn retryTurn(self: *Tui) void {
+        if (!self.retry or self.active) return;
+        self.note(styles.comment(self.s, "retrying"));
+        self.startTurn();
+    }
+
     fn startTurn(self: *Tui) void {
         self.active = true;
+        self.retry = false;
         self.abort.store(false, .seq_cst);
         self.pause_requested.store(false, .seq_cst);
         self.turn_done.store(false, .seq_cst);
@@ -794,7 +809,7 @@ const Tui = struct {
 
     fn showHelp(self: *Tui) void {
         const keys = [_][2][]const u8{
-            .{ "Enter", "submit" },
+            .{ "Enter", "submit; on an empty draft after a failure, retry it" },
             .{ "Shift+Enter", "newline (Ctrl+J also works)" },
             .{ "Shift+Up/Down", "walk input history (Ctrl+R to search)" },
             .{ "Esc", "pause the turn at the next step boundary" },
@@ -832,6 +847,7 @@ const Tui = struct {
         self.keepName(&self.detail, null);
         self.keepName(&self.writing_tool, null);
         self.steering_text = "";
+        self.retry = false;
         self.phase = .idle;
         self.stream_kind = .none;
         _ = self.calls.reset(.retain_capacity);

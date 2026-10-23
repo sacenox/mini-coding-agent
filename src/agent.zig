@@ -215,6 +215,14 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(message_mod.Message), int
             return;
         };
 
+        // A failed request is a rolled-back transaction: the error never enters
+        // the context or the log, so resending the turn repeats the same
+        // request instead of appending an apology to it.
+        if (assistant.stop_reason == .err) {
+            listener.emit(.{ .err = assistant.error_message orelse "provider error" });
+            return;
+        }
+
         pushMessage(opts, messages, .{ .assistant = assistant }) catch {
             listener.emit(.{ .err = "out of memory" });
             return;
@@ -227,10 +235,6 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(message_mod.Message), int
 
         if (assistant.stop_reason == .aborted) {
             listener.emit(.cancelled);
-            return;
-        }
-        if (assistant.stop_reason == .err) {
-            listener.emit(.{ .err = assistant.error_message orelse "provider error" });
             return;
         }
 

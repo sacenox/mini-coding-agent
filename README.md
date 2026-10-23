@@ -52,7 +52,7 @@ tool output go to stderr, the assistant text to stdout; a failed turn exits 1.
 
 | Key | Meaning |
 |---|---|
-| `Enter` | submit |
+| `Enter` | submit; on an empty draft after a failure, retry it |
 | `Shift+Enter` | newline (`Ctrl+J` also works) |
 | `Esc` | pause the turn at the next step boundary |
 | `Ctrl+C` | cancel the turn |
@@ -225,3 +225,7 @@ Each session is a directory under `sessionsDir` named
 slugified from the first user message. A header line opens the log; every
 message and every model request is then appended and fsynced. The log is
 write-only; a write failure stops the turn.
+
+A failed model request is never appended: the attempt stays a request line with
+no message, so the context holds no error and the next turn resends the same
+request instead of a `continue`.

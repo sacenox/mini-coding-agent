@@ -24,7 +24,9 @@ by reading the code, it does not belong here; keep this file short.
 - Sessions are append-only JSONL, one message per line, fsynced on write. Never
   rewrite or delete committed lines. A persistence failure stops the turn.
 - The loop has no compaction, no retries, and no meta-messages between steps.
-  Provider errors surface as-is, never masked or summarized.
+  Provider errors surface as-is, never masked or summarized. A failed request
+  is a rolled-back transaction: it never enters the context or the log, so the
+  user retries it by resending the turn unchanged.
 - `edit`, `read`, and `bash` only. Tool arguments are untrusted and validated
   once at the boundary. `read` returns image blocks only for models that declare
   image input.
