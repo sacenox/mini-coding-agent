@@ -400,7 +400,7 @@ const Tui = struct {
                     self.text_bytes = 0;
                     self.reasoning_bytes = 0;
                 }
-                self.reportStatus(switch (p.phase) {
+                status.report(switch (p.phase) {
                     .preparing, .waiting_model, .streaming, .snapshotting, .running_tool => "working",
                     .pausing => "blocked",
                     .idle => "idle",
@@ -440,29 +440,24 @@ const Tui = struct {
             .message => |am| self.commitMessage(am),
             .tool_result => |tr| self.commitToolResult(tr.name, tr.text, tr.is_error, tr.diffs, tr.body, tr.images),
             .err => |m| {
-                self.reportStatus("error", null, m);
+                status.report("error", null, m);
                 self.retry = true;
                 self.endTurn(styles.err(self.s, std.fmt.allocPrint(self.s, "! {s}", .{m}) catch "! error"));
             },
             .no_model => {
-                self.reportStatus("error", null, "no model configured");
+                status.report("error", null, "no model configured");
                 self.endTurn(styles.err(self.s, "! no model configured"));
             },
             .cancelled => {
-                self.reportStatus("idle", null, null);
+                status.report("idle", null, null);
                 self.endTurn(styles.err(self.s, "! cancelled"));
             },
             .complete => {
-                self.reportStatus("done", null, null);
+                status.report("done", null, null);
                 self.endTurn(styles.comment(self.s, std.fmt.allocPrint(self.s, "[complete · {d}s]", .{@max(0, @divFloor(time.nowMs() - self.turn_start, 1000))}) catch "[complete]"));
             },
         }
         self.dirty = true;
-    }
-
-    fn reportStatus(self: *Tui, state: []const u8, kind: ?[]const u8, msg: ?[]const u8) void {
-        if (!self.cfg.program_status) return;
-        status.report(state, kind, msg);
     }
 
     fn endTurn(self: *Tui, line: []const u8) void {
@@ -669,7 +664,7 @@ const Tui = struct {
                 self.steering_text = "";
                 if (!self.aborting) {
                     self.aborting = true;
-                    self.reportStatus("idle", null, null);
+                    status.report("idle", null, null);
                     self.endTurn(styles.err(self.s, "! cancelled"));
                 }
                 self.dirty = true;
@@ -1017,6 +1012,7 @@ const Tui = struct {
         self.term.write(self.scrollback.buf.items);
         self.term.stop();
         self.opts.session.close();
+        status.release();
     }
 };
 
@@ -1129,6 +1125,7 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
     self.* = Tui.init(gpa, opts_ptr, cfg, tool_names);
     self.bindAllocators();
     self.history = history.Store.init(gpa, config.historyPath(gpa), cfg.history_size);
+    status.init(cfg);
 
     self.term.start();
     defer self.term.stop();
@@ -1148,7 +1145,7 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
     std.posix.sigaction(std.posix.SIG.HUP, &term_act, null);
     std.posix.sigaction(std.posix.SIG.QUIT, &term_act, null);
 
-    self.reportStatus("idle", null, null);
+    status.report("idle", null, null);
     self.pushBanner();
     self.draw();
 
