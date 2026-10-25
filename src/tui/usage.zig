@@ -60,8 +60,8 @@ pub fn contextUsageLine(a: std.mem.Allocator, used: u64, model: *const models.Mo
     const cw = @max(model.context_window, 1);
     const percent = @as(f64, @floatFromInt(used)) / @as(f64, @floatFromInt(cw)) * 100.0;
     const sizes = std.fmt.allocPrint(a, "{s}/{s}", .{ formatTokens(a, used), formatTokens(a, cw) }) catch "";
-    if (used + model.max_tokens > cw) return styles.err(a, std.fmt.allocPrint(a, "ctx full · {s}", .{sizes}) catch "ctx full");
-    const text = std.fmt.allocPrint(a, "ctx {s} · {d}%", .{ sizes, @as(u64, @intFromFloat(percent + 0.5)) }) catch "ctx";
+    if (used + model.max_tokens > cw) return styles.err(a, std.fmt.allocPrint(a, "ctx full/{s}", .{sizes}) catch "ctx full");
+    const text = std.fmt.allocPrint(a, "ctx {s} {d}%", .{ sizes, @as(u64, @intFromFloat(percent + 0.5)) }) catch "ctx";
     return if (percent >= 85) styles.warn(a, text) else styles.comment(a, text);
 }
 

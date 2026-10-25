@@ -242,7 +242,7 @@ const Tui = struct {
         const used = self.ctx_used;
         const cache = self.ctx_cache;
         self.messages_mutex.unlock(platform.io);
-        const info = std.fmt.allocPrint(self.s, "{s} · {s}", .{
+        const info = std.fmt.allocPrint(self.s, "{s} {s}", .{
             usage_mod.contextUsageLine(self.s, used, model),
             usage_mod.cacheLine(self.s, cache),
         }) catch "ctx";
