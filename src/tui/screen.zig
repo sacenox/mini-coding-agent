@@ -116,7 +116,7 @@ pub const Scrollback = struct {
     }
 
     pub fn commitLines(self: *Scrollback, lines: []const render.BodyLine) void {
-        for (lines) |line| self.push(render.styleLine(self.scratch, line));
+        for (lines) |line| self.push(render.styleLine(self.scratch, line, .{}));
     }
 
     pub fn note(self: *Scrollback, line: []const u8) void {

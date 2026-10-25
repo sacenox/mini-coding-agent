@@ -8,7 +8,7 @@ const BodyLine = render.BodyLine;
 pub const PendingCall = struct { name: []const u8, summary: []const u8, rendered: bool = false };
 
 fn callHead(a: std.mem.Allocator, name: []const u8) []const u8 {
-    return styles.accent(a, std.fmt.allocPrint(a, "-> {s}", .{name}) catch "->");
+    return styles.accent(a, std.fmt.allocPrint(a, "{s}", .{name}) catch "tool");
 }
 
 pub fn diffHead(a: std.mem.Allocator, name: []const u8, path: []const u8) []const u8 {

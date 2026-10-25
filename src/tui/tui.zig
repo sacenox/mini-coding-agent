@@ -25,8 +25,9 @@ const status = @import("../status.zig");
 
 const SPINNER = "⠀⠁⠂⠃⠄⠅⠆⠇⡀⡁⡂⡃⡄⡅⡆⡇⠈⠉⠊⠋⠌⠍⠎⠏⡈⡉⡊⡋⡌⡍⡎⡏⠐⠑⠒⠓⠔⠕⠖⠗⡐⡑⡒⡓⡔⡕⡖⡗⠘⠙⠚⠛⠜⠝⠞⠟⡘⡙⡚⡛⡜⡝⡞⡟⠠⠡⠢⠣⠤⠥⠦⠧⡠⡡⡢⡣⡤⡥⡦⡧⠨⠩⠪⠫⠬⠭⠮⠯⡨⡩⡪⡫⡬⡭⡮⡯⠰⠱⠲⠳⠴⠵⠶⠷⡰⡱⡲⡳⡴⡵⡶⡷⠸⠹⠺⠻⠼⠽⠾⠿⡸⡹⡺⡻⡼⡽⡾⡿⢀⢁⢂⢃⢄⢅⢆⢇⣀⣁⣂⣃⣄⣅⣆⣇⢈⢉⢊⢋⢌⢍⢎⢏⣈⣉⣊⣋⣌⣍⣎⣏⢐⢑⢒⢓⢔⢕⢖⢗⣐⣑⣒⣓⣔⣕⣖⣗⢘⢙⢚⢛⢜⢝⢞⢟⣘⣙⣚⣛⣜⣝⣞⣟⢠⢡⢢⢣⢤⢥⢦⢧⣠⣡⣢⣣⣤⣥⣦⣧⢨⢩⢪⢫⢬⢭⢮⢯⣨⣩⣪⣫⣬⣭⣮⣯⢰⢱⢲⢳⢴⢵⢶⢷⣰⣱⣲⣳⣴⣵⣶⣷⢸⢹⢺⢻⢼⢽⢾⢿⣸⣹⣺⣻⣼⣽⣾⣿";
 const SPINNER_MS = 120;
-const BODY_PREFIX = " | ";
+const BODY_PREFIX = " │ ";
 const ERROR_PREFIX = " ! ";
+const TOOL_BODY: styles.Style = .{ .dim = true };
 
 const physicalRows = render.physicalRows;
 const rowsForCells = render.rowsForCells;
@@ -511,7 +512,7 @@ const Tui = struct {
             const is_bash = std.mem.eql(u8, name, "bash");
             const bash_exit: ?[]const u8 = if (is_bash) tool_view.exitLine(self.s, shown) else null;
             const result = tool_view.resultLines(self.s, name, shown, self.cfg.max_diff_lines);
-            const rows = if (std.mem.eql(u8, name, "edit")) render.plainRows(self.s, result.lines) else render.bodyRows(self.s, result.lines, width);
+            const rows = if (std.mem.eql(u8, name, "edit")) render.plainRows(self.s, result.lines, TOOL_BODY) else render.bodyRows(self.s, result.lines, width, TOOL_BODY);
             const mark_error = is_error and bash_exit == null;
             for (rows, 0..) |row, i| {
                 const prefix = if (mark_error and i == rows.len - 1) styles.err(self.s, ERROR_PREFIX) else styles.comment(self.s, BODY_PREFIX);
@@ -523,7 +524,7 @@ const Tui = struct {
         for (diffs) |d| {
             self.push(tool_view.diffHead(self.s, name, d.path));
             const r = diff_view.diffBody(self.s, d, self.cfg.max_diff_lines);
-            for (render.plainRows(self.s, r.lines)) |row| {
+            for (render.plainRows(self.s, r.lines, TOOL_BODY)) |row| {
                 self.push(std.fmt.allocPrint(self.s, "{s}{s}", .{ styles.comment(self.s, BODY_PREFIX), row }) catch row);
             }
             if (tool_view.diffFooter(self.s, r)) |footer| self.push(footer);

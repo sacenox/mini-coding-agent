@@ -91,6 +91,10 @@ pub fn styledWith(a: std.mem.Allocator, style: Style, text: []const u8) []const 
     return std.fmt.allocPrint(a, "{s}{s}{s}", .{ sgr(a, style), text, SGR_PLAIN }) catch text;
 }
 
+pub fn anySet(style: Style) bool {
+    return style.fg != null or style.bold or style.italic or style.underline or style.dim;
+}
+
 fn colored(a: std.mem.Allocator, color: Color, text: []const u8) []const u8 {
     return std.fmt.allocPrint(a, "{s}{s}{s}", .{ sgrFg(a, color), text, SGR_NORMAL_FG }) catch text;
 }

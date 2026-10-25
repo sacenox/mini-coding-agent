@@ -215,22 +215,22 @@ pub fn paintRow(a: std.mem.Allocator, line: []const u8) []const u8 {
     return std.fmt.allocPrint(a, "{s}{s}\x1b[K", .{ styles.SGR_PLAIN, line }) catch line;
 }
 
-pub fn styleLine(a: std.mem.Allocator, line: BodyLine) []const u8 {
+pub fn styleLine(a: std.mem.Allocator, line: BodyLine, base: styles.Style) []const u8 {
     const safe = sanitize(a, line.text);
     const expanded = expandTabs(a, safe, 4);
     if (expanded.len == 0) return "";
-    if (line.style) |s| return styles.styledWith(a, s, expanded);
-    return expanded;
+    if (line.style == null and !styles.anySet(base)) return expanded;
+    return std.fmt.allocPrint(a, "{s}{s}{s}", .{ styles.sgrOn(a, line.style orelse .{}, base), expanded, styles.SGR_PLAIN }) catch expanded;
 }
 
-pub fn plainRows(a: std.mem.Allocator, lines: []const BodyLine) []const []const u8 {
+pub fn plainRows(a: std.mem.Allocator, lines: []const BodyLine, base: styles.Style) []const []const u8 {
     var out: std.ArrayList([]const u8) = .empty;
-    for (lines) |line| out.append(a, styleLine(a, line)) catch {};
+    for (lines) |line| out.append(a, styleLine(a, line, base)) catch {};
     return out.items;
 }
 
-pub fn bodyRows(a: std.mem.Allocator, lines: []const BodyLine, width: usize) []const []const u8 {
-    const rows = plainRows(a, lines);
+pub fn bodyRows(a: std.mem.Allocator, lines: []const BodyLine, width: usize, base: styles.Style) []const []const u8 {
+    const rows = plainRows(a, lines, base);
     var height: usize = 0;
     for (rows) |r| height += physicalRows(r, width);
     if (height <= max_body_rows or rows.len <= elided_head + elided_tail) return rows;
