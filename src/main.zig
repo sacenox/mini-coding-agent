@@ -6,11 +6,9 @@ const models = @import("models.zig");
 const session = @import("session.zig");
 const agent = @import("agent.zig");
 const tools = @import("tools.zig");
-const mcp = @import("mcp.zig");
 const tui = @import("tui/tui.zig");
 const term = @import("tui/term.zig");
 const headless = @import("headless.zig");
-const siwc = @import("siwc.zig");
 
 pub const panic = std.debug.FullPanic(panicRestore);
 
@@ -28,7 +26,7 @@ pub const debug = struct {
 
 var cancel = std.atomic.Value(bool).init(false);
 
-const ParsedArgs = struct { print: ?[]const u8 = null, config: ?[]const u8 = null, login: bool = false };
+const ParsedArgs = struct { print: ?[]const u8 = null, config: ?[]const u8 = null };
 
 fn parseArgs(a: std.mem.Allocator) !ParsedArgs {
     var it = std.process.Args.Iterator.init(platform.args);
@@ -44,8 +42,6 @@ fn parseArgs(a: std.mem.Allocator) !ParsedArgs {
             result.print = try a.dupe(u8, value);
         } else if (std.mem.startsWith(u8, arg, "--config=")) {
             result.config = try a.dupe(u8, arg["--config=".len..]);
-        } else if (std.mem.eql(u8, arg, "login")) {
-            result.login = true;
         } else if (std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--config")) {
             const value = it.next() orelse return error.MissingConfig;
             result.config = try a.dupe(u8, value);
@@ -66,38 +62,8 @@ pub fn main(init: std.process.Init) void {
     std.process.exit(code);
 }
 
-/// Splits a leading `mcp` subcommand from any configuration flags that precede
-/// it, so `mini -c <file> mcp …` behaves like every other mode. Returns null
-/// when `mcp` is not the subcommand.
-fn mcpArgs(a: std.mem.Allocator) !?struct { config: ?[]const u8, args: []const []const u8 } {
-    var it = std.process.Args.Iterator.init(platform.args);
-    _ = it.next();
-    var config_path: ?[]const u8 = null;
-    while (it.next()) |arg| {
-        if (std.mem.startsWith(u8, arg, "--config=")) {
-            config_path = try a.dupe(u8, arg["--config=".len..]);
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--config")) {
-            config_path = try a.dupe(u8, it.next() orelse return null);
-            continue;
-        }
-        if (!std.mem.eql(u8, arg, "mcp")) return null;
-
-        var rest: std.ArrayList([]const u8) = .empty;
-        while (it.next()) |sub| try rest.append(a, sub);
-        return .{ .config = config_path, .args = try rest.toOwnedSlice(a) };
-    }
-    return null;
-}
-
 fn run() !u8 {
     const a = platform.gpa;
-
-    if (try mcpArgs(a)) |mcp_call| {
-        const cfg = config.load(a, mcp_call.config) catch return 1;
-        return mcp.run(a, &cfg, mcp_call.args);
-    }
 
     const args = parseArgs(a) catch |e| {
         switch (e) {
@@ -109,11 +75,6 @@ fn run() !u8 {
     };
 
     const cfg = config.load(a, args.config) catch return 1;
-
-    if (args.login) {
-        siwc.login(a, &cfg) catch return 1;
-        return 0;
-    }
 
     var resolve_err: ?[]const u8 = null;
     const model = models.resolve(a, &cfg, &resolve_err);

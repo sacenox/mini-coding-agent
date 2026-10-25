@@ -22,7 +22,6 @@ pub const CustomModel = struct {
     reasoning: bool,
     effort: []const []const u8 = &.{},
     cost: [3]f64,
-    oauth: bool = false,
 };
 
 pub const CustomProvider = struct {
@@ -30,11 +29,6 @@ pub const CustomProvider = struct {
     name: ?[]const u8 = null,
     models: []const CustomModel,
     envKeys: []const []const u8 = &.{},
-    headers: ?std.json.ArrayHashMap([]const u8) = null,
-};
-
-pub const McpServer = struct {
-    url: []const u8,
     headers: ?std.json.ArrayHashMap([]const u8) = null,
 };
 
@@ -52,12 +46,10 @@ pub const Config = struct {
     herdr: bool,
     show_images: bool,
     custom_providers: []const CustomProvider,
-    mcp_servers: std.json.ArrayHashMap(McpServer),
     snapshot_ignore_dirs: []const []const u8,
     snapshot_uses_gitignore: bool,
     history_size: usize,
     max_diff_lines: usize,
-    oauth_redirect_brand: ?[]const u8,
 };
 
 const File = struct {
@@ -72,13 +64,11 @@ const File = struct {
     model: ?[]const u8 = null,
     thinkingEffort: ?[]const u8 = null,
     customProviders: ?[]const CustomProvider = null,
-    mcpServers: ?std.json.ArrayHashMap(McpServer) = null,
     programStatus: ?bool = null,
     herdr: ?bool = null,
     showImages: ?bool = null,
     snapshotIgnoreDirs: ?[]const []const u8 = null,
     snapshotUsesGitignore: ?bool = null,
-    oauthRedirectBrand: ?[]const u8 = null,
 };
 
 /// An empty environment variable is treated as unset, per the XDG spec.
@@ -151,7 +141,6 @@ fn readInto(a: std.mem.Allocator, path: []const u8, required: bool, cfg: *Config
     if (file.skillsDirs) |v| cfg.skills_dirs = v;
     if (file.tools) |v| cfg.tools = v;
     if (file.customProviders) |v| cfg.custom_providers = v;
-    if (file.mcpServers) |v| cfg.mcp_servers = v;
     if (file.thinkingEffort) |v| cfg.thinking_effort = v;
     if (file.programStatus) |v| cfg.program_status = v;
     if (file.herdr) |v| cfg.herdr = v;
@@ -160,7 +149,6 @@ fn readInto(a: std.mem.Allocator, path: []const u8, required: bool, cfg: *Config
     if (file.snapshotUsesGitignore) |v| cfg.snapshot_uses_gitignore = v;
     if (file.historySize) |v| cfg.history_size = v;
     if (file.maxDiffLines) |v| cfg.max_diff_lines = v;
-    if (file.oauthRedirectBrand) |v| cfg.oauth_redirect_brand = v;
 }
 
 pub const Update = struct {
@@ -210,11 +198,9 @@ fn defaults(a: std.mem.Allocator) !Config {
         .herdr = false,
         .show_images = false,
         .custom_providers = &.{},
-        .mcp_servers = .{},
         .snapshot_ignore_dirs = &.{},
         .snapshot_uses_gitignore = true,
         .history_size = 100,
         .max_diff_lines = 2000,
-        .oauth_redirect_brand = null,
     };
 }

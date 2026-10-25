@@ -3,7 +3,6 @@ const platform = @import("platform.zig");
 const modelsdev = @import("models_dev.zig");
 const http = @import("http.zig");
 const config = @import("config.zig");
-const auth = @import("auth.zig");
 
 pub const Thinking = enum { off, budget, effort };
 
@@ -24,24 +23,19 @@ pub const Model = struct {
     session_header: ?[]const u8,
     headers: []const [2][]const u8 = &.{},
     thinking: Thinking = .budget,
-    /// The bearer comes from the OAuth credential record, not from the environment.
-    oauth: bool = false,
 };
 
-/// How a provider proves who the user is. Everything else about it — name,
-/// environment keys, API root, models — comes from the models.dev document.
-const Credential = enum { env, chatgpt };
-
+/// A built-in provider is one whose models.dev entry the agent knows how to
+/// request: name, environment keys, API root and models all come from the
+/// document.
 const Builtin = struct {
     id: []const u8,
-    credential: Credential,
     session_header: ?[]const u8 = null,
 };
 
 const builtins = [_]Builtin{
-    .{ .id = "opencode", .credential = .env, .session_header = "x-opencode-session" },
-    .{ .id = "opencode-go", .credential = .env, .session_header = "x-opencode-session" },
-    .{ .id = "openai", .credential = .chatgpt },
+    .{ .id = "opencode", .session_header = "x-opencode-session" },
+    .{ .id = "opencode-go", .session_header = "x-opencode-session" },
 };
 
 const ladder = [_][]const u8{ "off", "minimal", "low", "medium", "high", "xhigh", "max" };
@@ -132,17 +126,13 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
             err.* = unknownModel(a, model_id, provider_id);
             return null;
         };
-        if (b.credential == .chatgpt and !auth.available(a)) {
-            err.* = notSignedIn(a, provider_id);
-            return null;
-        }
         return Model{
             .id = model_id,
             .name = info.name,
             .api = info.api,
             .provider = provider_id,
             .base_url = info.base_url,
-            .api_key = if (b.credential == .env) firstEnv(p.env) else null,
+            .api_key = firstEnv(p.env),
             .effort = clampEffort(info.reasoning, info.effort, cfg.thinking_effort),
             .supports_images = info.images,
             .context_window = info.context,
@@ -152,17 +142,12 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
             .cost_output = info.cost_output,
             .cost_cache_read = info.cost_cache_read,
             .session_header = b.session_header,
-            .oauth = b.credential == .chatgpt,
         };
     }
 
     if (custom(cfg, provider_id)) |p| {
         for (p.models) |m| {
             if (!std.mem.eql(u8, m.id, model_id)) continue;
-            if (m.oauth and !auth.available(a)) {
-                err.* = notSignedIn(a, provider_id);
-                return null;
-            }
             return Model{
                 .id = m.id,
                 .name = m.name orelse m.id,
@@ -179,7 +164,6 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
                 .cost_cache_read = m.cost[2],
                 .session_header = null,
                 .headers = headerPairs(a, p.headers),
-                .oauth = m.oauth,
             };
         }
         err.* = unknownModel(a, model_id, provider_id);
@@ -200,13 +184,9 @@ fn headerPairs(a: std.mem.Allocator, headers: ?std.json.ArrayHashMap([]const u8)
 
 const ProviderEntry = struct { id: []const u8, name: []const u8, ready: bool };
 
-/// A built-in provider is usable when its credential is on hand: the first of
-/// the provider's own environment keys, or the sign-in with ChatGPT record.
-fn usable(b: Builtin, a: std.mem.Allocator, p: modelsdev.Provider) bool {
-    return switch (b.credential) {
-        .env => firstEnv(p.env) != null,
-        .chatgpt => auth.available(a),
-    };
+/// A built-in provider is usable when its first environment key is present.
+fn usable(p: modelsdev.Provider) bool {
+    return firstEnv(p.env) != null;
 }
 
 pub fn providers(a: std.mem.Allocator, cfg: *const config.Config) []ProviderEntry {
@@ -218,7 +198,7 @@ pub fn providers(a: std.mem.Allocator, cfg: *const config.Config) []ProviderEntr
         out.append(a, .{
             .id = b.id,
             .name = if (p.name.len > 0) p.name else b.id,
-            .ready = usable(b, a, p),
+            .ready = usable(p),
         }) catch {};
     }
     for (cfg.custom_providers) |p| {
@@ -239,14 +219,11 @@ pub fn listing(
     cancel: *const std.atomic.Value(bool),
 ) ![]Entry {
     if (custom(cfg, provider_id)) |p| return customListing(a, p);
-    const b = builtin(provider_id) orelse return error.UnknownProvider;
+    if (builtin(provider_id) == null) return error.UnknownProvider;
     var db = modelsdev.Db.open(a) catch return error.ModelMetadataUnavailable;
     const p = db.provider(provider_id) orelse return error.UnknownProvider;
     const base = db.baseUrl(provider_id) orelse return error.UnknownProvider;
-    const key = switch (b.credential) {
-        .env => firstEnv(p.env) orelse return error.MissingApiKey,
-        .chatgpt => auth.token(cancel) orelse return error.NotSignedIn,
-    };
+    const key = firstEnv(p.env) orelse return error.MissingApiKey;
 
     const url = try std.fmt.allocPrint(a, "{s}/models", .{base});
     const authorization = try std.fmt.allocPrint(a, "Bearer {s}", .{key});
@@ -254,8 +231,8 @@ pub fn listing(
 
     const parsed = try std.json.parseFromSliceLeaky(Listed, a, body, .{ .ignore_unknown_fields = true });
     var out: std.ArrayList(Entry) = .empty;
-    for (parsed.items()) |item| {
-        const id = item.offer() orelse continue;
+    for (parsed.data orelse &.{}) |item| {
+        const id = item.id orelse continue;
         const info = db.info(provider_id, id) orelse continue;
         try out.append(a, .{ .id = id, .name = info.name });
     }
@@ -264,29 +241,13 @@ pub fn listing(
     return items;
 }
 
-/// Providers decide the shape of their model list: OpenAI-compatible gateways
-/// answer `data[].id`, the ChatGPT plan answers `models[].slug` with a
-/// `visibility` that hides internal models.
+/// The model list shape of an OpenAI-compatible gateway: `data[].id`.
 const Listed = struct {
     data: ?[]const Item = null,
-    models: ?[]const Item = null,
 
     const Item = struct {
         id: ?[]const u8 = null,
-        slug: ?[]const u8 = null,
-        visibility: ?[]const u8 = null,
-
-        fn offer(self: Item) ?[]const u8 {
-            if (self.visibility) |v| {
-                if (!std.mem.eql(u8, v, "list")) return null;
-            }
-            return self.id orelse self.slug;
-        }
     };
-
-    fn items(self: Listed) []const Item {
-        return self.data orelse self.models orelse &.{};
-    }
 };
 
 fn entryLess(_: void, a: Entry, b: Entry) bool {
@@ -340,9 +301,4 @@ fn unknownModel(a: std.mem.Allocator, model_id: []const u8, provider_id: []const
 
 fn unknownProvider(a: std.mem.Allocator, provider_id: []const u8) []const u8 {
     return std.fmt.allocPrint(a, "unknown provider \"{s}\"", .{provider_id}) catch "unknown provider";
-}
-
-fn notSignedIn(a: std.mem.Allocator, provider_id: []const u8) []const u8 {
-    return std.fmt.allocPrint(a, "provider \"{s}\" is not signed in; run `mini login`", .{provider_id}) catch
-        "not signed in; run `mini login`";
 }

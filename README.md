@@ -17,7 +17,6 @@ it with `python3 tools/gen_models_dev.py`.
     mini                 # interactive TUI
     mini -p '<prompt>'   # one turn, print the reply, exit
     mini -c <file>       # overlay a config file for this run
-    mini login           # sign in with ChatGPT to use your plan
 
 Arguments:
 
@@ -67,23 +66,6 @@ error.
 | `edit` | replaces `oldText`, which must occur exactly once; an empty `oldText` creates a new file and fails if it exists; prints a unified diff |
 | `bash` | runs `bash -c` in the cwd with a 120s default `timeout`; output keeps the first 10k and last 6k bytes; a before/after snapshot of the cwd reports changed files as diffs |
 
-## MCP
-
-`mini mcp` speaks the stateless MCP protocol to the servers in `mcpServers`.
-It probes a revision and, when a server rejects it, retries with the newest
-revision that server advertises, so no single revision is pinned. It lets the
-`bash` tool reach MCP tools without any MCP tool description entering the
-model's context: the model discovers and calls them with three commands,
-composing them like any other shell command.
-
-    mini mcp search <query>        # ranked { path, description } matches
-    mini mcp describe <path>       # the description and input signature
-    mini mcp invoke <path> <json>  # call a tool with a JSON argument object
-
-A tool path is `<server>.<tool>`, for example
-`mini mcp invoke context7.resolve-library-id '{"libraryName":"zig"}'`. Absent
-`mcpServers`, every command reports that no servers are configured.
-
 ## Configure
 
 The config is one JSON object. It is read from
@@ -104,13 +86,6 @@ A full example:
   "discoverAgentFiles": true,
   "skillsDirs": ["/home/me/.agents/skills"],
   "tools": ["edit", "read", "bash"],
-  "mcpServers": {
-    "context7": { "url": "https://mcp.context7.com/mcp" },
-    "firecrawl": {
-      "url": "https://mcp.firecrawl.dev/v2/mcp",
-      "headers": { "Authorization": "Bearer fc-YOUR-API-KEY" }
-    }
-  },
   "snapshotIgnoreDirs": [".git"],
   "snapshotUsesGitignore": true,
   "historySize": 100,
@@ -144,7 +119,7 @@ Keys:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `provider` | unset | provider id; built-ins are `opencode`, `opencode-go` and `openai` (after `mini login`), or a `customProviders` id |
+| `provider` | unset | provider id; built-ins are `opencode` and `opencode-go`, or a `customProviders` id |
 | `model` | unset | model id |
 | `thinkingEffort` | unset | one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; unset sends no reasoning parameter and clamps to what the model accepts |
 | `showImages` | `false` | display PNGs the `read` tool returns inline using the kitty graphics protocol; requires kitty 0.28+ |
@@ -154,7 +129,6 @@ Keys:
 | `skillsDirs` | `[]` | directories holding `<name>/SKILL.md` skills; each `SKILL.md` needs a `name` in its frontmatter (optional `description`) |
 | `tools` | `["edit", "read", "bash"]` | which tools the model sees |
 | `customProviders` | `[]` | in-tree provider definitions |
-| `mcpServers` | `{}` | named MCP servers (`<name>: { url, headers }`) the `mini mcp` subcommand talks to |
 | `snapshotIgnoreDirs` | `[]` | directory names skipped when the `bash` tool snapshots the cwd for diffs |
 | `snapshotUsesGitignore` | `true` | also skip directories named in `.gitignore` when snapshotting |
 | `historySize` | `100` | past inputs kept in `<state dir>/mini-coding-agent/history` for `Ctrl+R` |
@@ -192,23 +166,9 @@ so one provider may mix APIs and base URLs:
 ## Environment
 
 The built-in providers are named, keyed and described by the embedded models.dev
-document; the agent itself only knows how each one authenticates. `opencode` and
-`opencode-go` read the first present variable in their `env` list
-(`OPENCODE_API_KEY`). A provider without a key is listed but fails at request
-time.
-
-## Sign in with ChatGPT
-
-`mini login` runs the Sign in with ChatGPT flow and writes
-`$XDG_CONFIG_HOME/mini-coding-agent/auth.json` (0600). It is the credential for
-the `openai` provider, which then appears in `/provider` next to the keyed ones;
-set `provider` to `openai` and pick any model from `/model`. The record is
-refreshed under one lock per request, so a rotating refresh token is never
-raced. A record that cannot be refreshed stops the turn with `sign-in expired;
-run mini login` instead of sending an unauthenticated request.
-
-The account decides what is available: the model list comes from the provider
-and models the account hides are never offered.
+document. `opencode` and `opencode-go` read the first present variable in their
+`env` list (`OPENCODE_API_KEY`). A provider without a key is listed but fails at
+request time.
 
 ## Sessions
 

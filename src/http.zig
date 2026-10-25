@@ -75,58 +75,6 @@ pub fn get(
     return reader.allocRemaining(a, .limited(1 << 22)) catch return error.ReadFailed;
 }
 
-pub const Response = struct {
-    status: u16,
-    body: []u8,
-};
-
-/// A single request whose whole body is buffered, for JSON request/response
-/// exchanges such as MCP. The body may be JSON or an SSE stream; the caller
-/// sniffs it. A non-2xx status is not an error here: the body often carries the
-/// protocol-level reason, and the caller can read `status` itself.
-pub fn post(
-    a: std.mem.Allocator,
-    url: []const u8,
-    headers: []const Header,
-    body: []const u8,
-    cancel: *const std.atomic.Value(bool),
-) HttpError!Response {
-    if (cancel.load(.acquire)) return error.Aborted;
-    const uri = std.Uri.parse(url) catch return error.RequestFailed;
-    var client: std.http.Client = .{ .allocator = a, .io = platform.io };
-    defer client.deinit();
-
-    var hdrs: std.ArrayList(std.http.Header) = .empty;
-    defer hdrs.deinit(a);
-    for (headers) |h| hdrs.append(a, .{ .name = h.name, .value = h.value }) catch return error.OutOfMemory;
-
-    var req = client.request(.POST, uri, .{
-        .redirect_behavior = .unhandled,
-        .extra_headers = hdrs.items,
-        .headers = .{ .user_agent = .{ .override = user_agent } },
-    }) catch return error.RequestFailed;
-    defer req.deinit();
-
-    req.transfer_encoding = .{ .content_length = body.len };
-    var bw = req.sendBodyUnflushed(&.{}) catch return error.RequestFailed;
-    bw.writer.writeAll(body) catch return error.RequestFailed;
-    bw.end() catch return error.RequestFailed;
-    req.connection.?.flush() catch return error.RequestFailed;
-
-    var response = req.receiveHead(&.{}) catch return error.RequestFailed;
-    const status = @backingInt(response.head.status);
-
-    var transfer: [16 * 1024]u8 = undefined;
-    var decompress: std.http.Decompress = undefined;
-    var decompress_buf: [std.compress.flate.max_window_len]u8 = undefined;
-    const reader = response.readerDecompressing(&transfer, &decompress, &decompress_buf);
-
-    return .{
-        .status = status,
-        .body = reader.allocRemaining(a, .limited(1 << 22)) catch return error.ReadFailed,
-    };
-}
-
 pub fn postSse(
     a: std.mem.Allocator,
     url: []const u8,

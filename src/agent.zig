@@ -6,7 +6,6 @@ const platform = @import("platform.zig");
 const tools = @import("tools.zig");
 const session = @import("session.zig");
 const config = @import("config.zig");
-const auth = @import("auth.zig");
 const time = @import("time.zig");
 
 pub const Phase = enum { preparing, waiting_model, streaming, running_tool, snapshotting, pausing, idle };
@@ -171,15 +170,6 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(message_mod.Message), int
         };
 
         if (cancelled(opts, listener)) return;
-        // An OAuth bearer expires, so it is renewed per step, not per session. A
-        // record that cannot be renewed stops the turn before it is persisted.
-        var wire_model = model.*;
-        if (wire_model.oauth) {
-            wire_model.api_key = auth.token(opts.cancel) orelse {
-                listener.emit(.{ .err = "sign-in expired; run `mini login`" });
-                return;
-            };
-        }
         listener.emit(.{ .phase = .{ .phase = .preparing } });
         opts.session.appendRequest(scratch, .{
             .provider = model.provider,
@@ -203,7 +193,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(message_mod.Message), int
         assistant.* = api.stream(.{
             .pers = opts.a,
             .scratch = scratch,
-            .model = &wire_model,
+            .model = model,
             .system_prompt = opts.system_prompt,
             .tools_json = opts.tools_json,
             .messages = messages.items,
