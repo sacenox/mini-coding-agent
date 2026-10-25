@@ -4,7 +4,7 @@ const render = @import("render.zig");
 
 const BodyLine = render.BodyLine;
 
-fn isFenceOpen(line: []const u8) ?struct { marker: []const u8, info: []const u8 } {
+fn isFenceOpen(line: []const u8) ?[]const u8 {
     var i: usize = 0;
     while (i < line.len and i < 3 and line[i] == ' ') i += 1;
     if (i >= line.len) return null;
@@ -13,11 +13,7 @@ fn isFenceOpen(line: []const u8) ?struct { marker: []const u8, info: []const u8 
     var j = i;
     while (j < line.len and line[j] == ch) j += 1;
     if (j - i < 3) return null;
-    var k = j;
-    while (k < line.len and (line[k] == ' ' or line[k] == '\t')) k += 1;
-    var end = k;
-    while (end < line.len and line[end] != ' ' and line[end] != '\t') end += 1;
-    return .{ .marker = line[i..j], .info = line[k..end] };
+    return line[i..j];
 }
 
 fn isFenceClose(line: []const u8, marker: []const u8) bool {
@@ -37,7 +33,7 @@ pub const MarkdownStream = struct {
     arena: std.heap.ArenaAllocator,
     a: std.mem.Allocator = undefined,
     rest: std.ArrayList(u8) = .empty,
-    fence: ?struct { marker: []const u8, info: []const u8, lines: std.ArrayList([]const u8) } = null,
+    fence: ?struct { marker: []const u8, lines: std.ArrayList([]const u8) } = null,
     prose: std.ArrayList([]const u8) = .empty,
 
     pub fn init(backing: std.mem.Allocator) MarkdownStream {
@@ -74,11 +70,11 @@ pub const MarkdownStream = struct {
             }
             return;
         }
-        if (isFenceOpen(line)) |open| {
+        if (isFenceOpen(line)) |marker| {
             self.releaseProse(out_a, "", out);
             var fl: std.ArrayList([]const u8) = .empty;
             fl.append(self.a, line) catch {};
-            self.fence = .{ .marker = open.marker, .info = open.info, .lines = fl };
+            self.fence = .{ .marker = marker, .lines = fl };
             return;
         }
         if (std.mem.trim(u8, line, " \t\r").len == 0) {
@@ -113,7 +109,7 @@ pub const MarkdownStream = struct {
                 if (i > 0) body.append(out_a, '\n') catch {};
                 body.appendSlice(out_a, l) catch {};
             }
-            var it = std.mem.splitScalar(u8, highlight.highlightCode(out_a, f.info, body.items), '\n');
+            var it = std.mem.splitScalar(u8, highlight.highlightCode(out_a, body.items), '\n');
             while (it.next()) |l| out.append(out_a, .{ .text = l }) catch {};
         }
         if (closing) |c| out.append(out_a, .{ .text = highlight.highlightMarkdown(out_a, c) }) catch {};

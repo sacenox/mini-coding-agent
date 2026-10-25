@@ -70,8 +70,8 @@ pub const Terminal = struct {
             raw.iflag.ICRNL = false;
             raw.iflag.IXON = false;
             raw.oflag.OPOST = false;
-            raw.cc[@intFromEnum(std.posix.V.MIN)] = 1;
-            raw.cc[@intFromEnum(std.posix.V.TIME)] = 0;
+            raw.cc[@backingInt(std.posix.V.MIN)] = 1;
+            raw.cc[@backingInt(std.posix.V.TIME)] = 0;
             saved = original;
             raw_mode.store(true, .seq_cst);
             std.posix.tcsetattr(std.posix.STDIN_FILENO, .NOW, raw) catch {

@@ -8,7 +8,6 @@ const agent = @import("../agent.zig");
 const models_mod = @import("../models.zig");
 const tools_index = @import("../tools.zig");
 const render = @import("render.zig");
-const theme = @import("theme.zig");
 const styles = @import("styles.zig");
 const term = @import("term.zig");
 const input = @import("input.zig");
@@ -52,7 +51,7 @@ fn onWinch(_: std.posix.SIG) callconv(.c) void {
 
 fn onExitSignal(sig: std.posix.SIG) callconv(.c) void {
     term.restore();
-    exit_signal.store(@intFromEnum(sig), .seq_cst);
+    exit_signal.store(@backingInt(sig), .seq_cst);
     exit_flag.store(true, .seq_cst);
 }
 
@@ -268,33 +267,33 @@ const Tui = struct {
     fn stateLabel(self: *Tui) []const u8 {
         const a = self.s;
         var text: []const u8 = "idle";
-        var color: ?[]const u8 = null;
+        var color: ?styles.Color = null;
         var bytes: usize = 0;
         switch (self.phase) {
             .preparing => text = "preparing",
             .waiting_model => text = "waiting for provider",
             .snapshotting => {
                 text = "snapshotting";
-                color = theme.current.warn;
+                color = styles.roles.warn;
             },
             .running_tool => {
                 text = std.fmt.allocPrint(a, "running tool call {s}", .{self.detail orelse "tool"}) catch "running tool call";
-                color = theme.current.prompt;
+                color = styles.roles.prompt;
             },
             .streaming => switch (self.stream_kind) {
                 .tool => {
                     text = std.fmt.allocPrint(a, "writing tool call {s}", .{self.writing_tool orelse "tool"}) catch "writing tool call";
-                    color = theme.current.prompt;
+                    color = styles.roles.prompt;
                     bytes = self.writing_bytes;
                 },
                 .reasoning => {
                     text = "reasoning";
-                    color = theme.current.prompt;
+                    color = styles.roles.prompt;
                     bytes = self.reasoning_bytes;
                 },
                 .text => {
                     text = "writing response";
-                    color = theme.current.prompt;
+                    color = styles.roles.prompt;
                     bytes = self.text_bytes;
                 },
                 .none => text = "streaming",
@@ -376,7 +375,7 @@ const Tui = struct {
 
     fn searchMatch(self: *Tui, sr: *const Search) ?[]const u8 {
         for (self.history.entries.items) |entry| {
-            if (sr.query.items.len == 0 or std.ascii.indexOfIgnoreCase(entry, sr.query.items) != null) return entry;
+            if (sr.query.items.len == 0 or std.ascii.findIgnoreCase(entry, sr.query.items) != null) return entry;
         }
         return null;
     }
@@ -627,7 +626,7 @@ const Tui = struct {
         var match: ?[]const u8 = null;
         const query = self.search.?.query.items;
         for (self.history.entries.items) |entry| {
-            if (query.len == 0 or std.ascii.indexOfIgnoreCase(entry, query) != null) {
+            if (query.len == 0 or std.ascii.findIgnoreCase(entry, query) != null) {
                 match = entry;
                 break;
             }
@@ -1118,7 +1117,6 @@ fn eventTrampoline(ctx: *anyopaque, event: agent.Event) void {
 
 pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const config.ToolName) !void {
     const gpa = platform.gpa;
-    theme.init(gpa, cfg.theme);
     const opts_ptr = try gpa.create(agent.Options);
     opts_ptr.* = opts;
     const self = try gpa.create(Tui);
@@ -1233,5 +1231,5 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
         std.Io.sleep(platform.io, .{ .nanoseconds = 8 * std.time.ns_per_ms }, .boot) catch {};
     }
     const sig = exit_signal.load(.seq_cst);
-    if (sig != 0) platform.reRaise(@enumFromInt(sig));
+    if (sig != 0) platform.reRaise(@fromBackingInt(@intCast(sig)));
 }

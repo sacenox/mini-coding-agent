@@ -2,15 +2,9 @@
 
 A fast, transparent, config-first terminal coding agent.
 
-<p align="center">
-  <img src="preview.png" alt="mini TUI: an edit diff, a streamed answer, and the three themes" width="931">
-  <br>
-  <a href="preview.mp4">10-second demo (mp4, 1.4 MB)</a>
-</p>
-
 ## Build
 
-Requires Zig 0.16.0.
+Requires Zig 0.17.0.
 
     zig build
 
@@ -104,7 +98,6 @@ A full example:
   "provider": "opencode",
   "model": "deepseek-v4.1-flash",
   "thinkingEffort": "medium",
-  "theme": "tokyonight",
   "showImages": false,
   "systemPrompt": "Be terse.",
   "sessionsDir": "/home/me/.local/state/mini-coding-agent/sessions",
@@ -154,7 +147,6 @@ Keys:
 | `provider` | unset | provider id; built-ins are `opencode`, `opencode-go` and `openai` (after `mini login`), or a `customProviders` id |
 | `model` | unset | model id |
 | `thinkingEffort` | unset | one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; unset sends no reasoning parameter and clamps to what the model accepts |
-| `theme` | `tokyonight` | TUI palette: `tokyonight`, `oxocarbon`, or `kanagawa`. Read at startup; there is no live reload |
 | `showImages` | `false` | display PNGs the `read` tool returns inline using the kitty graphics protocol; requires kitty 0.28+ |
 | `systemPrompt` | `""` | prepended to the system prompt |
 | `sessionsDir` | `$XDG_STATE_HOME/mini-coding-agent/sessions`, else `$HOME/.local/state/mini-coding-agent/sessions`, else `sessions` | where JSONL session logs go |

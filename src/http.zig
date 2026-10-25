@@ -64,7 +64,7 @@ pub fn get(
 
     req.sendBodiless() catch return error.RequestFailed;
     var response = req.receiveHead(&.{}) catch return error.RequestFailed;
-    const status = @intFromEnum(response.head.status);
+    const status = @backingInt(response.head.status);
 
     var transfer: [16 * 1024]u8 = undefined;
     var decompress: std.http.Decompress = undefined;
@@ -114,7 +114,7 @@ pub fn post(
     req.connection.?.flush() catch return error.RequestFailed;
 
     var response = req.receiveHead(&.{}) catch return error.RequestFailed;
-    const status = @intFromEnum(response.head.status);
+    const status = @backingInt(response.head.status);
 
     var transfer: [16 * 1024]u8 = undefined;
     var decompress: std.http.Decompress = undefined;
@@ -166,7 +166,7 @@ pub fn postSse(
     }
 
     var response = req.receiveHead(&.{}) catch return error.RequestFailed;
-    const status = @intFromEnum(response.head.status);
+    const status = @backingInt(response.head.status);
 
     var transfer: [16 * 1024]u8 = undefined;
     var decompress: std.http.Decompress = undefined;

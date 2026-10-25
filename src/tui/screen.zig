@@ -1,6 +1,6 @@
 const std = @import("std");
+const styles = @import("styles.zig");
 const platform = @import("../platform.zig");
-const theme = @import("theme.zig");
 const render = @import("render.zig");
 
 const rowsForCells = render.rowsForCells;
@@ -44,7 +44,7 @@ pub const LiveRegion = struct {
         var out: std.ArrayList(u8) = .empty;
         if (up > 0) out.appendSlice(a, std.fmt.allocPrint(a, "\x1b[{d}A", .{up}) catch "") catch {};
         out.appendSlice(a, "\r") catch {};
-        out.appendSlice(a, theme.SGR_PLAIN) catch {};
+        out.appendSlice(a, styles.SGR_PLAIN) catch {};
         out.appendSlice(a, "\x1b[J") catch {};
         return out.items;
     }
@@ -129,7 +129,7 @@ pub const Scrollback = struct {
         self.separator = true;
         var it = std.mem.splitScalar(u8, text, '\n');
         var lines: std.ArrayList(render.BodyLine) = .empty;
-        while (it.next()) |l| lines.append(self.scratch, .{ .text = l, .style = .{ .fg = theme.current.prompt } }) catch {};
+        while (it.next()) |l| lines.append(self.scratch, .{ .text = l, .style = .{ .fg = styles.roles.prompt } }) catch {};
         self.commitLines(lines.items);
         self.separator = true;
     }

@@ -1,5 +1,4 @@
 const std = @import("std");
-const theme = @import("theme.zig");
 const styles = @import("styles.zig");
 const wcwidth = @import("width.zig");
 
@@ -205,8 +204,7 @@ pub fn wrapLine(a: std.mem.Allocator, text: []const u8, width: usize) []const []
 
 pub const BodyLine = struct {
     text: []const u8,
-    style: ?theme.Style = null,
-    bg: ?[]const u8 = null,
+    style: ?styles.Style = null,
 };
 
 const max_body_rows = 12;
@@ -214,22 +212,15 @@ const elided_head = 4;
 const elided_tail = 4;
 
 pub fn paintRow(a: std.mem.Allocator, line: []const u8) []const u8 {
-    return std.fmt.allocPrint(a, "{s}{s}\x1b[K", .{ theme.SGR_PLAIN, line }) catch line;
+    return std.fmt.allocPrint(a, "{s}{s}\x1b[K", .{ styles.SGR_PLAIN, line }) catch line;
 }
 
 pub fn styleLine(a: std.mem.Allocator, line: BodyLine) []const u8 {
     const safe = sanitize(a, line.text);
     const expanded = expandTabs(a, safe, 4);
     if (expanded.len == 0) return "";
-    const row_bg = if (line.bg) |bg| theme.sgrBg(a, bg) else theme.SGR_NORMAL_BG;
-    const styled = if (line.style) |s| styles.styledWith(a, .{
-        .fg = s.fg,
-        .bg = line.bg orelse theme.current.bg,
-        .bold = s.bold,
-        .italic = s.italic,
-        .underline = s.underline,
-    }, expanded) else expanded;
-    return std.fmt.allocPrint(a, "{s}{s}{s}", .{ row_bg, styled, row_bg }) catch expanded;
+    if (line.style) |s| return styles.styledWith(a, s, expanded);
+    return expanded;
 }
 
 pub fn plainRows(a: std.mem.Allocator, lines: []const BodyLine) []const []const u8 {

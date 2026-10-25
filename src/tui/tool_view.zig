@@ -1,6 +1,5 @@
 const std = @import("std");
 const styles = @import("styles.zig");
-const highlight = @import("highlight.zig");
 const render = @import("render.zig");
 const diff_view = @import("diff_view.zig");
 
@@ -41,18 +40,16 @@ pub fn callSummary(a: std.mem.Allocator, name: []const u8, args_json: []const u8
 
 pub fn callBody(a: std.mem.Allocator, name: []const u8, summary: []const u8) []const BodyLine {
     const head = callHead(a, name);
-    const body = if (std.mem.eql(u8, name, "bash"))
-        highlight.highlightOn(a, "bash", summary, .{})
-    else
-        summary;
+    const body = summary;
     var out: std.ArrayList(BodyLine) = .empty;
     var it = std.mem.splitScalar(u8, body, '\n');
     var i: usize = 0;
     while (it.next()) |line| : (i += 1) {
+        const args = if (line.len == 0) line else styles.styledWith(a, .{ .bold = true }, line);
         const text = if (i == 0)
-            std.fmt.allocPrint(a, "{s}  {s}", .{ head, line }) catch line
+            std.fmt.allocPrint(a, "{s}  {s}", .{ head, args }) catch line
         else
-            line;
+            args;
         out.append(a, .{ .text = text }) catch {};
     }
     return out.items;
@@ -86,9 +83,8 @@ pub fn resultLines(a: std.mem.Allocator, name: []const u8, text: []const u8, max
         else
             "";
         if (verb.len > 0) {
-            const path = lines.items[0][verb.len..];
             _ = lines.orderedRemove(0);
-            const r = diff_view.diffLines(a, path, lines.items, max_diff_lines);
+            const r = diff_view.diffLines(a, lines.items, max_diff_lines);
             return .{ .lines = r.lines, .footer = diffFooter(a, r) };
         }
     }

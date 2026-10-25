@@ -48,7 +48,6 @@ pub const Config = struct {
     provider: ?[]const u8,
     model: ?[]const u8,
     thinking_effort: ?[]const u8,
-    theme: []const u8,
     program_status: bool,
     herdr: bool,
     show_images: bool,
@@ -74,7 +73,6 @@ const File = struct {
     thinkingEffort: ?[]const u8 = null,
     customProviders: ?[]const CustomProvider = null,
     mcpServers: ?std.json.ArrayHashMap(McpServer) = null,
-    theme: ?[]const u8 = null,
     programStatus: ?bool = null,
     herdr: ?bool = null,
     showImages: ?bool = null,
@@ -155,7 +153,6 @@ fn readInto(a: std.mem.Allocator, path: []const u8, required: bool, cfg: *Config
     if (file.customProviders) |v| cfg.custom_providers = v;
     if (file.mcpServers) |v| cfg.mcp_servers = v;
     if (file.thinkingEffort) |v| cfg.thinking_effort = v;
-    if (file.theme) |v| cfg.theme = v;
     if (file.programStatus) |v| cfg.program_status = v;
     if (file.herdr) |v| cfg.herdr = v;
     if (file.showImages) |v| cfg.show_images = v;
@@ -209,7 +206,6 @@ fn defaults(a: std.mem.Allocator) !Config {
         .provider = null,
         .model = null,
         .thinking_effort = null,
-        .theme = "tokyonight",
         .program_status = false,
         .herdr = false,
         .show_images = false,

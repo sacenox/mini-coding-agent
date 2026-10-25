@@ -9,7 +9,7 @@ var cancel = std.atomic.Value(bool).init(false);
 var caught_signal = std.atomic.Value(u32).init(0);
 
 fn onSignal(sig: std.posix.SIG) callconv(.c) void {
-    caught_signal.store(@intFromEnum(sig), .seq_cst);
+    caught_signal.store(@backingInt(sig), .seq_cst);
     cancel.store(true, .release);
 }
 
@@ -62,7 +62,7 @@ pub fn run(a: std.mem.Allocator, prompt_text: []const u8, opts: agent.Options) u
     agent.runTurn(o, &messages, null, .{ .ctx = &pc, .on_event = printEvent });
     opts.session.close();
     const sig = caught_signal.load(.seq_cst);
-    if (sig != 0) platform.reRaise(@enumFromInt(sig));
+    if (sig != 0) platform.reRaise(@fromBackingInt(@intCast(sig)));
     if (pc.failed) return 1;
 
     var i = messages.items.len;

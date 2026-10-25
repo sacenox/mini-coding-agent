@@ -1,19 +1,8 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const zon = @import("build.zig.zon");
 
-// A native query makes Zig link the system CRT, and GCC 16's `crt1.o` carries
-// `.sframe` relocations that Zig 0.16's linker rejects. Pinning linux-gnu keeps
-// the native CPU but uses Zig's bundled glibc CRT.
-const host_query: std.Target.Query = if (builtin.os.tag == .linux and builtin.abi == .gnu) .{
-    .cpu_arch = builtin.cpu.arch,
-    .os_tag = .linux,
-    .abi = .gnu,
-    .cpu_model = .native,
-} else .{};
-
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{ .default_target = host_query });
+    const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     const exe = b.addExecutable(.{
@@ -29,55 +18,12 @@ pub fn build(b: *std.Build) void {
     const options = b.addOptions();
     options.addOption([]const u8, "version", zon.version);
     exe.root_module.addOptions("build_options", options);
-
-    const tree_sitter = b.dependency("tree_sitter", .{ .target = target, .optimize = optimize });
-    exe.root_module.addImport("tree-sitter", tree_sitter.module("tree_sitter"));
-
-    const js = b.dependency("tree_sitter_javascript", .{ .target = target, .optimize = optimize });
-    const ts = b.dependency("tree_sitter_typescript", .{ .target = target, .optimize = optimize });
-    const md = b.dependency("tree_sitter_markdown", .{ .target = target, .optimize = optimize });
-    const py = b.dependency("tree_sitter_python", .{ .target = target, .optimize = optimize });
-    const go = b.dependency("tree_sitter_go", .{ .target = target, .optimize = optimize });
-    const zig = b.dependency("tree_sitter_zig", .{ .target = target, .optimize = optimize });
-    const bash = b.dependency("tree_sitter_bash", .{ .target = target, .optimize = optimize });
-    const diff = b.dependency("tree_sitter_diff", .{ .target = target, .optimize = optimize });
-
+    // `platform.zig` reads the passwd entry through `std.c`, which needs libc.
     exe.root_module.link_libc = true;
-    addGrammar(exe, js, "src", &.{ "parser.c", "scanner.c" });
-    addGrammar(exe, ts, "typescript/src", &.{ "parser.c", "scanner.c" });
-    addGrammar(exe, ts, "tsx/src", &.{ "parser.c", "scanner.c" });
-    addGrammar(exe, md, "tree-sitter-markdown/src", &.{ "parser.c", "scanner.c" });
-    addGrammar(exe, md, "tree-sitter-markdown-inline/src", &.{ "parser.c", "scanner.c" });
-    addGrammar(exe, py, "src", &.{ "parser.c", "scanner.c" });
-    addGrammar(exe, go, "src", &.{"parser.c"});
-    addGrammar(exe, zig, "src", &.{"parser.c"});
-    addGrammar(exe, bash, "src", &.{ "parser.c", "scanner.c" });
-    addGrammar(exe, diff, "src", &.{"parser.c"});
-
-    exe.root_module.addAnonymousImport("js_highlights", .{ .root_source_file = js.path("queries/highlights.scm") });
-    exe.root_module.addAnonymousImport("ts_highlights", .{ .root_source_file = ts.path("queries/highlights.scm") });
-    exe.root_module.addAnonymousImport("md_highlights", .{ .root_source_file = md.path("tree-sitter-markdown/queries/highlights.scm") });
-    exe.root_module.addAnonymousImport("md_inline_highlights", .{ .root_source_file = md.path("tree-sitter-markdown-inline/queries/highlights.scm") });
-    exe.root_module.addAnonymousImport("md_tables", .{ .root_source_file = b.path("src/tui/markdown_tables.scm") });
-    exe.root_module.addAnonymousImport("py_highlights", .{ .root_source_file = py.path("queries/highlights.scm") });
-    exe.root_module.addAnonymousImport("go_highlights", .{ .root_source_file = go.path("queries/highlights.scm") });
-    exe.root_module.addAnonymousImport("zig_highlights", .{ .root_source_file = zig.path("queries/highlights.scm") });
-    exe.root_module.addAnonymousImport("bash_highlights", .{ .root_source_file = bash.path("queries/highlights.scm") });
-    exe.root_module.addAnonymousImport("diff_highlights", .{ .root_source_file = diff.path("queries/highlights.scm") });
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_cmd.addArgs(args);
+    run_cmd.addPassthruArgs();
     const run_step = b.step("run", "Run mini");
     run_step.dependOn(&run_cmd.step);
-}
-
-fn addGrammar(exe: *std.Build.Step.Compile, dep: *std.Build.Dependency, dir: []const u8, files: []const []const u8) void {
-    const root = dep.path(dir);
-    exe.root_module.addIncludePath(root);
-    exe.root_module.addCSourceFiles(.{
-        .root = root,
-        .files = files,
-        .flags = &.{"-std=c11"},
-    });
 }

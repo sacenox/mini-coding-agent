@@ -358,7 +358,7 @@ fn verifySignature(a: std.mem.Allocator, msg: []const u8, sig: []const u8, kid: 
 fn checkRs256(comptime len: usize, sig: []const u8, msg: []const u8, key: std.crypto.Certificate.rsa.PublicKey) bool {
     std.crypto.Certificate.rsa.PKCS1v1_5Signature.verify(
         len,
-        sig[0..len].*,
+        sig[0..len],
         msg,
         key,
         std.crypto.hash.sha2.Sha256,
