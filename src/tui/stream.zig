@@ -1,4 +1,5 @@
 const std = @import("std");
+const format = @import("format.zig");
 const highlight = @import("highlight.zig");
 const render = @import("render.zig");
 const text = @import("../text.zig");
@@ -36,6 +37,7 @@ pub const MarkdownStream = struct {
     rest: std.ArrayList(u8) = .empty,
     fence: ?struct { marker: []const u8, lines: std.ArrayList([]const u8) } = null,
     prose: std.ArrayList([]const u8) = .empty,
+    norm: format.Normalizer = .{},
 
     pub fn init(backing: std.mem.Allocator) MarkdownStream {
         return .{ .arena = std.heap.ArenaAllocator.init(backing) };
@@ -62,15 +64,16 @@ pub const MarkdownStream = struct {
         return out.items;
     }
 
-    fn commit(self: *MarkdownStream, out_a: std.mem.Allocator, line: []const u8, out: *std.ArrayList(BodyLine)) void {
+    fn commit(self: *MarkdownStream, out_a: std.mem.Allocator, raw: []const u8, out: *std.ArrayList(BodyLine)) void {
         if (self.fence) |*f| {
-            if (isFenceClose(line, f.marker)) {
-                self.releaseFence(out_a, line, out);
+            if (isFenceClose(raw, f.marker)) {
+                self.releaseFence(out_a, self.norm.line(self.a, raw), out);
             } else {
-                f.lines.append(self.a, line) catch {};
+                f.lines.append(self.a, raw) catch {};
             }
             return;
         }
+        const line = self.norm.line(self.a, raw);
         if (isFenceOpen(line)) |marker| {
             self.releaseProse(out_a, "", out);
             var fl: std.ArrayList([]const u8) = .empty;
@@ -80,7 +83,7 @@ pub const MarkdownStream = struct {
         }
         if (std.mem.trim(u8, line, " \t\r").len == 0) {
             self.releaseProse(out_a, "", out);
-            out.append(out_a, .{ .text = line }) catch {};
+            out.append(out_a, .{ .text = "" }) catch {};
             return;
         }
         self.prose.append(self.a, line) catch {};
@@ -92,7 +95,7 @@ pub const MarkdownStream = struct {
         if (tail.len > 0) prose.append(self.a, tail) catch {};
         if (prose.items.len == 0) return;
         const joined = std.fmt.allocPrint(out_a, "{s}\n", .{text.join(out_a, prose.items, "\n") catch ""}) catch "";
-        emitHighlighted(out_a, highlight.highlightMarkdown(out_a, highlight.formatTables(out_a, joined)), out);
+        emitHighlighted(out_a, highlight.highlightMarkdown(out_a, format.formatTables(out_a, joined)), out);
     }
 
     fn releaseFence(self: *MarkdownStream, out_a: std.mem.Allocator, closing: ?[]const u8, out: *std.ArrayList(BodyLine)) void {
@@ -121,7 +124,7 @@ pub const MarkdownStream = struct {
             self.releaseFence(out_a, null, &out);
             if (self.rest.items.len > 0) out.append(out_a, .{ .text = highlight.highlightMarkdown(out_a, self.rest.items) }) catch {};
         } else {
-            self.releaseProse(out_a, self.rest.items, &out);
+            self.releaseProse(out_a, self.norm.line(self.a, self.rest.items), &out);
         }
         self.reset();
         return out.items;
@@ -131,6 +134,7 @@ pub const MarkdownStream = struct {
         self.rest = .empty;
         self.fence = null;
         self.prose = .empty;
+        self.norm.reset();
         _ = self.arena.reset(.retain_capacity);
         self.a = self.arena.allocator();
     }
