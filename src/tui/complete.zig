@@ -27,7 +27,7 @@ pub fn completePath(word: []const u8) ?[]const u8 {
 
     var dir: []const u8 = undefined;
     if (word[0] == '~') {
-        const home = platform.getEnv("HOME") orelse "/";
+        const home = platform.home() orelse "/";
         const tail = if (slash) |s| word[1..s] else word[1..];
         dir = std.fs.path.resolve(a, &.{ home, tail }) catch return null;
     } else if (slash != null and slash.? == 0) {

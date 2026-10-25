@@ -261,13 +261,9 @@ fn finalize(st: *State) !void {
     api.finishUsage(st.msg, st.req.model, st.usage);
 
     st.msg.raw_stop_reason = st.finish;
-    if (st.finish) |finish| {
-        if (std.mem.eql(u8, finish, "MAX_TOKENS")) {
-            st.msg.stop_reason = .length;
-            return;
-        }
+    if (!api.stopReason(st.msg, st.finish)) {
+        st.msg.stop_reason = if (has_calls) .tool_use else .stop;
     }
-    st.msg.stop_reason = if (has_calls) .tool_use else .stop;
 }
 
 const wire = api.Wire{

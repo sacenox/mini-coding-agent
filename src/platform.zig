@@ -50,6 +50,15 @@ pub fn reRaise(sig: std.posix.SIG) noreturn {
     std.process.exit(1);
 }
 
+pub fn onSignal(sig: std.posix.SIG, handler: *const fn (std.posix.SIG) callconv(.c) void) void {
+    const act = std.posix.Sigaction{
+        .handler = .{ .handler = handler },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+    std.posix.sigaction(sig, &act, null);
+}
+
 pub fn writeOut(bytes: []const u8) void {
     std.Io.File.stdout().writeStreamingAll(io, bytes) catch {};
 }

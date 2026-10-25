@@ -1,6 +1,7 @@
 const std = @import("std");
 const highlight = @import("highlight.zig");
 const render = @import("render.zig");
+const text = @import("../text.zig");
 
 const BodyLine = render.BodyLine;
 
@@ -90,13 +91,8 @@ pub const MarkdownStream = struct {
         self.prose = .empty;
         if (tail.len > 0) prose.append(self.a, tail) catch {};
         if (prose.items.len == 0) return;
-        var joined: std.ArrayList(u8) = .empty;
-        for (prose.items, 0..) |l, i| {
-            if (i > 0) joined.append(out_a, '\n') catch {};
-            joined.appendSlice(out_a, l) catch {};
-        }
-        joined.append(out_a, '\n') catch {};
-        emitHighlighted(out_a, highlight.highlightMarkdown(out_a, highlight.formatTables(out_a, joined.items)), out);
+        const joined = std.fmt.allocPrint(out_a, "{s}\n", .{text.join(out_a, prose.items, "\n") catch ""}) catch "";
+        emitHighlighted(out_a, highlight.highlightMarkdown(out_a, highlight.formatTables(out_a, joined)), out);
     }
 
     fn releaseFence(self: *MarkdownStream, out_a: std.mem.Allocator, closing: ?[]const u8, out: *std.ArrayList(BodyLine)) void {
@@ -104,12 +100,8 @@ pub const MarkdownStream = struct {
         self.fence = null;
         out.append(out_a, .{ .text = highlight.highlightMarkdown(out_a, f.lines.items[0]) }) catch {};
         if (f.lines.items.len > 1) {
-            var body: std.ArrayList(u8) = .empty;
-            for (f.lines.items[1..], 0..) |l, i| {
-                if (i > 0) body.append(out_a, '\n') catch {};
-                body.appendSlice(out_a, l) catch {};
-            }
-            var it = std.mem.splitScalar(u8, highlight.highlightCode(out_a, body.items), '\n');
+            const body = text.join(out_a, f.lines.items[1..], "\n") catch "";
+            var it = std.mem.splitScalar(u8, highlight.highlightCode(out_a, body), '\n');
             while (it.next()) |l| out.append(out_a, .{ .text = l }) catch {};
         }
         if (closing) |c| out.append(out_a, .{ .text = highlight.highlightMarkdown(out_a, c) }) catch {};
@@ -144,14 +136,14 @@ pub const MarkdownStream = struct {
     }
 };
 
-fn emitHighlighted(a: std.mem.Allocator, text: []const u8, out: *std.ArrayList(BodyLine)) void {
-    const nl = std.mem.lastIndexOfScalar(u8, text, '\n') orelse {
-        out.append(a, .{ .text = text }) catch {};
+fn emitHighlighted(a: std.mem.Allocator, source: []const u8, out: *std.ArrayList(BodyLine)) void {
+    const nl = std.mem.lastIndexOfScalar(u8, source, '\n') orelse {
+        out.append(a, .{ .text = source }) catch {};
         return;
     };
-    const reset = text[nl + 1 ..];
+    const reset = source[nl + 1 ..];
     var lines: std.ArrayList([]const u8) = .empty;
-    var it = std.mem.splitScalar(u8, text[0..nl], '\n');
+    var it = std.mem.splitScalar(u8, source[0..nl], '\n');
     while (it.next()) |l| lines.append(a, l) catch {};
     if (lines.items.len > 0) {
         const last = lines.items.len - 1;

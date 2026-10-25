@@ -48,13 +48,8 @@ pub fn run(a: std.mem.Allocator, prompt_text: []const u8, opts: agent.Options) u
         return 1;
     };
 
-    const act = std.posix.Sigaction{
-        .handler = .{ .handler = onSignal },
-        .mask = std.posix.sigemptyset(),
-        .flags = 0,
-    };
-    std.posix.sigaction(std.posix.SIG.INT, &act, null);
-    std.posix.sigaction(std.posix.SIG.TERM, &act, null);
+    platform.onSignal(.INT, onSignal);
+    platform.onSignal(.TERM, onSignal);
 
     var pc = PrintCtx{};
     var o = opts;

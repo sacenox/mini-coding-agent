@@ -8,7 +8,6 @@ pub const Thinking = enum { off, budget, effort };
 
 pub const Model = struct {
     id: []const u8,
-    name: []const u8,
     api: []const u8,
     provider: []const u8,
     base_url: []const u8,
@@ -128,7 +127,6 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
         };
         return Model{
             .id = model_id,
-            .name = info.name,
             .api = info.api,
             .provider = provider_id,
             .base_url = info.base_url,
@@ -150,7 +148,6 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
             if (!std.mem.eql(u8, m.id, model_id)) continue;
             return Model{
                 .id = m.id,
-                .name = m.name orelse m.id,
                 .api = @tagName(m.api),
                 .provider = provider_id,
                 .base_url = m.baseUrl,

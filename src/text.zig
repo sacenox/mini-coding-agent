@@ -6,6 +6,15 @@ pub fn isBinary(bytes: []const u8) bool {
     return std.mem.indexOfScalar(u8, bytes[0..@min(bytes.len, binary_sniff)], 0) != null;
 }
 
+pub fn join(a: std.mem.Allocator, parts: []const []const u8, sep: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (parts, 0..) |part, i| {
+        if (i > 0) try out.appendSlice(a, sep);
+        try out.appendSlice(a, part);
+    }
+    return out.items;
+}
+
 fn utf8SeqLen(p: []const u8) ?usize {
     if (p.len == 0) return null;
     const c = p[0];

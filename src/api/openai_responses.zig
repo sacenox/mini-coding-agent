@@ -78,12 +78,11 @@ fn buildBody(req: api.Request) ![]u8 {
         (if (req.model.max_tokens > 16) req.model.max_tokens else 16)
     else
         null;
-    const effort = if (req.effort.len > 0 and !std.mem.eql(u8, req.effort, "off")) req.effort else null;
     const body = Body{
         .model = req.model.id,
         .instructions = if (req.system_prompt.len > 0) req.system_prompt else null,
         .max_output_tokens = max_tokens,
-        .reasoning = if (effort) |e| .{ .effort = e } else null,
+        .reasoning = if (api.effortOn(req)) |e| .{ .effort = e } else null,
         .input = try buildInput(a, req),
         .tools = if (req.tools_json.len > 0) .{ .a = a, .json = req.tools_json, .form = .{
             .open = "[",

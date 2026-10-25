@@ -363,30 +363,6 @@ const State = struct {
     }
 };
 
-fn mapStopReason(st: *State, has_calls: bool) void {
-    if (has_calls) {
-        st.msg.stop_reason = .tool_use;
-        return;
-    }
-    const reason = st.stop_reason orelse {
-        st.msg.stop_reason = .stop;
-        return;
-    };
-    if (std.mem.eql(u8, reason, "max_tokens")) {
-        st.msg.stop_reason = .length;
-    } else if (std.mem.eql(u8, reason, "tool_use")) {
-        st.msg.stop_reason = .tool_use;
-    } else if (std.mem.eql(u8, reason, "refusal")) {
-        st.msg.stop_reason = .err;
-        st.msg.error_message = "Provider stop_reason: refusal";
-    } else if (std.mem.eql(u8, reason, "sensitive")) {
-        st.msg.stop_reason = .err;
-        st.msg.error_message = "Provider stop_reason: sensitive";
-    } else {
-        st.msg.stop_reason = .stop;
-    }
-}
-
 fn finalize(st: *State) !void {
     const a = st.req.pers;
     for (st.blocks.items) |block| {
@@ -406,7 +382,11 @@ fn finalize(st: *State) !void {
     api.finishUsage(st.msg, st.req.model, st.usage);
 
     st.msg.raw_stop_reason = st.stop_reason;
-    mapStopReason(st, has_calls);
+    if (has_calls) {
+        st.msg.stop_reason = .tool_use;
+    } else if (!api.stopReason(st.msg, st.stop_reason)) {
+        st.msg.stop_reason = .stop;
+    }
 }
 
 const wire = api.Wire{

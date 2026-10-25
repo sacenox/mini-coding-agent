@@ -7,6 +7,7 @@ const tools = @import("tools.zig");
 const session = @import("session.zig");
 const config = @import("config.zig");
 const time = @import("time.zig");
+const text = @import("text.zig");
 
 pub const Phase = enum { preparing, waiting_model, streaming, running_tool, snapshotting, pausing, idle };
 
@@ -302,7 +303,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(message_mod.Message), int
             return;
         }
         if (cancelled(opts, listener)) return;
-        const joined = tryJoin(opts.a, held.items) catch {
+        const joined = text.join(opts.a, held.items, "\n") catch {
             listener.emit(.{ .err = "out of memory" });
             return;
         };
@@ -311,15 +312,4 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(message_mod.Message), int
             return;
         };
     }
-}
-
-fn tryJoin(a: std.mem.Allocator, parts: []const []const u8) std.mem.Allocator.Error![]const u8 {
-    if (parts.len == 0) return "";
-    if (parts.len == 1) return parts[0];
-    var out: std.ArrayList(u8) = .empty;
-    for (parts, 0..) |p, i| {
-        if (i > 0) try out.append(a, '\n');
-        try out.appendSlice(a, p);
-    }
-    return out.items;
 }

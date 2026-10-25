@@ -2,15 +2,16 @@ const std = @import("std");
 const platform = @import("platform.zig");
 const filesystem = @import("filesystem.zig");
 const config = @import("config.zig");
+const text = @import("text.zig");
 
 const Skill = struct { name: []const u8, description: []const u8, path: []const u8 };
 
 const Frontmatter = struct { name: ?[]const u8 = null, description: ?[]const u8 = null };
 
-fn frontmatter(text: []const u8) Frontmatter {
+fn frontmatter(raw: []const u8) Frontmatter {
     var out = Frontmatter{};
-    if (!std.mem.startsWith(u8, text, "---")) return out;
-    const rest = text[3..];
+    if (!std.mem.startsWith(u8, raw, "---")) return out;
+    const rest = raw[3..];
     const end = std.mem.indexOf(u8, rest, "\n---") orelse return out;
     var lines = std.mem.splitScalar(u8, rest[0..end], '\n');
     while (lines.next()) |line| {
@@ -30,8 +31,8 @@ fn discoverSkills(a: std.mem.Allocator, dirs: []const []const u8) ![]Skill {
         for (filesystem.listDir(a, root) catch continue) |entry| {
             const path = filesystem.join(a, &.{ root, entry, "SKILL.md" }) catch continue;
             if (!filesystem.fileExists(path)) continue;
-            const text = filesystem.readFileAlloc(a, path, 1 << 20) catch continue;
-            const meta = frontmatter(text);
+            const content = filesystem.readFileAlloc(a, path, 1 << 20) catch continue;
+            const meta = frontmatter(content);
             const name = meta.name orelse continue;
             try skills.append(a, .{
                 .name = name,
@@ -99,18 +100,13 @@ pub fn buildSystemPrompt(a: std.mem.Allocator, cfg: *const config.Config) !Built
         const files = try agentFiles(a);
         loaded.agent_files = files.len;
         for (files) |path| {
-            const text = try filesystem.readFileAlloc(a, path, 1 << 24);
+            const content = try filesystem.readFileAlloc(a, path, 1 << 24);
             try sections.append(a, try std.fmt.allocPrint(a, "## {s}\n\n{s}", .{
                 path,
-                std.mem.trim(u8, text, " \t\r\n"),
+                std.mem.trim(u8, content, " \t\r\n"),
             }));
         }
     }
 
-    var joined: std.ArrayList(u8) = .empty;
-    for (sections.items, 0..) |section, i| {
-        if (i > 0) try joined.appendSlice(a, "\n\n");
-        try joined.appendSlice(a, section);
-    }
-    return .{ .prompt = joined.items, .loaded = loaded };
+    return .{ .prompt = try text.join(a, sections.items, "\n\n"), .loaded = loaded };
 }

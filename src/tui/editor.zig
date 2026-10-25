@@ -4,8 +4,6 @@ const input = @import("input.zig");
 
 const TAB = 4;
 
-const physicalRows = render.physicalRows;
-
 fn isSpace(cp: u21) bool {
     return cp == ' ' or cp == '\t' or cp == '\n' or cp == '\r' or cp == 0x0b or cp == 0x0c or cp == 0xa0;
 }
@@ -249,7 +247,7 @@ pub const Editor = struct {
         var caret_line: usize = 0;
         var caret_cell: usize = 0;
         for (self.lines.items, 0..) |line, i| {
-            heights[i] = physicalRows(render.expandTabs(self.s, line.items, TAB), self.width);
+            heights[i] = render.physicalRows(render.expandTabs(self.s, line.items, TAB), self.width);
             if (i == self.row) {
                 caret_line = i;
                 caret_cell = self.cells(line.items)[self.col];

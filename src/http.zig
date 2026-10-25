@@ -40,6 +40,63 @@ const CancelWatch = struct {
     }
 };
 
+/// One request and its response, with the buffers the response reader borrows.
+/// The parts point at each other, so an exchange is always opened in place.
+const Exchange = struct {
+    a: std.mem.Allocator,
+    client: std.http.Client,
+    hdrs: std.ArrayList(std.http.Header) = .empty,
+    req: std.http.Client.Request,
+    response: std.http.Client.Response,
+    status: u16 = 0,
+    transfer: [16 * 1024]u8 = undefined,
+    decompress: std.http.Decompress = undefined,
+    decompress_buf: [std.compress.flate.max_window_len]u8 = undefined,
+    reader: *std.Io.Reader = undefined,
+
+    /// Connects and sends, leaving the response to `receive`.
+    fn open(self: *Exchange, a: std.mem.Allocator, method: std.http.Method, url: []const u8, headers: []const Header, body: ?[]const u8) HttpError!void {
+        self.a = a;
+        self.hdrs = .empty;
+        const uri = std.Uri.parse(url) catch return error.RequestFailed;
+        self.client = .{ .allocator = a, .io = platform.io };
+        errdefer self.client.deinit();
+        for (headers) |h| self.hdrs.append(a, .{ .name = h.name, .value = h.value }) catch return error.OutOfMemory;
+        errdefer self.hdrs.deinit(a);
+        self.req = self.client.request(method, uri, .{
+            .redirect_behavior = .unhandled,
+            .extra_headers = self.hdrs.items,
+            .headers = .{ .user_agent = .{ .override = user_agent } },
+        }) catch return error.RequestFailed;
+        errdefer self.req.deinit();
+        if (body) |b| {
+            self.req.transfer_encoding = .{ .content_length = b.len };
+            var bw = self.req.sendBodyUnflushed(&.{}) catch return error.RequestFailed;
+            bw.writer.writeAll(b) catch return error.RequestFailed;
+            bw.end() catch return error.RequestFailed;
+            self.req.connection.?.flush() catch return error.RequestFailed;
+        } else {
+            self.req.sendBodiless() catch return error.RequestFailed;
+        }
+    }
+
+    fn receive(self: *Exchange) HttpError!void {
+        self.response = self.req.receiveHead(&.{}) catch return error.RequestFailed;
+        self.status = @backingInt(self.response.head.status);
+        self.reader = self.response.readerDecompressing(&self.transfer, &self.decompress, &self.decompress_buf);
+    }
+
+    fn ok(self: *Exchange) bool {
+        return self.status >= 200 and self.status < 300;
+    }
+
+    fn close(self: *Exchange) void {
+        self.req.deinit();
+        self.hdrs.deinit(self.a);
+        self.client.deinit();
+    }
+};
+
 pub fn get(
     a: std.mem.Allocator,
     url: []const u8,
@@ -47,32 +104,12 @@ pub fn get(
     cancel: *const std.atomic.Value(bool),
 ) HttpError![]u8 {
     if (cancel.load(.acquire)) return error.Aborted;
-    const uri = std.Uri.parse(url) catch return error.RequestFailed;
-    var client: std.http.Client = .{ .allocator = a, .io = platform.io };
-    defer client.deinit();
-
-    var hdrs: std.ArrayList(std.http.Header) = .empty;
-    defer hdrs.deinit(a);
-    for (headers) |h| hdrs.append(a, .{ .name = h.name, .value = h.value }) catch return error.OutOfMemory;
-
-    var req = client.request(.GET, uri, .{
-        .redirect_behavior = .unhandled,
-        .extra_headers = hdrs.items,
-        .headers = .{ .user_agent = .{ .override = user_agent } },
-    }) catch return error.RequestFailed;
-    defer req.deinit();
-
-    req.sendBodiless() catch return error.RequestFailed;
-    var response = req.receiveHead(&.{}) catch return error.RequestFailed;
-    const status = @backingInt(response.head.status);
-
-    var transfer: [16 * 1024]u8 = undefined;
-    var decompress: std.http.Decompress = undefined;
-    var decompress_buf: [std.compress.flate.max_window_len]u8 = undefined;
-    const reader = response.readerDecompressing(&transfer, &decompress, &decompress_buf);
-
-    if (status < 200 or status >= 300) return error.HttpStatus;
-    return reader.allocRemaining(a, .limited(1 << 22)) catch return error.ReadFailed;
+    var ex: Exchange = undefined;
+    try ex.open(a, .GET, url, headers, null);
+    defer ex.close();
+    try ex.receive();
+    if (!ex.ok()) return error.HttpStatus;
+    return ex.reader.allocRemaining(a, .limited(1 << 22)) catch return error.ReadFailed;
 }
 
 pub fn postSse(
@@ -85,44 +122,20 @@ pub fn postSse(
     err_body: *?[]const u8,
 ) HttpError!void {
     if (cancel.load(.acquire)) return error.Aborted;
-    const uri = std.Uri.parse(url) catch return error.RequestFailed;
-    var client: std.http.Client = .{ .allocator = a, .io = platform.io };
-    defer client.deinit();
+    var ex: Exchange = undefined;
+    try ex.open(a, .POST, url, headers, body);
+    defer ex.close();
 
-    var hdrs: std.ArrayList(std.http.Header) = .empty;
-    defer hdrs.deinit(a);
-    for (headers) |h| hdrs.append(a, .{ .name = h.name, .value = h.value }) catch return error.OutOfMemory;
-
-    var req = client.request(.POST, uri, .{
-        .redirect_behavior = .unhandled,
-        .extra_headers = hdrs.items,
-        .headers = .{ .user_agent = .{ .override = user_agent } },
-    }) catch return error.RequestFailed;
-    defer req.deinit();
-
-    req.transfer_encoding = .{ .content_length = body.len };
-    var bw = req.sendBodyUnflushed(&.{}) catch return error.RequestFailed;
-    bw.writer.writeAll(body) catch return error.RequestFailed;
-    bw.end() catch return error.RequestFailed;
-    req.connection.?.flush() catch return error.RequestFailed;
-
-    var watch = CancelWatch{ .cancel = cancel, .connection = req.connection.? };
+    var watch = CancelWatch{ .cancel = cancel, .connection = ex.req.connection.? };
     const watcher = std.Thread.spawn(.{}, CancelWatch.run, .{&watch}) catch null;
     defer {
         watch.done.store(true, .release);
         if (watcher) |t| t.join();
     }
 
-    var response = req.receiveHead(&.{}) catch return error.RequestFailed;
-    const status = @backingInt(response.head.status);
-
-    var transfer: [16 * 1024]u8 = undefined;
-    var decompress: std.http.Decompress = undefined;
-    var decompress_buf: [std.compress.flate.max_window_len]u8 = undefined;
-    const reader = response.readerDecompressing(&transfer, &decompress, &decompress_buf);
-
-    if (status < 200 or status >= 300) {
-        err_body.* = reader.allocRemaining(a, .limited(1 << 20)) catch null;
+    try ex.receive();
+    if (!ex.ok()) {
+        err_body.* = ex.reader.allocRemaining(a, .limited(1 << 20)) catch null;
         return error.HttpStatus;
     }
 
@@ -139,7 +152,7 @@ pub fn postSse(
     // desynchronizes chunked transfer decoding.
     while (true) {
         if (cancel.load(.acquire)) return error.Aborted;
-        const n = reader.readSliceShort(&buf) catch return error.ReadFailed;
+        const n = ex.reader.readSliceShort(&buf) catch return error.ReadFailed;
         if (n == 0) break;
         var rest: []const u8 = buf[0..n];
         while (std.mem.indexOfScalar(u8, rest, '\n')) |nl| {

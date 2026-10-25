@@ -203,12 +203,14 @@ pub const Session = struct {
     }
 
     fn commitLine(self: *Session, scratch: std.mem.Allocator, line: []const u8) !void {
+        const f = self.file orelse return error.SessionNotOpen;
         var out: std.Io.Writer.Allocating = .init(scratch);
         defer out.deinit();
         const w = &out.writer;
         try w.writeAll(line);
         try w.writeByte('\n');
-        try self.commit(out.written());
+        try f.writeStreamingAll(platform.io, out.written());
+        try f.sync(platform.io);
     }
 
     pub fn close(self: *Session) void {
@@ -239,38 +241,23 @@ pub const Session = struct {
             const file = try std.Io.Dir.cwd().createFile(platform.io, log_path, .{ .truncate = false, .permissions = .fromMode(0o600) });
             self.id = name;
             self.file = file;
-            var header_buf: std.Io.Writer.Allocating = .init(self.a);
-            defer header_buf.deinit();
-            const w = &header_buf.writer;
-            try w.writeAll(try stringify(self.a, HeaderLine{
+            try self.commitLine(self.a, try stringify(self.a, HeaderLine{
                 .id = name,
                 .cwd = self.cwd,
                 .createdAt = time.isoAlloc(self.a),
                 .title = title,
             }));
-            try w.writeByte('\n');
-            try self.commit(header_buf.written());
             return;
         }
         return error.SessionDirectory;
     }
 
-    fn commit(self: *Session, line: []const u8) !void {
-        const f = self.file orelse return error.SessionNotOpen;
-        try f.writeStreamingAll(platform.io, line);
-        try f.sync(platform.io);
-    }
-
     fn shortId(buf: *[6]u8) void {
         var bytes: [6]u8 = undefined;
-        randomBytes(&bytes);
+        std.Io.random(platform.io, &bytes);
         for (bytes, 0..) |b, i| buf[i] = alphabet[b % 36];
     }
 };
-
-fn randomBytes(buf: []u8) void {
-    std.Io.random(platform.io, buf);
-}
 
 fn messageRecord(a: std.mem.Allocator, message: message_mod.Message) !MessageRecord {
     switch (message) {

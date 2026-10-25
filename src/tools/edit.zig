@@ -1,7 +1,6 @@
 const std = @import("std");
 const filesystem = @import("../filesystem.zig");
 const text = @import("../text.zig");
-const platform = @import("../platform.zig");
 const diff = @import("../diff.zig");
 const tools = @import("../tools.zig");
 
@@ -49,7 +48,7 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
     if (args.oldText.len == 0) {
         if (filesystem.fileExists(path)) return fail(a, "edit failed: {s} already exists", .{path});
         if (ctx.cancel.load(.acquire)) return fail(a, "edit cancelled", .{});
-        writeFile(path, args.newText) catch |e| return fail(a, "edit failed: {s}: {s}", .{ path, @errorName(e) });
+        filesystem.writeFile(path, args.newText) catch |e| return fail(a, "edit failed: {s}: {s}", .{ path, @errorName(e) });
         const cleaned = text.utf8Clean(scratch, args.newText) catch return fail(a, "edit failed: out of memory", .{});
         const patch = diff.unified(scratch, "", cleaned) catch return fail(a, "edit failed: out of memory", .{});
         return .{
@@ -74,7 +73,7 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
     const after = std.mem.concat(scratch, u8, &.{ before[0..at], args.newText, before[at + args.oldText.len ..] }) catch
         return fail(a, "edit failed: out of memory", .{});
     if (ctx.cancel.load(.acquire)) return fail(a, "edit cancelled", .{});
-    writeFile(path, after) catch |e| return fail(a, "edit failed: {s}: {s}", .{ path, @errorName(e) });
+    filesystem.writeFile(path, after) catch |e| return fail(a, "edit failed: {s}: {s}", .{ path, @errorName(e) });
     const clean_before = text.utf8Clean(scratch, before) catch return fail(a, "edit failed: out of memory", .{});
     const clean_after = text.utf8Clean(scratch, after) catch return fail(a, "edit failed: out of memory", .{});
     const patch = diff.unified(scratch, clean_before, clean_after) catch return fail(a, "edit failed: out of memory", .{});
@@ -82,10 +81,4 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
         .text = std.fmt.allocPrint(a, "edited {s}\n{s}", .{ path, patch }) catch "edited",
         .is_error = false,
     };
-}
-
-fn writeFile(path: []const u8, data: []const u8) !void {
-    const file = try std.Io.Dir.cwd().createFile(platform.io, path, .{ .truncate = true });
-    defer file.close(platform.io);
-    try file.writeStreamingAll(platform.io, data);
 }

@@ -3,8 +3,6 @@ const styles = @import("styles.zig");
 const platform = @import("../platform.zig");
 const render = @import("render.zig");
 
-const rowsForCells = render.rowsForCells;
-
 pub const LiveRegion = struct {
     widths: std.ArrayList(usize) = .empty,
     caret_line: usize = 0,
@@ -28,13 +26,13 @@ pub const LiveRegion = struct {
     fn caretRow(self: *LiveRegion, width: usize) usize {
         var row: usize = 0;
         const lines = @min(self.caret_line, self.widths.items.len);
-        for (self.widths.items[0..lines]) |cells| row += rowsForCells(cells, width);
+        for (self.widths.items[0..lines]) |cells| row += render.rowsForCells(cells, width);
         return row + self.caretCell(width) / width;
     }
 
     fn totalRows(self: *LiveRegion, width: usize) usize {
         var row: usize = 0;
-        for (self.widths.items) |cells| row += rowsForCells(cells, width);
+        for (self.widths.items) |cells| row += render.rowsForCells(cells, width);
         return row;
     }
 

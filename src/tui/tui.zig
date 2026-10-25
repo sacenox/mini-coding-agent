@@ -19,6 +19,7 @@ const usage_mod = @import("usage.zig");
 const diff_view = @import("diff_view.zig");
 const tool_view = @import("tool_view.zig");
 const image_view = @import("image.zig");
+const picker_mod = @import("picker.zig");
 const screen = @import("screen.zig");
 const history = @import("../history.zig");
 const status = @import("../status.zig");
@@ -29,24 +30,10 @@ const BODY_PREFIX = " │ ";
 const ERROR_PREFIX = " ! ";
 const TOOL_BODY: styles.Style = .{ .dim = true };
 
-const physicalRows = render.physicalRows;
-const rowsForCells = render.rowsForCells;
-
 const PendingCall = tool_view.PendingCall;
+const Picker = picker_mod.Picker;
 
 const Command = commands.Command;
-
-const Picker = struct {
-    kind: enum { provider, model, thinking, history },
-    title: []const u8,
-    ids: []const []const u8 = &.{},
-    labels: []const []const u8 = &.{},
-    provider: []const u8 = "",
-    draft: []const u8 = "",
-    query: std.ArrayList(u8) = .empty,
-    matches: std.ArrayList(usize) = .empty,
-    sel: usize = 0,
-};
 
 var resize_flag = std.atomic.Value(bool).init(false);
 var exit_flag = std.atomic.Value(bool).init(false);
@@ -343,7 +330,7 @@ const Tui = struct {
         const width = @max(self.term.width(), 1);
         const height = @max(self.term.height() - 1, 1);
         const status_line = self.statusLine();
-        const status_rows = physicalRows(status_line, width);
+        const status_rows = render.physicalRows(status_line, width);
         const editor_budget = height -| status_rows;
         const ed = self.editor.layout(width, @max(editor_budget, 1));
 
@@ -491,13 +478,16 @@ const Tui = struct {
         }
     }
 
-    fn renderPendingCall(self: *Tui) void {
-        if (self.pending_calls.items.len == 0) return;
-        const call = &self.pending_calls.items[0];
+    fn renderCall(self: *Tui, call: *PendingCall) void {
         if (call.rendered) return;
         self.scrollback.separator = true;
         for (tool_view.callBody(self.s, call.name, call.summary, @max(self.term.width(), 1))) |row| self.push(row);
         call.rendered = true;
+    }
+
+    fn renderPendingCall(self: *Tui) void {
+        if (self.pending_calls.items.len == 0) return;
+        self.renderCall(&self.pending_calls.items[0]);
     }
 
     fn commitToolResult(self: *Tui, name: []const u8, text: []const u8, is_error: bool, diffs: []const tools_index.FileDiff, body: ?[]const u8, images: []const message_mod.ImageContent) void {
@@ -505,12 +495,9 @@ const Tui = struct {
         const meta: ?[]const u8 = if (!is_error) body else null;
         var head_committed = false;
         if (self.pending_calls.items.len > 0) {
-            const call = self.pending_calls.orderedRemove(0);
+            var call = self.pending_calls.orderedRemove(0);
             head_committed = true;
-            if (!call.rendered) {
-                self.scrollback.separator = true;
-                for (tool_view.callBody(self.s, call.name, call.summary, @max(self.term.width(), 1))) |row| self.push(row);
-            }
+            self.renderCall(&call);
         }
         if (!head_committed) self.scrollback.separator = true;
         if (self.cfg.show_images) self.commitImages(images);
@@ -557,12 +544,12 @@ const Tui = struct {
     }
 
     fn flushCalls(self: *Tui) void {
-        for (self.pending_calls.items) |call| {
-            if (call.rendered) continue;
-            self.scrollback.separator = true;
-            for (tool_view.callBody(self.s, call.name, call.summary, @max(self.term.width(), 1))) |row| self.push(row);
-        }
+        for (self.pending_calls.items) |*call| self.renderCall(call);
         self.pending_calls.clearRetainingCapacity();
+        self.resetCalls();
+    }
+
+    fn resetCalls(self: *Tui) void {
         _ = self.calls.reset(.retain_capacity);
         self.ca = self.calls.allocator();
     }
@@ -609,7 +596,7 @@ const Tui = struct {
         p.labels = labels;
         p.draft = self.picker_m.dupe(u8, self.editor.contents()) catch "";
         self.editor.clear();
-        self.pickerRefresh();
+        p.refresh(self.picker_m);
         self.dirty = true;
     }
 
@@ -812,8 +799,7 @@ const Tui = struct {
         self.retry = false;
         self.phase = .idle;
         self.stream_kind = .none;
-        _ = self.calls.reset(.retain_capacity);
-        self.ca = self.calls.allocator();
+        self.resetCalls();
         self.dirty = true;
     }
 
@@ -881,17 +867,17 @@ const Tui = struct {
         if (self.picker) |*p| p.provider = self.model_provider;
     }
 
-    fn openPicker(self: *Tui, kind: @FieldType(Picker, "kind"), title: []const u8, ids: []const []const u8, labels: []const []const u8) void {
+    fn openPicker(self: *Tui, kind: picker_mod.Kind, title: []const u8, ids: []const []const u8, labels: []const []const u8) void {
         self.startPicker(kind, title);
         if (self.picker) |*p| {
             p.ids = ids;
             p.labels = labels;
+            p.refresh(self.picker_m);
         }
-        self.pickerRefresh();
         self.dirty = true;
     }
 
-    fn startPicker(self: *Tui, kind: @FieldType(Picker, "kind"), title: []const u8) void {
+    fn startPicker(self: *Tui, kind: picker_mod.Kind, title: []const u8) void {
         _ = self.picker_arena.reset(.retain_capacity);
         self.picker_m = self.picker_arena.allocator();
         self.picker = .{ .kind = kind, .title = title };
@@ -902,59 +888,26 @@ const Tui = struct {
         self.picker = null;
     }
 
-    fn pickerRefresh(self: *Tui) void {
-        const p = &(self.picker orelse return);
-        p.matches.clearRetainingCapacity();
-        const query = p.query.items;
-        const n = @min(p.ids.len, p.labels.len);
-        for (p.ids[0..n], p.labels[0..n], 0..) |id, label, i| {
-            if (query.len != 0 and std.ascii.findIgnoreCase(label, query) == null and
-                std.ascii.findIgnoreCase(id, query) == null) continue;
-            p.matches.append(self.picker_m, i) catch {};
-        }
-        p.sel = if (p.matches.items.len == 0) 0 else @min(p.sel, p.matches.items.len - 1);
-    }
-
     fn pickerKey(self: *Tui, key: input.Key) void {
         const p = &(self.picker orelse return);
-        switch (key) {
-            .text => |t| {
-                p.query.appendSlice(self.picker_m, t) catch {};
-                p.sel = 0;
-                self.pickerRefresh();
-            },
-            .backspace => {
-                if (p.query.items.len > 0) {
-                    var start = p.query.items.len - 1;
-                    while (start > 0 and (p.query.items[start] & 0xc0) == 0x80) start -= 1;
-                    p.query.shrinkRetainingCapacity(start);
-                    p.sel = 0;
-                    self.pickerRefresh();
-                }
-            },
-            .up, .history_prev => if (p.sel > 0) {
-                p.sel -= 1;
-            },
-            .down, .history_next => if (p.sel + 1 < p.matches.items.len) {
-                p.sel += 1;
-            },
-            .submit => self.pickerAccept(),
-            .escape, .interrupt => {
+        switch (p.key(self.picker_m, key)) {
+            .ignore => return,
+            .update => {},
+            .accept => self.pickerAccept(),
+            .cancel => {
                 const draft = p.draft;
                 const restore = p.kind == .history;
                 self.closePicker();
                 self.command_active = false;
                 if (restore) self.editor.setText(draft);
             },
-            else => return,
         }
         self.dirty = true;
     }
 
     fn pickerAccept(self: *Tui) void {
         const p = self.picker orelse return;
-        if (p.matches.items.len == 0) return;
-        const id = p.ids[p.matches.items[p.sel]];
+        const id = p.current() orelse return;
         const kind = p.kind;
         const provider_id = p.provider;
         self.closePicker();
@@ -1134,21 +1087,8 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
 
     self.term.start();
     defer self.term.stop();
-    const act = std.posix.Sigaction{
-        .handler = .{ .handler = onWinch },
-        .mask = std.posix.sigemptyset(),
-        .flags = 0,
-    };
-    std.posix.sigaction(std.posix.SIG.WINCH, &act, null);
-    const term_act = std.posix.Sigaction{
-        .handler = .{ .handler = onExitSignal },
-        .mask = std.posix.sigemptyset(),
-        .flags = 0,
-    };
-    std.posix.sigaction(std.posix.SIG.TERM, &term_act, null);
-    std.posix.sigaction(std.posix.SIG.INT, &term_act, null);
-    std.posix.sigaction(std.posix.SIG.HUP, &term_act, null);
-    std.posix.sigaction(std.posix.SIG.QUIT, &term_act, null);
+    platform.onSignal(.WINCH, onWinch);
+    for ([_]std.posix.SIG{ .TERM, .INT, .HUP, .QUIT }) |sig| platform.onSignal(sig, onExitSignal);
 
     status.report("idle", null, null);
     self.pushBanner();

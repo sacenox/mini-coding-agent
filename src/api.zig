@@ -141,18 +141,18 @@ pub fn blockAt(comptime T: type, list: *std.ArrayList(T), a: std.mem.Allocator, 
     return &list.items[idx];
 }
 
+const StreamFn = *const fn (Request, Sink) std.mem.Allocator.Error!message_mod.AssistantMessage;
+
+const routes = [_]struct { api: []const u8, stream: StreamFn }{
+    .{ .api = "openai-completions", .stream = @import("api/openai_completions.zig").stream },
+    .{ .api = "openai-responses", .stream = @import("api/openai_responses.zig").stream },
+    .{ .api = "anthropic-messages", .stream = @import("api/anthropic_messages.zig").stream },
+    .{ .api = "google-generative-ai", .stream = @import("api/google_generative_ai.zig").stream },
+};
+
 pub fn stream(req: Request, sink: Sink) std.mem.Allocator.Error!message_mod.AssistantMessage {
-    if (std.mem.eql(u8, req.model.api, "openai-completions")) {
-        return @import("api/openai_completions.zig").stream(req, sink);
-    }
-    if (std.mem.eql(u8, req.model.api, "anthropic-messages")) {
-        return @import("api/anthropic_messages.zig").stream(req, sink);
-    }
-    if (std.mem.eql(u8, req.model.api, "openai-responses")) {
-        return @import("api/openai_responses.zig").stream(req, sink);
-    }
-    if (std.mem.eql(u8, req.model.api, "google-generative-ai")) {
-        return @import("api/google_generative_ai.zig").stream(req, sink);
+    for (routes) |route| {
+        if (std.mem.eql(u8, req.model.api, route.api)) return route.stream(req, sink);
     }
     var msg = newAssistant(req);
     msg.stop_reason = .err;
@@ -261,6 +261,39 @@ pub fn appendCalls(msg: *message_mod.AssistantMessage, sink: Sink, a: std.mem.Al
         } });
     }
     return any;
+}
+
+/// The reasoning effort to send, or null when reasoning is off for this turn.
+pub fn effortOn(req: Request) ?[]const u8 {
+    if (req.effort.len == 0 or std.mem.eql(u8, req.effort, "off")) return null;
+    return req.effort;
+}
+
+/// The wire stop reasons that carry a meaning of their own; anything else is a
+/// plain stop, which the caller falls back to.
+const stop_reasons = [_]struct { wire: []const u8, reason: message_mod.StopReason, message: ?[]const u8 = null }{
+    .{ .wire = "length", .reason = .length },
+    .{ .wire = "max_tokens", .reason = .length },
+    .{ .wire = "MAX_TOKENS", .reason = .length },
+    .{ .wire = "tool_use", .reason = .tool_use },
+    .{ .wire = "tool_calls", .reason = .tool_use },
+    .{ .wire = "function_call", .reason = .tool_use },
+    .{ .wire = "content_filter", .reason = .err, .message = "Provider finish_reason: content_filter" },
+    .{ .wire = "refusal", .reason = .err, .message = "Provider stop_reason: refusal" },
+    .{ .wire = "sensitive", .reason = .err, .message = "Provider stop_reason: sensitive" },
+};
+
+/// Applies a provider's own stop reason. Returns false when the table has no
+/// entry for it, so the caller can fall back to its own default.
+pub fn stopReason(msg: *message_mod.AssistantMessage, raw: ?[]const u8) bool {
+    const wire = raw orelse return false;
+    for (stop_reasons) |entry| {
+        if (!std.mem.eql(u8, entry.wire, wire)) continue;
+        msg.stop_reason = entry.reason;
+        msg.error_message = entry.message;
+        return true;
+    }
+    return false;
 }
 
 pub fn argumentsOrObject(args: []const u8) []const u8 {

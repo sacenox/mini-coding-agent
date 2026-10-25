@@ -90,7 +90,7 @@ fn buildMessages(a: std.mem.Allocator, req: api.Request) ![]const Message {
     // Some upstreams reject a thinking-mode request whose assistant messages omit
     // reasoning_content, even when the turn produced none, so the field is always
     // sent (empty) while reasoning is on.
-    const reasoning_on = req.effort.len > 0 and !std.mem.eql(u8, req.effort, "off");
+    const reasoning_on = api.effortOn(req) != null;
     if (req.system_prompt.len > 0) {
         try out.append(a, .{ .system = .{ .content = req.system_prompt } });
     }
@@ -134,10 +134,9 @@ fn buildMessages(a: std.mem.Allocator, req: api.Request) ![]const Message {
 
 fn buildBody(req: api.Request) ![]u8 {
     const a = req.scratch;
-    const effort = if (req.effort.len > 0 and !std.mem.eql(u8, req.effort, "off")) req.effort else null;
     const body = Body{
         .model = req.model.id,
-        .reasoning_effort = effort,
+        .reasoning_effort = api.effortOn(req),
         .messages = try buildMessages(a, req),
         .tools = if (req.tools_json.len > 0) .{ .a = a, .json = req.tools_json, .form = .{
             .open = "[",
@@ -285,34 +284,17 @@ fn usageOf(u: Chunk.Usage) message_mod.Usage {
     return usage;
 }
 
-fn mapStopReason(st: *State, has_calls: bool) void {
-    if (has_calls) {
-        st.msg.stop_reason = .tool_use;
-        return;
-    }
-    const reason = st.finish_reason orelse {
-        st.msg.stop_reason = .stop;
-        return;
-    };
-    if (std.mem.eql(u8, reason, "length")) {
-        st.msg.stop_reason = .length;
-    } else if (std.mem.eql(u8, reason, "function_call") or std.mem.eql(u8, reason, "tool_calls")) {
-        st.msg.stop_reason = .tool_use;
-    } else if (std.mem.eql(u8, reason, "content_filter")) {
-        st.msg.stop_reason = .err;
-        st.msg.error_message = "Provider finish_reason: content_filter";
-    } else {
-        st.msg.stop_reason = .stop;
-    }
-}
-
 fn finalize(st: *State) !void {
     const a = st.req.pers;
     try api.appendParts(st.msg, a, st.thinking.items, st.signature, st.text.items);
     const has_calls = try api.appendCalls(st.msg, st.sink, a, st.calls.items, st.failed);
     api.finishUsage(st.msg, st.req.model, st.usage);
     st.msg.raw_stop_reason = st.finish_reason;
-    mapStopReason(st, has_calls);
+    if (has_calls) {
+        st.msg.stop_reason = .tool_use;
+    } else if (!api.stopReason(st.msg, st.finish_reason)) {
+        st.msg.stop_reason = .stop;
+    }
 }
 
 const wire = api.Wire{
