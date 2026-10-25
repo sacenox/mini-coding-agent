@@ -496,7 +496,7 @@ const Tui = struct {
         const call = &self.pending_calls.items[0];
         if (call.rendered) return;
         self.scrollback.separator = true;
-        self.commitLines(tool_view.callBody(self.s, call.name, call.summary));
+        for (tool_view.callBody(self.s, call.name, call.summary, @max(self.term.width(), 1))) |row| self.push(row);
         call.rendered = true;
     }
 
@@ -509,7 +509,7 @@ const Tui = struct {
             head_committed = true;
             if (!call.rendered) {
                 self.scrollback.separator = true;
-                self.commitLines(tool_view.callBody(self.s, call.name, call.summary));
+                for (tool_view.callBody(self.s, call.name, call.summary, @max(self.term.width(), 1))) |row| self.push(row);
             }
         }
         if (!head_committed) self.scrollback.separator = true;
@@ -560,7 +560,7 @@ const Tui = struct {
         for (self.pending_calls.items) |call| {
             if (call.rendered) continue;
             self.scrollback.separator = true;
-            self.commitLines(tool_view.callBody(self.s, call.name, call.summary));
+            for (tool_view.callBody(self.s, call.name, call.summary, @max(self.term.width(), 1))) |row| self.push(row);
         }
         self.pending_calls.clearRetainingCapacity();
         _ = self.calls.reset(.retain_capacity);

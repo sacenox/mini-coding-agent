@@ -38,10 +38,10 @@ pub fn callSummary(a: std.mem.Allocator, name: []const u8, args_json: []const u8
     return args_json;
 }
 
-pub fn callBody(a: std.mem.Allocator, name: []const u8, summary: []const u8) []const BodyLine {
+pub fn callBody(a: std.mem.Allocator, name: []const u8, summary: []const u8, width: usize) []const []const u8 {
     const head = callHead(a, name);
     const body = summary;
-    var out: std.ArrayList(BodyLine) = .empty;
+    var rows: std.ArrayList([]const u8) = .empty;
     var it = std.mem.splitScalar(u8, body, '\n');
     var i: usize = 0;
     while (it.next()) |line| : (i += 1) {
@@ -50,9 +50,9 @@ pub fn callBody(a: std.mem.Allocator, name: []const u8, summary: []const u8) []c
             std.fmt.allocPrint(a, "{s}  {s}", .{ head, args }) catch line
         else
             args;
-        out.append(a, .{ .text = text }) catch {};
+        rows.append(a, text) catch {};
     }
-    return out.items;
+    return render.elide(a, rows.items, width);
 }
 
 pub const Result = struct {

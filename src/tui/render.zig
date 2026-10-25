@@ -230,7 +230,10 @@ pub fn plainRows(a: std.mem.Allocator, lines: []const BodyLine, base: styles.Sty
 }
 
 pub fn bodyRows(a: std.mem.Allocator, lines: []const BodyLine, width: usize, base: styles.Style) []const []const u8 {
-    const rows = plainRows(a, lines, base);
+    return elide(a, plainRows(a, lines, base), width);
+}
+
+pub fn elide(a: std.mem.Allocator, rows: []const []const u8, width: usize) []const []const u8 {
     var height: usize = 0;
     for (rows) |r| height += physicalRows(r, width);
     if (height <= max_body_rows or rows.len <= elided_head + elided_tail) return rows;
