@@ -36,10 +36,16 @@ const PendingCall = tool_view.PendingCall;
 
 const Command = commands.Command;
 
-const Search = struct {
+const Picker = struct {
+    kind: enum { provider, model, thinking, history },
+    title: []const u8,
+    ids: []const []const u8 = &.{},
+    labels: []const []const u8 = &.{},
+    provider: []const u8 = "",
+    draft: []const u8 = "",
     query: std.ArrayList(u8) = .empty,
-    saved: []const u8 = "",
-    match: ?[]const u8 = null,
+    matches: std.ArrayList(usize) = .empty,
+    sel: usize = 0,
 };
 
 var resize_flag = std.atomic.Value(bool).init(false);
@@ -123,18 +129,13 @@ const Tui = struct {
     last_input_ms: i64 = 0,
     command_active: bool = false,
 
-    search: ?Search = null,
+    picker_arena: std.heap.ArenaAllocator,
+    picker_m: std.mem.Allocator = undefined,
 
     hist_index: ?usize = null,
     hist_saved: []const u8 = "",
 
-    prompt_open: bool = false,
-    prompt_options: []const []const u8 = &.{},
-    prompt_ids: []const []const u8 = &.{},
-    prompt_answer: []const u8 = "",
-    prompt_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    pending_command: enum { none, provider, model, thinking } = .none,
-    pending_provider: ?[]const u8 = null,
+    picker: ?Picker = null,
 
     model_thread: ?std.Thread = null,
     model_abort: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -162,6 +163,7 @@ const Tui = struct {
             .qarena = std.heap.ArenaAllocator.init(a),
             .q = undefined,
             .model_arena = std.heap.ArenaAllocator.init(a),
+            .picker_arena = std.heap.ArenaAllocator.init(a),
             .reply = undefined,
         };
     }
@@ -173,6 +175,7 @@ const Tui = struct {
         self.ca = self.calls.allocator();
         self.q = self.qarena.allocator();
         self.model_m = self.model_arena.allocator();
+        self.picker_m = self.picker_arena.allocator();
         self.editor = editor_mod.Editor.init(self.backing);
         self.editor.bind();
         self.editor.s = self.s;
@@ -224,9 +227,13 @@ const Tui = struct {
         else
             std.fmt.allocPrint(self.s, "{s} · no model configured", .{brand}) catch brand);
         const loaded = self.opts.loaded;
-        self.push(std.fmt.allocPrint(self.s, "{d} agent files · {d} skills", .{
-            loaded.agent_files, loaded.skills,
-        }) catch "resources");
+        var parts: std.ArrayList([]const u8) = .empty;
+        if (loaded.agent_files > 0)
+            parts.append(self.s, plural(self.s, loaded.agent_files, "agent file", "agent files")) catch {};
+        if (loaded.skills > 0)
+            parts.append(self.s, plural(self.s, loaded.skills, "skill", "skills")) catch {};
+        if (parts.items.len > 0)
+            self.push(styles.comment(self.s, std.mem.join(self.s, " · ", parts.items) catch "resources"));
         self.scrollback.separator = true;
     }
 
@@ -314,6 +321,10 @@ const Tui = struct {
         return out.items;
     }
 
+    fn plural(a: std.mem.Allocator, n: usize, one: []const u8, many: []const u8) []const u8 {
+        return std.fmt.allocPrint(a, "{d} {s}", .{ n, if (n == 1) one else many }) catch many;
+    }
+
     fn spinnerChar(frame: usize) []const u8 {
         var idx = frame % 256;
         var i: usize = 0;
@@ -340,26 +351,30 @@ const Tui = struct {
         lines.append(self.s, status_line) catch {};
         var caret_line: usize = 0;
         var caret_col: usize = 0;
-        if (self.search) |sr| {
-            const prompt = std.fmt.allocPrint(self.s, "reverse: {s}", .{sr.query.items}) catch "reverse: ";
+        if (self.picker) |*p| {
+            const prefix = std.fmt.allocPrint(self.s, "{s} › ", .{p.title}) catch "";
+            lines.append(self.s, std.fmt.allocPrint(self.s, "{s}{s}", .{
+                styles.styledWith(self.s, .{ .fg = styles.roles.prompt, .bold = true }, prefix),
+                render.sanitize(self.s, p.query.items),
+            }) catch "> ") catch {};
             caret_line = 1;
-            caret_col = "reverse: ".len + sr.query.items.len;
-            lines.append(self.s, prompt) catch {};
-            if (self.searchMatch(&sr)) |m| {
-                const text = render.sanitize(self.s, m);
-                const budget_rows = @max(height -| 2, 1);
-                var used: usize = 0;
-                var it = std.mem.splitScalar(u8, text, '\n');
-                while (it.next()) |raw| {
-                    const part = if (raw.len == 0) " " else raw;
-                    for (render.wrapLine(self.s, part, width)) |row| {
-                        if (used >= budget_rows) break;
-                        used += 1;
-                        lines.append(self.s, styles.comment(self.s, row)) catch {};
-                    }
-                }
+            caret_col = render.displayWidth(prefix) + render.displayWidth(p.query.items);
+            if (p.matches.items.len == 0) {
+                lines.append(self.s, styles.comment(self.s, "  no matches")) catch {};
             } else {
-                lines.append(self.s, styles.comment(self.s, "no matches")) catch {};
+                const budget = @max(height -| 2, 1);
+                const first = if (p.sel >= budget) p.sel + 1 - budget else 0;
+                const last = @min(p.matches.items.len, first + budget);
+                for (p.matches.items[first..last], first..) |idx, i| {
+                    const row = std.fmt.allocPrint(self.s, "{s}{s}", .{
+                        if (i == p.sel) "❯ " else "  ",
+                        render.sanitize(self.s, p.labels[idx]),
+                    }) catch p.labels[idx];
+                    lines.append(self.s, if (i == p.sel)
+                        styles.styledWith(self.s, .{ .fg = styles.roles.prompt, .bold = true }, row)
+                    else
+                        styles.comment(self.s, row)) catch {};
+                }
             }
         } else {
             for (ed.rows) |r| lines.append(self.s, r) catch {};
@@ -374,12 +389,6 @@ const Tui = struct {
         self.sa = self.sarena.allocator();
     }
 
-    fn searchMatch(self: *Tui, sr: *const Search) ?[]const u8 {
-        for (self.history.entries.items) |entry| {
-            if (sr.query.items.len == 0 or std.ascii.findIgnoreCase(entry, sr.query.items) != null) return entry;
-        }
-        return null;
-    }
     fn keepName(self: *Tui, slot: *?[]const u8, value: ?[]const u8) void {
         if (slot.*) |old| self.backing.free(old);
         slot.* = if (value) |v| self.backing.dupe(u8, v) catch null else null;
@@ -585,64 +594,33 @@ const Tui = struct {
         self.dirty = true;
     }
 
-    fn openSearch(self: *Tui) void {
+    fn openHistorySearch(self: *Tui) void {
         self.resetHistory();
-        const draft = self.editor.contents();
-        self.search = .{ .saved = self.backing.dupe(u8, draft) catch return };
-        self.editor.clear();
-        self.dirty = true;
-    }
-
-    fn closeSearch(self: *Tui, restore: bool, chosen: ?[]const u8) void {
-        var search = self.search orelse return;
-        self.search = null;
-        self.editor.clear();
-        defer self.dirty = true;
-        if (chosen) |text| self.editor.setText(text);
-        if (restore) self.editor.setText(search.saved);
-        self.backing.free(search.saved);
-        search.query.deinit(self.backing);
-    }
-
-    fn searchKey(self: *Tui, key: input.Key) void {
-        const search = &(self.search orelse return);
-        switch (key) {
-            .text => |t| search.query.appendSlice(self.backing, t) catch {},
-            .backspace => {
-                if (search.query.items.len > 0) {
-                    var start = search.query.items.len - 1;
-                    while (start > 0 and (search.query.items[start] & 0xc0) == 0x80) start -= 1;
-                    search.query.shrinkRetainingCapacity(start);
-                }
-            },
-            .interrupt => return self.closeSearch(true, null),
-            .escape => return self.closeSearch(true, null),
-            .submit => return self.searchSubmit(),
-            else => {},
+        self.startPicker(.history, "history");
+        const p = &(self.picker orelse return);
+        const entries = self.history.entries.items;
+        const ids = self.picker_m.alloc([]const u8, entries.len) catch return;
+        const labels = self.picker_m.alloc([]const u8, entries.len) catch return;
+        for (entries, 0..) |e, i| {
+            ids[i] = e;
+            labels[i] = e[0 .. std.mem.indexOfScalar(u8, e, '\n') orelse e.len];
         }
+        p.ids = ids;
+        p.labels = labels;
+        p.draft = self.picker_m.dupe(u8, self.editor.contents()) catch "";
+        self.editor.clear();
+        self.pickerRefresh();
         self.dirty = true;
-    }
-
-    fn searchSubmit(self: *Tui) void {
-        var match: ?[]const u8 = null;
-        const query = self.search.?.query.items;
-        for (self.history.entries.items) |entry| {
-            if (query.len == 0 or std.ascii.findIgnoreCase(entry, query) != null) {
-                match = entry;
-                break;
-            }
-        }
-        if (match) |text| self.closeSearch(false, text) else self.dirty = true;
     }
 
     fn handleKey(self: *Tui, key: input.Key) void {
         self.resetScratch();
-        if (self.search != null) {
-            self.searchKey(key);
+        if (self.picker != null) {
+            self.pickerKey(key);
             return;
         }
         if (key == .reverse_search) {
-            self.openSearch();
+            self.openHistorySearch();
             return;
         }
         if (key == .history_prev) {
@@ -670,7 +648,7 @@ const Tui = struct {
                 self.dirty = true;
             } else if (self.command_active) {
                 self.command_active = false;
-                self.prompt_open = false;
+                self.closePicker();
                 self.model_abort.store(true, .seq_cst);
                 self.dirty = true;
             } else if (self.editor.contents().len != 0) {
@@ -715,13 +693,6 @@ const Tui = struct {
                 self.steering_ready.store(true, .seq_cst);
                 self.dirty = true;
             }
-            return;
-        }
-        if (self.prompt_open) {
-            self.editor.clear();
-            self.prompt_answer = self.a.dupe(u8, text) catch text;
-            self.prompt_ready.store(true, .seq_cst);
-            self.dirty = true;
             return;
         }
         if (self.command_active) return;
@@ -793,13 +764,14 @@ const Tui = struct {
                 const m = self.opts.model orelse return self.fail("! no model configured", .{});
                 self.startModelFetch(m.provider);
             },
-            .thinking => {
-                const m = self.opts.model orelse return self.fail("! no model configured", .{});
-                const levels = models_mod.supportedLevels(self.a, self.cfg, m.provider, m.id);
-                self.beginPrompt("Select a thinking level", levels, levels);
-                self.pending_command = .thinking;
-            },
+            .thinking => self.startThinkingSelect(),
         }
+    }
+
+    fn startThinkingSelect(self: *Tui) void {
+        const m = self.opts.model orelse return self.fail("! no model configured", .{});
+        const levels = models_mod.supportedLevels(self.a, self.cfg, m.provider, m.id);
+        self.openPicker(.thinking, "thinking", levels, levels);
     }
 
     fn showHelp(self: *Tui) void {
@@ -834,11 +806,6 @@ const Tui = struct {
         self.pending_calls.clearRetainingCapacity();
         self.streamed.clearRetainingCapacity();
         self.reply.reset();
-        if (self.search) |*sr| {
-            self.backing.free(sr.saved);
-            sr.query.deinit(self.backing);
-            self.search = null;
-        }
         self.keepName(&self.detail, null);
         self.keepName(&self.writing_tool, null);
         self.steering_text = "";
@@ -863,8 +830,7 @@ const Tui = struct {
             self.fail("! no authenticated providers", .{});
             return;
         }
-        self.beginPrompt("Select a provider", names.items, ids.items);
-        self.pending_command = .provider;
+        self.openPicker(.provider, "provider", ids.items, names.items);
     }
 
     fn startModelFetch(self: *Tui, provider_id: []const u8) void {
@@ -885,7 +851,6 @@ const Tui = struct {
             return;
         };
         self.command_active = true;
-        self.prompt_open = false;
         self.note(styles.comment(self.s, "querying models..."));
         self.dirty = true;
     }
@@ -912,43 +877,98 @@ const Tui = struct {
             ids.append(self.a, e.id) catch {};
             names.append(self.a, e.name) catch {};
         }
-        self.beginPrompt(std.fmt.allocPrint(self.a, "Select a model for {s}", .{self.model_provider}) catch "Select a model", names.items, ids.items);
-        self.pending_command = .model;
-        self.pending_provider = self.model_provider;
+        self.openPicker(.model, "model", ids.items, names.items);
+        if (self.picker) |*p| p.provider = self.model_provider;
     }
 
-    fn beginPrompt(self: *Tui, message: []const u8, options: []const []const u8, ids: []const []const u8) void {
-        self.prompt_open = true;
-        self.prompt_options = options;
-        self.prompt_ids = ids;
-        self.prompt_answer = "";
-        self.prompt_ready.store(false, .seq_cst);
-        self.command_active = true;
-        self.scrollback.separator = true;
-        self.push(message);
-        for (options, 0..) |o, i| {
-            self.push(std.fmt.allocPrint(self.s, "  {d}. {s}", .{ i + 1, o }) catch o);
+    fn openPicker(self: *Tui, kind: @FieldType(Picker, "kind"), title: []const u8, ids: []const []const u8, labels: []const []const u8) void {
+        self.startPicker(kind, title);
+        if (self.picker) |*p| {
+            p.ids = ids;
+            p.labels = labels;
         }
-        self.scrollback.separator = true;
+        self.pickerRefresh();
+        self.dirty = true;
     }
 
-    fn answerPrompt(self: *Tui) void {
-        const answer = std.mem.trim(u8, self.prompt_answer, " \t\r\n");
-        const command = self.pending_command;
-        self.prompt_open = false;
-        self.prompt_answer = "";
+    fn startPicker(self: *Tui, kind: @FieldType(Picker, "kind"), title: []const u8) void {
+        _ = self.picker_arena.reset(.retain_capacity);
+        self.picker_m = self.picker_arena.allocator();
+        self.picker = .{ .kind = kind, .title = title };
+        self.command_active = true;
+    }
+
+    fn closePicker(self: *Tui) void {
+        self.picker = null;
+    }
+
+    fn pickerRefresh(self: *Tui) void {
+        const p = &(self.picker orelse return);
+        p.matches.clearRetainingCapacity();
+        const query = p.query.items;
+        const n = @min(p.ids.len, p.labels.len);
+        for (p.ids[0..n], p.labels[0..n], 0..) |id, label, i| {
+            if (query.len != 0 and std.ascii.findIgnoreCase(label, query) == null and
+                std.ascii.findIgnoreCase(id, query) == null) continue;
+            p.matches.append(self.picker_m, i) catch {};
+        }
+        p.sel = if (p.matches.items.len == 0) 0 else @min(p.sel, p.matches.items.len - 1);
+    }
+
+    fn pickerKey(self: *Tui, key: input.Key) void {
+        const p = &(self.picker orelse return);
+        switch (key) {
+            .text => |t| {
+                p.query.appendSlice(self.picker_m, t) catch {};
+                p.sel = 0;
+                self.pickerRefresh();
+            },
+            .backspace => {
+                if (p.query.items.len > 0) {
+                    var start = p.query.items.len - 1;
+                    while (start > 0 and (p.query.items[start] & 0xc0) == 0x80) start -= 1;
+                    p.query.shrinkRetainingCapacity(start);
+                    p.sel = 0;
+                    self.pickerRefresh();
+                }
+            },
+            .up, .history_prev => if (p.sel > 0) {
+                p.sel -= 1;
+            },
+            .down, .history_next => if (p.sel + 1 < p.matches.items.len) {
+                p.sel += 1;
+            },
+            .submit => self.pickerAccept(),
+            .escape, .interrupt => {
+                const draft = p.draft;
+                const restore = p.kind == .history;
+                self.closePicker();
+                self.command_active = false;
+                if (restore) self.editor.setText(draft);
+            },
+            else => return,
+        }
+        self.dirty = true;
+    }
+
+    fn pickerAccept(self: *Tui) void {
+        const p = self.picker orelse return;
+        if (p.matches.items.len == 0) return;
+        const id = p.ids[p.matches.items[p.sel]];
+        const kind = p.kind;
+        const provider_id = p.provider;
+        self.closePicker();
         self.command_active = false;
-        const id = matchOption(answer, self.prompt_options, self.prompt_ids) orelse return;
-        switch (command) {
+        switch (kind) {
             .provider => self.startModelFetch(id),
             .model => {
-                const provider_id = self.pending_provider orelse return;
                 var err: ?[]const u8 = null;
                 const m = models_mod.resolveNamed(self.a, self.cfg, provider_id, id, &err) orelse return;
                 const ptr = self.a.create(models_mod.Model) catch return;
                 ptr.* = m;
                 self.select(ptr);
                 config.save(self.a, self.cfg, .{ .provider = provider_id, .model = id }) catch {};
+                self.startThinkingSelect();
             },
             .thinking => {
                 const m = self.opts.model orelse return;
@@ -958,7 +978,7 @@ const Tui = struct {
                 self.select(updated);
                 config.save(self.a, self.cfg, .{ .thinking_effort = id }) catch {};
             },
-            .none => {},
+            .history => self.editor.setText(id),
         }
     }
 
@@ -1015,20 +1035,6 @@ const Tui = struct {
         status.release();
     }
 };
-
-fn matchOption(answer: []const u8, options: []const []const u8, ids: []const []const u8) ?[]const u8 {
-    const n = std.fmt.parseInt(usize, answer, 10) catch {
-        for (options, 0..) |o, i| {
-            if (std.mem.eql(u8, o, answer)) return ids[i];
-        }
-        for (ids) |id| {
-            if (std.mem.eql(u8, id, answer)) return id;
-        }
-        return null;
-    };
-    if (n >= 1 and n <= ids.len) return ids[n - 1];
-    return null;
-}
 
 fn completePathStep(word: []const u8) ?[]const u8 {
     return complete.completePath(word);
@@ -1201,8 +1207,6 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
                 self.dirty = true;
             }
         }
-
-        if (self.prompt_open and self.prompt_ready.load(.seq_cst)) self.answerPrompt();
 
         if (self.turn_done.load(.seq_cst) and self.active) {
             self.active = false;
