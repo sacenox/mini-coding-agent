@@ -8,9 +8,10 @@ Requires Zig 0.17.0.
 
     zig build
 
-The binary lands at `zig-out/bin/mini`. `zig build run -- <args>` builds and
-runs it. Provider model metadata is embedded from `src/models_dev.json`; refresh
-it with `python3 tools/gen_models_dev.py`.
+A plain `zig build` is a release build, optimized for size. `-Doptimize=debug`
+builds for development. The binary lands at `zig-out/bin/mini`. `zig build run
+-- <args>` builds and runs it. Provider model metadata is embedded from
+`src/models_dev.json`; refresh it with `python3 tools/gen_models_dev.py`.
 
 ## Run
 
@@ -33,6 +34,10 @@ the config lives. Interactive mode requires a TTY. In `-p` mode tool calls and
 tool output go to stderr, the assistant text to stdout; a failed turn exits 1.
 `SIGINT` and `SIGTERM` cancel the turn and then re-raise, so the exit status is
 the signal.
+
+A request that fails before any event reached the context is retried with an
+exponential backoff. Every retry prints a `[retry]` line to stderr, and the TUI
+shows it in the status line.
 
 ## TUI commands
 
@@ -113,6 +118,10 @@ A full example:
   "tools": ["edit", "read", "bash"],
   "programStatus": false,
   "herdr": false,
+  "notifications": "off",
+  "retries": 3,
+  "retryBaseMs": 1000,
+  "streamIdleTimeoutMs": 120000,
   "snapshotIgnoreDirs": [".git"],
   "snapshotUsesGitignore": true,
   "snapshotDiffsInContext": false,
@@ -160,6 +169,10 @@ Keys:
 | `customProviders` | `[]` | in-tree provider definitions |
 | `programStatus` | `false` | report agent state to the terminal with OSC 7501 |
 | `herdr` | `false` | report agent state to a Herdr pane; only active inside one (`HERDR_ENV=1` with `HERDR_BIN_PATH` and `HERDR_PANE_ID`) |
+| `notifications` | `off` | how the TUI asks for attention when a turn completes, fails, or pauses for steering: `off`, `osc9` (desktop notification), `bell`, or `both` |
+| `retries` | `3` | retries after a failed request, when nothing has been streamed yet; transport failures, `429`, and `5xx` retry, other statuses do not |
+| `retryBaseMs` | `1000` | first backoff step; each retry doubles it, capped at 30s |
+| `streamIdleTimeoutMs` | `120000` | a stream that stays silent this long is dropped and retried; `0` disables the window |
 | `snapshotIgnoreDirs` | `[]` | directory names skipped when the `bash` tool snapshots the cwd for diffs |
 | `snapshotUsesGitignore` | `true` | also skip paths matched by the `.gitignore` files under the cwd when snapshotting |
 | `snapshotDiffsInContext` | `false` | send the `bash` tool's snapshot diffs to the model inside the tool result |

@@ -5,6 +5,7 @@ const http = @import("http.zig");
 const time = @import("time.zig");
 
 pub const Event = union(enum) {
+    retry: struct { attempt: u32, total: u32, delay_ms: u64, reason: []const u8 },
     text: []const u8,
     reasoning: []const u8,
     tool_start: []const u8,
@@ -63,6 +64,7 @@ pub const Request = struct {
     effort: []const u8,
     session_id: ?[]const u8,
     cancel: *const std.atomic.Value(bool),
+    retry: http.Retry = .{},
 };
 
 pub const max_stream_index = 10_000;
@@ -98,7 +100,7 @@ pub fn run(
 
     var st = State{ .req = req, .sink = sink, .arena = &arena, .msg = &msg };
 
-    const complete = try post(req, url, hdrs, body, .{ .ctx = &st, .onEvent = onData(State, Chunk) }, &msg);
+    const complete = try post(req, url, hdrs, body, .{ .ctx = &st, .onEvent = onData(State, Chunk) }, sink, &msg);
     st.failed = !complete;
     const reason = msg.stop_reason;
     const message = msg.error_message;
@@ -197,9 +199,22 @@ fn wireHeaders(a: std.mem.Allocator, req: Request, wire: Wire) ![]http.Header {
     return list.toOwnedSlice(a);
 }
 
-fn post(req: Request, url: []const u8, hdrs: []const http.Header, body: []const u8, handler: http.SseHandler, msg: *message_mod.AssistantMessage) std.mem.Allocator.Error!bool {
+const RetryCtx = struct { sink: Sink };
+
+fn onRetry(ctx: *anyopaque, attempt: usize, total: usize, delay_ms: u64, reason: []const u8) void {
+    const rc: *RetryCtx = @ptrCast(@alignCast(ctx));
+    rc.sink.emit(.{ .retry = .{
+        .attempt = @intCast(attempt),
+        .total = @intCast(total),
+        .delay_ms = delay_ms,
+        .reason = reason,
+    } });
+}
+
+fn post(req: Request, url: []const u8, hdrs: []const http.Header, body: []const u8, handler: http.SseHandler, sink: Sink, msg: *message_mod.AssistantMessage) std.mem.Allocator.Error!bool {
     var err_body: ?[]const u8 = null;
-    http.postSse(req.scratch, url, hdrs, body, handler, req.cancel, &err_body) catch |e| {
+    var notice_ctx = RetryCtx{ .sink = sink };
+    http.postSse(req.scratch, url, hdrs, body, handler, req.cancel, &err_body, req.retry, .{ .ctx = &notice_ctx, .on_retry = onRetry }) catch |e| {
         if (e == error.OutOfMemory) return error.OutOfMemory;
         if (e == error.Aborted or req.cancel.load(.acquire)) {
             msg.stop_reason = .aborted;
@@ -208,6 +223,7 @@ fn post(req: Request, url: []const u8, hdrs: []const http.Header, body: []const 
             const message = switch (e) {
                 error.HttpStatus => err_body orelse "provider returned an error status",
                 error.ReadFailed => "stream read failed",
+                error.IdleTimeout => "provider went silent",
                 else => "request failed",
             };
             msg.error_message = try req.pers.dupe(u8, message);

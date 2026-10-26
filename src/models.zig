@@ -224,7 +224,7 @@ pub fn listing(
 
     const url = try std.fmt.allocPrint(a, "{s}/models", .{base});
     const authorization = try std.fmt.allocPrint(a, "Bearer {s}", .{key});
-    const body = try http.get(a, url, &.{.{ .name = "Authorization", .value = authorization }}, cancel);
+    const body = try http.get(a, url, &.{.{ .name = "Authorization", .value = authorization }}, cancel, .{});
 
     const parsed = try std.json.parseFromSliceLeaky(Listed, a, body, .{ .ignore_unknown_fields = true });
     var out: std.ArrayList(Entry) = .empty;

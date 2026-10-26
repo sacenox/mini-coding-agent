@@ -18,6 +18,7 @@ const herdr_report_timeout_ms = 2000;
 const herdr_release_timeout_ms = 1000;
 
 var program_status = false;
+var notify_mode: config.Notifications = .off;
 var herdr_on = false;
 var herdr_bin: []const u8 = "";
 var herdr_pane: []const u8 = "";
@@ -39,6 +40,7 @@ const Job = struct {
 /// inside a Herdr pane; anywhere else it stays off.
 pub fn init(cfg: *const config.Config) void {
     program_status = cfg.program_status;
+    notify_mode = cfg.notifications;
     if (!cfg.herdr) return;
     if (!std.mem.eql(u8, platform.getEnv("HERDR_ENV") orelse "", "1")) return;
     herdr_bin = platform.getEnv("HERDR_BIN_PATH") orelse return;
@@ -72,6 +74,18 @@ pub fn report(state: []const u8, kind: ?[]const u8, msg: ?[]const u8) void {
     seq += 1;
     if (text.len > 0) @memcpy(pending_msg[0..text.len], text);
     pending = .{ .state = mapped, .msg_len = text.len, .seq = seq };
+}
+
+/// Asks for the user's attention when a turn stops needing none of it. OSC 9 is
+/// the desktop notification most terminals forward; the bell is the fallback
+/// every terminal has.
+pub fn notify(message: []const u8) void {
+    if (notify_mode == .osc9 or notify_mode == .both) {
+        var buf: [max_msg + 8]u8 = undefined;
+        const out = std.fmt.bufPrint(&buf, "\x1b]9;{s}\x07", .{message[0..@min(message.len, max_msg)]}) catch return;
+        platform.writeOut(out);
+    }
+    if (notify_mode == .bell or notify_mode == .both) platform.writeOut("\x07");
 }
 
 /// Clears our name, state, and resume command from the pane. Only for an exit,

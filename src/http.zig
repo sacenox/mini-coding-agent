@@ -1,5 +1,6 @@
 const std = @import("std");
 const platform = @import("platform.zig");
+const time = @import("time.zig");
 const build_options = @import("build_options");
 
 const user_agent = "mini-coding-agent/" ++ build_options.version;
@@ -19,24 +20,60 @@ const HttpError = error{
     RequestFailed,
     HttpStatus,
     ReadFailed,
+    IdleTimeout,
     Aborted,
 } || std.mem.Allocator.Error;
 
-// Blocking socket reads cannot observe the cancel token, so a watcher thread
-// shuts the connection down when a cancel is requested, unblocking the read.
-const CancelWatch = struct {
+/// How a request fails over: the retries after the first attempt, the first
+/// backoff step (each retry doubles it), and how long a stream may stay silent
+/// before the connection is treated as dead.
+pub const Retry = struct {
+    attempts: usize = 3,
+    base_ms: u64 = 1000,
+    idle_ms: u64 = 120_000,
+};
+
+const max_backoff_ms: u64 = 30_000;
+
+/// Told about every retry before it happens, so both front ends can say why the
+/// request is being repeated.
+pub const RetryNotice = struct {
+    ctx: *anyopaque,
+    on_retry: *const fn (ctx: *anyopaque, attempt: usize, total: usize, delay_ms: u64, reason: []const u8) void,
+
+    fn call(self: RetryNotice, attempt: usize, total: usize, delay_ms: u64, reason: []const u8) void {
+        self.on_retry(self.ctx, attempt, total, delay_ms, reason);
+    }
+};
+
+/// Blocking socket reads cannot observe the cancel token or the idle window, so
+/// a watcher thread shuts the connection down when either is spent, unblocking
+/// the read that cannot see them.
+const Watch = struct {
     cancel: *const std.atomic.Value(bool),
     connection: *std.http.Client.Connection,
+    idle_ms: u64,
+    last: std.atomic.Value(i64),
+    idle: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
-    fn run(self: *CancelWatch) void {
+    fn run(self: *Watch) void {
         while (!self.done.load(.acquire)) {
             if (self.cancel.load(.acquire)) {
-                self.connection.stream_reader.stream.shutdown(platform.io, .both) catch {};
+                self.hangUp();
+                return;
+            }
+            if (self.idle_ms > 0 and time.nowMs() - self.last.load(.acquire) >= self.idle_ms) {
+                self.idle.store(true, .release);
+                self.hangUp();
                 return;
             }
             std.Io.sleep(platform.io, .{ .nanoseconds = 25 * std.time.ns_per_ms }, .boot) catch {};
         }
+    }
+
+    fn hangUp(self: *Watch) void {
+        self.connection.stream_reader.stream.shutdown(platform.io, .both) catch {};
     }
 };
 
@@ -97,17 +134,44 @@ const Exchange = struct {
     }
 };
 
+/// What one attempt achieved: the status it saw, whether the sink already
+/// received events (a partial stream cannot be repeated), and how it ended.
+const Attempt = struct {
+    status: u16 = 0,
+    sent: bool = false,
+    err: ?HttpError = null,
+};
+
 pub fn get(
     a: std.mem.Allocator,
     url: []const u8,
     headers: []const Header,
     cancel: *const std.atomic.Value(bool),
+    retry: Retry,
+) HttpError![]u8 {
+    var attempt: usize = 0;
+    while (true) : (attempt += 1) {
+        var out = Attempt{};
+        if (getOnce(a, url, headers, cancel, &out)) |body| return body else |e| out.err = e;
+        const e = out.err orelse error.ReadFailed;
+        if (attempt + 1 >= retry.attempts + 1 or !retryable(e, out.status)) return e;
+        try pause(cancel, backoff(retry.base_ms, attempt));
+    }
+}
+
+fn getOnce(
+    a: std.mem.Allocator,
+    url: []const u8,
+    headers: []const Header,
+    cancel: *const std.atomic.Value(bool),
+    out: *Attempt,
 ) HttpError![]u8 {
     if (cancel.load(.acquire)) return error.Aborted;
     var ex: Exchange = undefined;
     try ex.open(a, .GET, url, headers, null);
     defer ex.close();
     try ex.receive();
+    out.status = ex.status;
     if (!ex.ok()) return error.HttpStatus;
     return ex.reader.allocRemaining(a, .limited(1 << 22)) catch return error.ReadFailed;
 }
@@ -120,23 +184,62 @@ pub fn postSse(
     handler: SseHandler,
     cancel: *const std.atomic.Value(bool),
     err_body: *?[]const u8,
+    retry: Retry,
+    notice: ?RetryNotice,
 ) HttpError!void {
-    if (cancel.load(.acquire)) return error.Aborted;
+    var attempt: usize = 0;
+    while (true) : (attempt += 1) {
+        err_body.* = null;
+        const out = postOnce(a, url, headers, body, handler, cancel, err_body, retry.idle_ms);
+        const e = out.err orelse return;
+        if (out.sent or attempt + 1 >= retry.attempts + 1 or !retryable(e, out.status)) return e;
+        const delay_ms = backoff(retry.base_ms, attempt);
+        if (notice) |n| {
+            var buf: [16]u8 = undefined;
+            n.call(attempt + 2, retry.attempts + 1, delay_ms, describe(e, out.status, &buf));
+        }
+        try pause(cancel, delay_ms);
+    }
+}
+
+fn postOnce(
+    a: std.mem.Allocator,
+    url: []const u8,
+    headers: []const Header,
+    body: []const u8,
+    handler: SseHandler,
+    cancel: *const std.atomic.Value(bool),
+    err_body: *?[]const u8,
+    idle_ms: u64,
+) Attempt {
+    var out = Attempt{};
+    if (cancel.load(.acquire)) {
+        out.err = error.Aborted;
+        return out;
+    }
     var ex: Exchange = undefined;
-    try ex.open(a, .POST, url, headers, body);
+    ex.open(a, .POST, url, headers, body) catch |e| {
+        out.err = e;
+        return out;
+    };
     defer ex.close();
 
-    var watch = CancelWatch{ .cancel = cancel, .connection = ex.req.connection.? };
-    const watcher = std.Thread.spawn(.{}, CancelWatch.run, .{&watch}) catch null;
+    var watch = Watch{ .cancel = cancel, .connection = ex.req.connection.?, .idle_ms = idle_ms, .last = std.atomic.Value(i64).init(time.nowMs()) };
+    const watcher = std.Thread.spawn(.{}, Watch.run, .{&watch}) catch null;
     defer {
         watch.done.store(true, .release);
         if (watcher) |t| t.join();
     }
 
-    try ex.receive();
+    ex.receive() catch {
+        out.err = if (watch.idle.load(.acquire)) error.IdleTimeout else error.RequestFailed;
+        return out;
+    };
+    out.status = ex.status;
     if (!ex.ok()) {
         err_body.* = ex.reader.allocRemaining(a, .limited(1 << 20)) catch null;
-        return error.HttpStatus;
+        out.err = error.HttpStatus;
+        return out;
     }
 
     var data: std.ArrayList(u8) = .empty;
@@ -151,28 +254,97 @@ pub fn postSse(
     // reader's buffer sends the delimiter search down a failure path that
     // desynchronizes chunked transfer decoding.
     while (true) {
-        if (cancel.load(.acquire)) return error.Aborted;
-        const n = ex.reader.readSliceShort(&buf) catch return error.ReadFailed;
+        if (cancel.load(.acquire)) {
+            out.err = error.Aborted;
+            return out;
+        }
+        const n = ex.reader.readSliceShort(&buf) catch {
+            out.err = if (watch.idle.load(.acquire)) error.IdleTimeout else error.ReadFailed;
+            return out;
+        };
         if (n == 0) break;
+        watch.last.store(time.nowMs(), .release);
         var rest: []const u8 = buf[0..n];
         while (std.mem.indexOfScalar(u8, rest, '\n')) |nl| {
-            try line.appendSlice(a, rest[0..nl]);
+            line.appendSlice(a, rest[0..nl]) catch {
+                out.err = error.OutOfMemory;
+                return out;
+            };
             rest = rest[nl + 1 ..];
-            if (try feedLine(a, line.items, &data, &have_data)) {
+            const complete = feedLine(a, line.items, &data, &have_data) catch {
+                out.err = error.OutOfMemory;
+                return out;
+            };
+            if (complete) {
+                out.sent = true;
                 handler.call(data.items);
                 data.clearRetainingCapacity();
                 have_data = false;
             }
             line.clearRetainingCapacity();
         }
-        try line.appendSlice(a, rest);
+        line.appendSlice(a, rest) catch {
+            out.err = error.OutOfMemory;
+            return out;
+        };
     }
-    if (line.items.len > 0 and try feedLine(a, line.items, &data, &have_data)) {
+    // The watcher shuts a dead stream down, which can end the read cleanly; the
+    // flag is what tells a finished stream from a silent one.
+    if (watch.idle.load(.acquire)) {
+        out.err = error.IdleTimeout;
+        return out;
+    }
+    if (line.items.len > 0) {
+        const complete = feedLine(a, line.items, &data, &have_data) catch {
+            out.err = error.OutOfMemory;
+            return out;
+        };
+        if (complete) {
+            out.sent = true;
+            handler.call(data.items);
+            data.clearRetainingCapacity();
+            have_data = false;
+        }
+    }
+    if (have_data) {
+        out.sent = true;
         handler.call(data.items);
-        data.clearRetainingCapacity();
-        have_data = false;
     }
-    if (have_data) handler.call(data.items);
+    return out;
+}
+
+fn retryable(e: HttpError, status: u16) bool {
+    return switch (e) {
+        error.RequestFailed, error.ReadFailed, error.IdleTimeout => true,
+        error.HttpStatus => status == 429 or status >= 500,
+        error.Aborted, error.OutOfMemory => false,
+    };
+}
+
+fn backoff(base_ms: u64, attempt: usize) u64 {
+    const shift: u6 = @intCast(@min(attempt, 6));
+    return @min(base_ms << shift, max_backoff_ms);
+}
+
+fn describe(e: HttpError, status: u16, buf: []u8) []const u8 {
+    return switch (e) {
+        error.HttpStatus => std.fmt.bufPrint(buf, "http {d}", .{status}) catch "http error",
+        error.IdleTimeout => "idle timeout",
+        error.ReadFailed => "stream interrupted",
+        else => "connection failed",
+    };
+}
+
+/// Waits out the backoff in small steps, so a cancel lands promptly.
+fn pause(cancel: *const std.atomic.Value(bool), delay_ms: u64) HttpError!void {
+    var left = delay_ms;
+    while (left > 0) {
+        if (cancel.load(.acquire)) return error.Aborted;
+        const step: u64 = @min(left, 25);
+        std.Io.sleep(platform.io, .{ .nanoseconds = step * std.time.ns_per_ms }, .boot) catch {};
+        left -= step;
+    }
+    if (cancel.load(.acquire)) return error.Aborted;
 }
 
 /// Applies one SSE line to the pending event payload, returning whether the

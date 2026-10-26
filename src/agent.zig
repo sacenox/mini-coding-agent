@@ -13,6 +13,7 @@ pub const Phase = enum { preparing, waiting_model, streaming, running_tool, snap
 
 pub const Event = union(enum) {
     phase: struct { phase: Phase, detail: ?[]const u8 = null },
+    retry: struct { attempt: u32, total: u32, delay_ms: u64, reason: []const u8 },
     text: []const u8,
     reasoning: []const u8,
     tool_call_start: []const u8,
@@ -89,11 +90,23 @@ fn onToolPhase(ctx: *anyopaque, phase: tools.ToolPhase) void {
 fn onApiEvent(ctx: *anyopaque, event: api.Event) void {
     const stream_ctx: *StreamCtx = @ptrCast(@alignCast(ctx));
     const listener = stream_ctx.listener;
+    // A retry is not output: it leaves the turn where it was, waiting.
+    if (std.meta.activeTag(event) == .retry) {
+        const r = event.retry;
+        listener.emit(.{ .retry = .{
+            .attempt = r.attempt,
+            .total = r.total,
+            .delay_ms = r.delay_ms,
+            .reason = r.reason,
+        } });
+        return;
+    }
     if (!stream_ctx.started) {
         stream_ctx.started = true;
         listener.emit(.{ .phase = .{ .phase = .streaming } });
     }
     switch (event) {
+        .retry => unreachable,
         .text => |d| listener.emit(.{ .text = d }),
         .reasoning => |d| listener.emit(.{ .reasoning = d }),
         .tool_start => |name| listener.emit(.{ .tool_call_start = name }),
@@ -201,6 +214,11 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(message_mod.Message), int
             .effort = model.effort,
             .session_id = opts.session.id,
             .cancel = opts.cancel,
+            .retry = .{
+                .attempts = opts.config.retries,
+                .base_ms = opts.config.retry_base_ms,
+                .idle_ms = opts.config.stream_idle_timeout_ms,
+            },
         }, .{ .ctx = &stream_ctx, .on_event = onApiEvent }) catch |e| {
             listener.emit(.{ .err = @errorName(e) });
             return;

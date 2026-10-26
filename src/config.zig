@@ -4,6 +4,9 @@ const filesystem = @import("filesystem.zig");
 
 pub const ToolName = enum { edit, read, bash };
 
+/// How mini draws the user's attention when a turn needs them.
+pub const Notifications = enum { off, osc9, bell, both };
+
 pub const Api = enum {
     @"openai-completions",
     @"openai-responses",
@@ -71,6 +74,10 @@ pub const Config = struct {
     thinking_effort: ?[]const u8,
     program_status: bool,
     herdr: bool,
+    notifications: Notifications,
+    retries: usize,
+    retry_base_ms: u64,
+    stream_idle_timeout_ms: u64,
     show_images: bool,
     custom_providers: []const CustomProvider,
     snapshot_ignore_dirs: []const []const u8,
@@ -95,6 +102,10 @@ const File = struct {
     customProviders: ?[]const CustomProvider = null,
     programStatus: ?bool = null,
     herdr: ?bool = null,
+    notifications: ?Notifications = null,
+    retries: ?usize = null,
+    retryBaseMs: ?u64 = null,
+    streamIdleTimeoutMs: ?u64 = null,
     showImages: ?bool = null,
     snapshotIgnoreDirs: ?[]const []const u8 = null,
     snapshotUsesGitignore: ?bool = null,
@@ -175,6 +186,10 @@ fn readInto(a: std.mem.Allocator, path: []const u8, required: bool, cfg: *Config
     if (file.thinkingEffort) |v| cfg.thinking_effort = v;
     if (file.programStatus) |v| cfg.program_status = v;
     if (file.herdr) |v| cfg.herdr = v;
+    if (file.notifications) |v| cfg.notifications = v;
+    if (file.retries) |v| cfg.retries = v;
+    if (file.retryBaseMs) |v| cfg.retry_base_ms = v;
+    if (file.streamIdleTimeoutMs) |v| cfg.stream_idle_timeout_ms = v;
     if (file.showImages) |v| cfg.show_images = v;
     if (file.snapshotIgnoreDirs) |v| cfg.snapshot_ignore_dirs = v;
     if (file.snapshotUsesGitignore) |v| cfg.snapshot_uses_gitignore = v;
@@ -239,6 +254,10 @@ fn defaults(a: std.mem.Allocator) !Config {
         .thinking_effort = null,
         .program_status = false,
         .herdr = false,
+        .notifications = .off,
+        .retries = 3,
+        .retry_base_ms = 1000,
+        .stream_idle_timeout_ms = 120_000,
         .show_images = false,
         .custom_providers = &.{},
         .snapshot_ignore_dirs = &.{},

@@ -18,6 +18,7 @@ const PrintCtx = struct { failed: bool = false };
 fn printEvent(ctx: *anyopaque, event: agent.Event) void {
     const pc: *PrintCtx = @ptrCast(@alignCast(ctx));
     switch (event) {
+        .retry => |r| platform.printErr("[retry] {s}: attempt {d}/{d} in {d}ms\n", .{ r.reason, r.attempt, r.total, r.delay_ms }),
         .tool_call => |call| platform.printErr("[tool] {s}\n", .{call.name}),
         .tool_output => |chunk| platform.writeErr(chunk),
         .no_model => {

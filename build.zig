@@ -3,7 +3,8 @@ const zon = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+    // A plain `zig build` ships the smallest binary; pass -Doptimize=debug to develop.
+    const optimize = b.option(std.builtin.OptimizeMode, "optimize", "Optimization mode") orelse .small;
 
     const exe = b.addExecutable(.{
         .name = "mini",

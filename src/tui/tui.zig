@@ -85,6 +85,7 @@ const Tui = struct {
 
     phase: agent.Phase = .idle,
     detail: ?[]const u8 = null,
+    retrying: ?[]const u8 = null,
     writing_tool: ?[]const u8 = null,
     writing_bytes: usize = 0,
     stream_kind: enum { none, reasoning, text, tool } = .none,
@@ -261,6 +262,7 @@ const Tui = struct {
 
     fn stateLabel(self: *Tui) []const u8 {
         const a = self.s;
+        if (self.retrying) |text| return styles.styledWith(a, styles.roles.warn, text);
         var text: []const u8 = "idle";
         var role: ?styles.Style = null;
         var bytes: usize = 0;
@@ -385,7 +387,15 @@ const Tui = struct {
         if (self.closed) return;
         if (self.aborting) return;
         self.resetScratch();
+        if (std.meta.activeTag(event) != .retry) self.keepName(&self.retrying, null);
         switch (event) {
+            .retry => |r| {
+                const text = std.fmt.allocPrint(self.s, "retrying {d}/{d} in {d}s · {s}", .{
+                    r.attempt, r.total, @divFloor(r.delay_ms + 999, 1000), r.reason,
+                }) catch "";
+                self.keepName(&self.retrying, text);
+                status.report("working", null, r.reason);
+            },
             .phase => |p| {
                 self.phase = p.phase;
                 self.keepName(&self.detail, p.detail);
@@ -401,6 +411,7 @@ const Tui = struct {
                     .pausing => "blocked",
                     .idle => "idle",
                 }, if (p.phase == .pausing) "question" else null, if (p.phase == .pausing) "paused - type steering to continue" else null);
+                if (p.phase == .pausing) status.notify("mini: paused, waiting for steering");
             },
             .text => |delta| {
                 self.stream_kind = .text;
@@ -437,6 +448,7 @@ const Tui = struct {
             .tool_result => |tr| self.commitToolResult(tr.name, tr.text, tr.is_error, tr.diffs, tr.body, tr.images),
             .err => |m| {
                 status.report("error", null, m);
+                status.notify("mini: turn failed");
                 self.retry = true;
                 self.endTurn(styles.err(self.s, std.fmt.allocPrint(self.s, "! {s}", .{m}) catch "! error"));
             },
@@ -450,6 +462,7 @@ const Tui = struct {
             },
             .complete => {
                 status.report("done", null, null);
+                status.notify("mini: turn complete");
                 self.endTurn(styles.comment(self.s, std.fmt.allocPrint(self.s, "[complete · {d}s]", .{@max(0, @divFloor(time.nowMs() - self.turn_start, 1000))}) catch "[complete]"));
             },
         }
@@ -725,6 +738,7 @@ const Tui = struct {
         self.turn_done.store(false, .seq_cst);
         self.phase = .preparing;
         self.keepName(&self.detail, null);
+        self.keepName(&self.retrying, null);
         self.turn_start = time.nowMs();
         self.frame = 0;
         self.event_mutex.lockUncancelable(platform.io);
@@ -1022,6 +1036,12 @@ fn turnThread(self: *Tui) void {
 fn copyEvent(a: std.mem.Allocator, e: agent.Event, with_images: bool) agent.Event {
     return switch (e) {
         .phase => |p| .{ .phase = .{ .phase = p.phase, .detail = if (p.detail) |d| a.dupe(u8, d) catch "" else null } },
+        .retry => |r| .{ .retry = .{
+            .attempt = r.attempt,
+            .total = r.total,
+            .delay_ms = r.delay_ms,
+            .reason = a.dupe(u8, r.reason) catch "",
+        } },
         .text => |s| .{ .text = a.dupe(u8, s) catch "" },
         .reasoning => |s| .{ .reasoning = a.dupe(u8, s) catch "" },
         .tool_call_start => |s| .{ .tool_call_start = a.dupe(u8, s) catch "" },
