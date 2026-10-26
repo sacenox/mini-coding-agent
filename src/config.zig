@@ -42,6 +42,7 @@ pub const Colorscheme = struct {
     err: ?[]const u8 = null,
     warn: ?[]const u8 = null,
     code: ?[]const u8 = null,
+    output: ?[]const u8 = null,
     diff_add: ?[]const u8 = null,
     diff_delete: ?[]const u8 = null,
     inline_code: ?[]const u8 = null,

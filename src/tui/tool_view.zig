@@ -62,8 +62,13 @@ pub const Result = struct {
 
 pub fn diffFooter(a: std.mem.Allocator, r: diff_view.Rendered) ?[]const u8 {
     if (r.added == 0 and r.removed == 0) return null;
-    const stats = std.fmt.allocPrint(a, "+{d} -{d}", .{ r.added, r.removed }) catch return null;
-    return metaLine(a, stats);
+    const add = std.fmt.allocPrint(a, "+{d}", .{r.added}) catch return null;
+    const del = std.fmt.allocPrint(a, "-{d}", .{r.removed}) catch return null;
+    return std.fmt.allocPrint(a, "{s}{s} {s}", .{
+        styles.comment(a, " └ "),
+        styles.styledWith(a, styles.roles.diff_add, add),
+        styles.styledWith(a, styles.roles.diff_delete, del),
+    }) catch null;
 }
 
 pub fn resultLines(a: std.mem.Allocator, name: []const u8, text: []const u8, max_diff_lines: usize) Result {

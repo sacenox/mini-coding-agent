@@ -28,7 +28,6 @@ const SPINNER = "⠀⠁⠂⠃⠄⠅⠆⠇⡀⡁⡂⡃⡄⡅⡆⡇⠈⠉⠊⠋⠌
 const SPINNER_MS = 120;
 const BODY_PREFIX = " │ ";
 const ERROR_PREFIX = " ! ";
-const TOOL_BODY: styles.Style = .{ .dim = true };
 
 const PendingCall = tool_view.PendingCall;
 const Picker = picker_mod.Picker;
@@ -205,23 +204,23 @@ const Tui = struct {
 
     fn pushBanner(self: *Tui) void {
         self.scrollback.separator = true;
-        const model = self.opts.model;
-        const brand = styles.accent(self.s, "mini-coding-agent");
-        self.push(if (model) |m|
-            if (m.effort.len == 0)
-                std.fmt.allocPrint(self.s, "{s} · {s}/{s}", .{ brand, m.provider, m.id }) catch brand
-            else
-                std.fmt.allocPrint(self.s, "{s} · {s}/{s} · {s}", .{ brand, m.provider, m.id, m.effort }) catch brand
-        else
-            std.fmt.allocPrint(self.s, "{s} · no model configured", .{brand}) catch brand);
-        const loaded = self.opts.loaded;
+        const a = self.s;
         var parts: std.ArrayList([]const u8) = .empty;
+        parts.append(a, styles.accent(a, "mini-coding-agent")) catch {};
+        if (self.opts.model) |m| {
+            parts.append(a, std.fmt.allocPrint(a, "{s}/{s}", .{ m.provider, m.id }) catch m.id) catch {};
+            if (m.effort.len > 0) parts.append(a, m.effort) catch {};
+        } else {
+            parts.append(a, "no model configured") catch {};
+        }
+        self.push(styles.join(a, parts.items));
+        const loaded = self.opts.loaded;
+        var resources: std.ArrayList([]const u8) = .empty;
         if (loaded.agent_files > 0)
-            parts.append(self.s, plural(self.s, loaded.agent_files, "agent file", "agent files")) catch {};
+            resources.append(a, styles.comment(a, plural(a, loaded.agent_files, "agent file", "agent files"))) catch {};
         if (loaded.skills > 0)
-            parts.append(self.s, plural(self.s, loaded.skills, "skill", "skills")) catch {};
-        if (parts.items.len > 0)
-            self.push(styles.comment(self.s, std.mem.join(self.s, " · ", parts.items) catch "resources"));
+            resources.append(a, styles.comment(a, plural(a, loaded.skills, "skill", "skills"))) catch {};
+        if (resources.items.len > 0) self.push(styles.join(a, resources.items));
         self.scrollback.separator = true;
     }
 
@@ -237,25 +236,29 @@ const Tui = struct {
         const used = self.ctx_used;
         const cache = self.ctx_cache;
         self.messages_mutex.unlock(platform.io);
-        const info = std.fmt.allocPrint(self.s, "{s} {s}", .{
+        const info = std.fmt.allocPrint(self.s, "{s}{s}{s}", .{
             usage_mod.contextUsageLine(self.s, used, model),
+            styles.sep(self.s),
             usage_mod.cacheLine(self.s, cache),
         }) catch "ctx";
+        const sep = styles.sep(self.s);
         if (self.paused or self.phase == .pausing) {
-            return std.fmt.allocPrint(self.s, "{s} · {s}", .{ styles.comment(self.s, "paused - type steering, Enter to submit"), info }) catch info;
+            return std.fmt.allocPrint(self.s, "{s}{s}{s}", .{ styles.comment(self.s, "paused - type steering, Enter to submit"), sep, info }) catch info;
         }
         if (self.active and self.pause_requested.load(.seq_cst)) {
-            return std.fmt.allocPrint(self.s, "{s} · {s}", .{ styles.comment(self.s, "pausing - waiting for the step boundary"), info }) catch info;
+            return std.fmt.allocPrint(self.s, "{s}{s}{s}", .{ styles.comment(self.s, "pausing - waiting for the step boundary"), sep, info }) catch info;
         }
         if (self.retry) {
-            return std.fmt.allocPrint(self.s, "{s} · {s}", .{ styles.err(self.s, "failed - Enter to retry"), info }) catch info;
+            return std.fmt.allocPrint(self.s, "{s}{s}{s}", .{ styles.err(self.s, "failed - Enter to retry"), sep, info }) catch info;
         }
         if (!self.active or self.phase == .idle) return info;
         const elapsed = @max(0, @divFloor(time.nowMs() - self.turn_start, 1000));
-        return std.fmt.allocPrint(self.s, "{s} {s} · {s} · {s}", .{
+        return std.fmt.allocPrint(self.s, "{s} {s}{s}{s}{s}{s}", .{
             styles.accent(self.s, spinnerChar(self.frame)),
             self.stateLabel(),
+            sep,
             styles.comment(self.s, std.fmt.allocPrint(self.s, "{d}s", .{elapsed}) catch ""),
+            sep,
             info,
         }) catch info;
     }
@@ -301,11 +304,13 @@ const Tui = struct {
         out.appendSlice(a, if (role) |r| styles.styledWith(a, r, text) else styles.comment(a, text)) catch {};
         if (bytes > 0) {
             const n = usage_mod.formatTokens(a, (bytes + 3) / 4);
-            out.appendSlice(a, styles.comment(a, std.fmt.allocPrint(a, " · ~{s} tok", .{n}) catch "")) catch {};
+            out.appendSlice(a, styles.sep(a)) catch {};
+            out.appendSlice(a, styles.comment(a, std.fmt.allocPrint(a, "~{s} tok", .{n}) catch "")) catch {};
         }
         const queued = self.pending_calls.items.len -| @intFromBool(self.phase == .running_tool);
         if (queued > 0) {
-            out.appendSlice(a, styles.comment(a, std.fmt.allocPrint(a, " · {d} queued", .{queued}) catch "")) catch {};
+            out.appendSlice(a, styles.sep(a)) catch {};
+            out.appendSlice(a, styles.comment(a, std.fmt.allocPrint(a, "{d} queued", .{queued}) catch "")) catch {};
         }
         return out.items;
     }
@@ -521,7 +526,7 @@ const Tui = struct {
             const is_bash = std.mem.eql(u8, name, "bash");
             const bash_exit: ?[]const u8 = if (is_bash) tool_view.exitLine(self.s, shown) else null;
             const result = tool_view.resultLines(self.s, name, shown, self.cfg.max_diff_lines);
-            const rows = if (std.mem.eql(u8, name, "edit")) render.plainRows(self.s, result.lines, TOOL_BODY) else render.bodyRows(self.s, result.lines, width, TOOL_BODY);
+            const rows = if (std.mem.eql(u8, name, "edit")) render.plainRows(self.s, result.lines, styles.roles.output) else render.bodyRows(self.s, result.lines, width, styles.roles.output);
             const mark_error = is_error and bash_exit == null;
             for (rows, 0..) |row, i| {
                 const prefix = if (mark_error and i == rows.len - 1) styles.err(self.s, ERROR_PREFIX) else styles.comment(self.s, BODY_PREFIX);
@@ -533,7 +538,7 @@ const Tui = struct {
         for (diffs) |d| {
             self.push(tool_view.diffHead(self.s, name, d.path));
             const r = diff_view.diffBody(self.s, d, self.cfg.max_diff_lines);
-            for (render.plainRows(self.s, r.lines, TOOL_BODY)) |row| {
+            for (render.plainRows(self.s, r.lines, styles.roles.output)) |row| {
                 self.push(std.fmt.allocPrint(self.s, "{s}{s}", .{ styles.comment(self.s, BODY_PREFIX), row }) catch row);
             }
             if (tool_view.diffFooter(self.s, r)) |footer| self.push(footer);

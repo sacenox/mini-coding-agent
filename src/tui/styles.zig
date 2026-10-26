@@ -38,15 +38,16 @@ pub const Style = struct {
 
 /// Every role resolves to the terminal's default foreground unless it asks otherwise.
 pub const Roles = struct {
-    comment: Style = .{ .fg = .{ .palette = .bright_black }, .dim = true },
+    comment: Style = .{ .fg = .{ .palette = .bright_black } },
     prompt: Style = .{ .fg = .{ .palette = .blue } },
     accent: Style = .{ .fg = .{ .palette = .cyan } },
     err: Style = .{ .fg = .{ .palette = .red } },
     warn: Style = .{ .fg = .{ .palette = .yellow } },
     code: Style = .{ .fg = .{ .palette = .bright_black } },
+    output: Style = .{},
     diff_add: Style = .{ .fg = .{ .palette = .green } },
     diff_delete: Style = .{ .fg = .{ .palette = .red } },
-    inline_code: Style = .{ .fg = .{ .palette = .cyan } },
+    inline_code: Style = .{ .fg = .{ .palette = .magenta } },
     link: Style = .{ .fg = .{ .palette = .blue }, .underline = true },
     uri: Style = .{ .underline = true },
     heading1: Style = .{ .fg = .{ .palette = .bright_blue }, .bold = true },
@@ -123,6 +124,17 @@ pub fn styledWith(a: std.mem.Allocator, style: Style, text: []const u8) []const 
 
 pub fn anySet(style: Style) bool {
     return style.fg != null or style.bold or style.italic or style.underline or style.dim;
+}
+
+/// The `·` between sections. Every separator in the interface uses this one
+/// role, so a line never mixes separator colors.
+pub fn sep(a: std.mem.Allocator) []const u8 {
+    return styledWith(a, roles.comment, " · ");
+}
+
+/// Joins already-styled parts with separators.
+pub fn join(a: std.mem.Allocator, parts: []const []const u8) []const u8 {
+    return std.mem.join(a, sep(a), parts) catch "";
 }
 
 pub fn comment(a: std.mem.Allocator, text: []const u8) []const u8 {
