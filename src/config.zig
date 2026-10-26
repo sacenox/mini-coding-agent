@@ -32,6 +32,33 @@ pub const CustomProvider = struct {
     headers: ?std.json.ArrayHashMap([]const u8) = null,
 };
 
+pub const Colorscheme = struct {
+    comment: ?[]const u8 = null,
+    prompt: ?[]const u8 = null,
+    accent: ?[]const u8 = null,
+    err: ?[]const u8 = null,
+    warn: ?[]const u8 = null,
+    code: ?[]const u8 = null,
+    diff_add: ?[]const u8 = null,
+    diff_delete: ?[]const u8 = null,
+    inline_code: ?[]const u8 = null,
+    link: ?[]const u8 = null,
+    uri: ?[]const u8 = null,
+    heading1: ?[]const u8 = null,
+    heading2: ?[]const u8 = null,
+    heading3: ?[]const u8 = null,
+    heading4: ?[]const u8 = null,
+    heading5: ?[]const u8 = null,
+    heading6: ?[]const u8 = null,
+};
+
+/// A `#rrggbb` override. The TUI only ever sees the parsed value.
+pub fn parseHex(text: []const u8) ?u24 {
+    const body = if (text.len > 0 and text[0] == '#') text[1..] else text;
+    if (body.len != 6) return null;
+    return std.fmt.parseInt(u24, body, 16) catch null;
+}
+
 pub const Config = struct {
     path: []const u8,
     sessions_dir: []const u8,
@@ -51,6 +78,7 @@ pub const Config = struct {
     snapshot_diffs_in_context: bool,
     history_size: usize,
     max_diff_lines: usize,
+    colorscheme: Colorscheme,
 };
 
 const File = struct {
@@ -71,6 +99,7 @@ const File = struct {
     snapshotIgnoreDirs: ?[]const []const u8 = null,
     snapshotUsesGitignore: ?bool = null,
     snapshotDiffsInContext: ?bool = null,
+    colorscheme: ?Colorscheme = null,
 };
 
 /// An empty environment variable is treated as unset, per the XDG spec.
@@ -152,6 +181,17 @@ fn readInto(a: std.mem.Allocator, path: []const u8, required: bool, cfg: *Config
     if (file.snapshotDiffsInContext) |v| cfg.snapshot_diffs_in_context = v;
     if (file.historySize) |v| cfg.history_size = v;
     if (file.maxDiffLines) |v| cfg.max_diff_lines = v;
+    if (file.colorscheme) |scheme| {
+        inline for (@typeInfo(Colorscheme).@"struct".field_names) |name| {
+            if (@field(scheme, name)) |hex| {
+                if (parseHex(hex) == null) {
+                    platform.printErr("config {s}: colorscheme.{s}: expected \"#rrggbb\"\n", .{ path, name });
+                    return error.InvalidConfig;
+                }
+                @field(cfg.colorscheme, name) = hex;
+            }
+        }
+    }
 }
 
 pub const Update = struct {
@@ -206,5 +246,6 @@ fn defaults(a: std.mem.Allocator) !Config {
         .snapshot_diffs_in_context = false,
         .history_size = 100,
         .max_diff_lines = 2000,
+        .colorscheme = .{},
     };
 }

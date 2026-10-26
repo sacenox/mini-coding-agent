@@ -13,7 +13,7 @@ pub const Rendered = struct {
 };
 
 fn diffHunk() styles.Style {
-    return .{ .fg = styles.roles.prompt };
+    return styles.roles.prompt;
 }
 
 fn diffNote() styles.Style {
@@ -46,8 +46,8 @@ pub fn diffLines(a: std.mem.Allocator, lines: []const []const u8, max_diff_lines
             .add, .del => {
                 const is_add = kind == .add;
                 if (is_add) added += 1 else removed += 1;
-                const fg = if (is_add) styles.roles.diff_add else styles.roles.diff_delete;
-                out.append(a, .{ .text = text, .style = .{ .fg = fg } }) catch {};
+                const style = if (is_add) styles.roles.diff_add else styles.roles.diff_delete;
+                out.append(a, .{ .text = text, .style = style }) catch {};
             },
         }
     }

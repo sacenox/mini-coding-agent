@@ -127,7 +127,7 @@ pub const Scrollback = struct {
         self.separator = true;
         var it = std.mem.splitScalar(u8, text, '\n');
         var lines: std.ArrayList(render.BodyLine) = .empty;
-        while (it.next()) |l| lines.append(self.scratch, .{ .text = l, .style = .{ .fg = styles.roles.prompt } }) catch {};
+        while (it.next()) |l| lines.append(self.scratch, .{ .text = l, .style = styles.roles.prompt }) catch {};
         self.commitLines(lines.items);
         self.separator = true;
     }

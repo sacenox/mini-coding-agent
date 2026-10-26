@@ -258,8 +258,7 @@ fn markdownLine(a: std.mem.Allocator, line: []const u8, base: u32, spans: *std.A
     // Headings and rules keep their style when quoted or listed.
     const rest = line[start..];
     if (headingLevel(rest)) |level| {
-        const idx = @min(level, styles.roles.headings.len) - 1;
-        addSpan(a, spans, base, start, limit, styles.roles.headings[idx]);
+        addSpan(a, spans, base, start, limit, styles.roles.heading(level));
         return;
     }
     if (isFenceMarker(rest) or isRule(rest)) {
@@ -285,7 +284,7 @@ pub fn highlightMarkdown(a: std.mem.Allocator, text: []const u8) []const u8 {
 pub fn highlightCode(a: std.mem.Allocator, text: []const u8) []const u8 {
     // Stop before the block's trailing newline so the style does not leak a dangling SGR.
     const end = if (text.len > 0 and text[text.len - 1] == '\n') text.len - 1 else text.len;
-    const spans = [_]Span{.{ .start = 0, .end = @intCast(end), .style = .{ .fg = styles.roles.code } }};
+    const spans = [_]Span{.{ .start = 0, .end = @intCast(end), .style = styles.roles.code }};
     return paint(a, text, &spans, .{});
 }
 

@@ -262,33 +262,33 @@ const Tui = struct {
     fn stateLabel(self: *Tui) []const u8 {
         const a = self.s;
         var text: []const u8 = "idle";
-        var color: ?styles.Color = null;
+        var role: ?styles.Style = null;
         var bytes: usize = 0;
         switch (self.phase) {
             .preparing => text = "preparing",
             .waiting_model => text = "waiting for provider",
             .snapshotting => {
                 text = "snapshotting";
-                color = styles.roles.warn;
+                role = styles.roles.warn;
             },
             .running_tool => {
                 text = std.fmt.allocPrint(a, "running tool call {s}", .{self.detail orelse "tool"}) catch "running tool call";
-                color = styles.roles.prompt;
+                role = styles.roles.prompt;
             },
             .streaming => switch (self.stream_kind) {
                 .tool => {
                     text = std.fmt.allocPrint(a, "writing tool call {s}", .{self.writing_tool orelse "tool"}) catch "writing tool call";
-                    color = styles.roles.prompt;
+                    role = styles.roles.prompt;
                     bytes = self.writing_bytes;
                 },
                 .reasoning => {
                     text = "reasoning";
-                    color = styles.roles.prompt;
+                    role = styles.roles.prompt;
                     bytes = self.reasoning_bytes;
                 },
                 .text => {
                     text = "writing response";
-                    color = styles.roles.prompt;
+                    role = styles.roles.prompt;
                     bytes = self.text_bytes;
                 },
                 .none => text = "streaming",
@@ -296,7 +296,7 @@ const Tui = struct {
             else => {},
         }
         var out: std.ArrayList(u8) = .empty;
-        out.appendSlice(a, if (color) |c| styles.styledWith(a, .{ .fg = c }, text) else styles.comment(a, text)) catch {};
+        out.appendSlice(a, if (role) |r| styles.styledWith(a, r, text) else styles.comment(a, text)) catch {};
         if (bytes > 0) {
             const n = usage_mod.formatTokens(a, (bytes + 3) / 4);
             out.appendSlice(a, styles.comment(a, std.fmt.allocPrint(a, " · ~{s} tok", .{n}) catch "")) catch {};
@@ -341,7 +341,7 @@ const Tui = struct {
         if (self.picker) |*p| {
             const prefix = std.fmt.allocPrint(self.s, "{s} › ", .{p.title}) catch "";
             lines.append(self.s, std.fmt.allocPrint(self.s, "{s}{s}", .{
-                styles.styledWith(self.s, .{ .fg = styles.roles.prompt, .bold = true }, prefix),
+                styles.styledWith(self.s, styles.over(.{ .bold = true }, styles.roles.prompt), prefix),
                 render.sanitize(self.s, p.query.items),
             }) catch "> ") catch {};
             caret_line = 1;
@@ -358,7 +358,7 @@ const Tui = struct {
                         render.sanitize(self.s, p.labels[idx]),
                     }) catch p.labels[idx];
                     lines.append(self.s, if (i == p.sel)
-                        styles.styledWith(self.s, .{ .fg = styles.roles.prompt, .bold = true }, row)
+                        styles.styledWith(self.s, styles.over(.{ .bold = true }, styles.roles.prompt), row)
                     else
                         styles.comment(self.s, row)) catch {};
                 }
@@ -1084,6 +1084,7 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
     self.bindAllocators();
     self.history = history.Store.init(gpa, config.historyPath(gpa), cfg.history_size);
     status.init(cfg);
+    styles.applyScheme(cfg.colorscheme);
 
     self.term.start();
     defer self.term.stop();

@@ -118,6 +118,7 @@ A full example:
   "snapshotDiffsInContext": false,
   "historySize": 100,
   "maxDiffLines": 2000,
+  "colorscheme": { "prompt": "#5f87ff", "err": "#ff5f5f" },
   "customProviders": [
     {
       "id": "local",
@@ -164,6 +165,7 @@ Keys:
 | `snapshotDiffsInContext` | `false` | send the `bash` tool's snapshot diffs to the model inside the tool result |
 | `historySize` | `100` | past inputs kept in `<state dir>/mini-coding-agent/history` for `Shift+Up`/`Shift+Down` and `Ctrl+R` |
 | `maxDiffLines` | `2000` | diffs longer than this render as a "too large" notice instead of highlighting every line |
+| `colorscheme` | `{}` | per-role `#rrggbb` foreground overrides; roles are `comment`, `prompt`, `accent`, `err`, `warn`, `code`, `diff_add`, `diff_delete`, `inline_code`, `link`, `uri`, `heading1`-`heading6`; a role left out keeps its terminal palette color |
 
 Unknown keys are rejected. `provider` and `model` must both be set to make a
 request; a custom provider must list the model in its `models`. Config errors
