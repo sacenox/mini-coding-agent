@@ -49,9 +49,16 @@ const image_mime = [_]struct { ext: []const u8, mime: []const u8 }{
 
 const max_text_chars = 100_000;
 const max_image_base64_bytes = 5 * 1024 * 1024;
+const max_file_bytes = 1 << 30;
+const clipped_file_bytes = max_text_chars * 4;
 
 fn fail(a: std.mem.Allocator, comptime fmt: []const u8, args: anytype) tools.Result {
     return tools.fail(a, "read failed", fmt, args);
+}
+
+/// A non-error result the model reads as information, not as a failure.
+fn warn(a: std.mem.Allocator, comptime fmt: []const u8, args: anytype) tools.Result {
+    return .{ .text = std.fmt.allocPrint(a, fmt, args) catch "read", .is_error = false };
 }
 
 fn mimeFor(path: []const u8) ?[]const u8 {
@@ -110,10 +117,22 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
     if (args.offset) |o| if (o < 1) return fail(a, "read failed: offset must be at least 1", .{});
     if (args.range) |r| if (r < 1) return fail(a, "read failed: range must be at least 1", .{});
 
-    const data = filesystem.readFileAlloc(a, path, 1 << 30) catch |e|
-        return fail(a, "read failed: {s}: {s}", .{ path, @errorName(e) });
+    var clipped = false;
+    const data = read: {
+        break :read filesystem.readFileAlloc(a, path, max_file_bytes) catch |e| switch (e) {
+            error.StreamTooLong => {
+                clipped = true;
+                break :read filesystem.readFilePrefix(a, path, clipped_file_bytes) catch |e2|
+                    return tools.ioFail(a, "read", path, e2);
+            },
+            else => return tools.ioFail(a, "read", path, e),
+        };
+    };
 
     if (mimeFor(path)) |mime| {
+        if (clipped) {
+            return fail(a, "read failed: {s} is over {d} bytes, too large to read as an image", .{ path, max_file_bytes });
+        }
         if (!ctx.supports_images) {
             return fail(a, "read failed: {s} is an image and the current model does not accept image input", .{path});
         }
@@ -140,8 +159,12 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
 
     const content = text.utf8Clean(a, data) catch return fail(a, "read failed: out of memory", .{});
     const offset = args.offset orelse 1;
-    const slice = lineSlice(content, offset, args.range) orelse
-        return fail(a, "read failed: {s} has fewer than {d} lines", .{ path, offset });
+    const slice = lineSlice(content, offset, args.range) orelse {
+        if (clipped) {
+            return warn(a, "{s}: only the first {d} bytes were read, and offset {d} is past them", .{ path, content.len, offset });
+        }
+        return warn(a, "{s} has {d} lines; offset {d} is past the end", .{ path, countLines(content), offset });
+    };
 
     var sent = slice;
     if (slice.len > max_text_chars) {
@@ -149,9 +172,13 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
         while (cut > 0 and slice[cut] & 0xC0 == 0x80) cut -= 1;
         sent = slice[0..cut];
     }
-    const truncated = sent.len < slice.len;
+    const truncated = clipped or sent.len < slice.len;
+    const note = if (clipped)
+        std.fmt.allocPrint(a, "... truncated ... only the first {d} bytes of {s} were read\n", .{ content.len, path }) catch "truncated"
+    else
+        std.fmt.allocPrint(a, "... truncated ... {s} is {d} characters\n", .{ path, slice.len }) catch "truncated";
     const result_text = if (truncated)
-        std.fmt.allocPrint(a, "{s}\n\n... truncated ... {s} is {d} characters\n", .{ sent, path, slice.len }) catch "read failed"
+        std.fmt.allocPrint(a, "{s}\n\n{s}", .{ sent, note }) catch "read failed"
     else
         sent;
     return .{ .text = result_text, .is_error = false, .body = bodyLine(a, args, countLines(sent), truncated) };

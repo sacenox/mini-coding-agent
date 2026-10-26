@@ -59,6 +59,18 @@ pub fn fail(a: std.mem.Allocator, fallback: []const u8, comptime fmt: []const u8
     };
 }
 
+/// Failure to touch `path`; the common filesystem errors get a plain sentence
+/// instead of a bare error name.
+pub fn ioFail(a: std.mem.Allocator, what: []const u8, path: []const u8, e: anyerror) Result {
+    const message = switch (e) {
+        error.FileNotFound => std.fmt.allocPrint(a, "{s} failed: {s} does not exist", .{ what, path }),
+        error.IsDir => std.fmt.allocPrint(a, "{s} failed: {s} is a directory", .{ what, path }),
+        error.AccessDenied, error.PermissionDenied => std.fmt.allocPrint(a, "{s} failed: {s}: permission denied", .{ what, path }),
+        else => std.fmt.allocPrint(a, "{s} failed: {s}: {s}", .{ what, path, @errorName(e) }),
+    } catch return .{ .text = what, .is_error = true };
+    return .{ .text = message, .is_error = true };
+}
+
 pub const Kind = enum { string, integer };
 
 pub const Param = struct {

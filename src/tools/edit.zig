@@ -48,7 +48,7 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
     if (args.oldText.len == 0) {
         if (filesystem.fileExists(path)) return fail(a, "edit failed: {s} already exists", .{path});
         if (ctx.cancel.load(.acquire)) return fail(a, "edit cancelled", .{});
-        filesystem.writeFile(path, args.newText) catch |e| return fail(a, "edit failed: {s}: {s}", .{ path, @errorName(e) });
+        filesystem.writeFile(path, args.newText) catch |e| return tools.ioFail(a, "edit", path, e);
         const cleaned = text.utf8Clean(scratch, args.newText) catch return fail(a, "edit failed: out of memory", .{});
         const patch = diff.unified(scratch, "", cleaned) catch return fail(a, "edit failed: out of memory", .{});
         return .{
@@ -57,9 +57,7 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
         };
     }
 
-    const before = filesystem.readFileAlloc(scratch, path, 1 << 30) catch |e| {
-        return fail(a, "edit failed: {s}: {s}", .{ path, @errorName(e) });
-    };
+    const before = filesystem.readFileAlloc(scratch, path, 1 << 30) catch |e| return tools.ioFail(a, "edit", path, e);
     const at = std.mem.indexOf(u8, before, args.oldText) orelse
         return fail(a, "edit failed: oldText not found in {s}", .{path});
     var count: usize = 1;
@@ -73,7 +71,7 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
     const after = std.mem.concat(scratch, u8, &.{ before[0..at], args.newText, before[at + args.oldText.len ..] }) catch
         return fail(a, "edit failed: out of memory", .{});
     if (ctx.cancel.load(.acquire)) return fail(a, "edit cancelled", .{});
-    filesystem.writeFile(path, after) catch |e| return fail(a, "edit failed: {s}: {s}", .{ path, @errorName(e) });
+    filesystem.writeFile(path, after) catch |e| return tools.ioFail(a, "edit", path, e);
     const clean_before = text.utf8Clean(scratch, before) catch return fail(a, "edit failed: out of memory", .{});
     const clean_after = text.utf8Clean(scratch, after) catch return fail(a, "edit failed: out of memory", .{});
     const patch = diff.unified(scratch, clean_before, clean_after) catch return fail(a, "edit failed: out of memory", .{});
