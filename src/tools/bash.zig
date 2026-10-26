@@ -186,9 +186,19 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
     if (ctx.on_phase) |p| p.call(.running);
     const diffs = snapshot.diffTrees(scratch, before, after) catch return fail(a, "bash failed: out of memory", .{});
 
+    var model_text: ?[]const u8 = null;
+    if (ctx.snapshot_diffs_in_context and diffs.len > 0) {
+        const patch = snapshot.diffText(scratch, diffs) catch return fail(a, "bash failed: out of memory", .{});
+        if (patch.len > 0) {
+            model_text = std.fmt.allocPrint(a, "{s}\n{s}", .{ out.items, patch }) catch
+                return fail(a, "bash failed: out of memory", .{});
+        }
+    }
+
     return .{
         .text = out.items,
         .is_error = if (code) |c| c != 0 else true,
         .diffs = diffs,
+        .model_text = model_text,
     };
 }

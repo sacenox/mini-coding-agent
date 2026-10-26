@@ -270,13 +270,14 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(message_mod.Message), int
                     .on_phase = .{ .ctx = &phase_ctx, .on_phase = onToolPhase },
                     .snapshot_ignore_dirs = opts.config.snapshot_ignore_dirs,
                     .snapshot_uses_gitignore = opts.config.snapshot_uses_gitignore,
+                    .snapshot_diffs_in_context = opts.config.snapshot_diffs_in_context,
                 });
             }
 
             const tool_message = message_mod.Message{ .tool_result = .{
                 .tool_call_id = call.id,
                 .tool_name = call.name,
-                .text = if (result) |r| r.text else "aborted",
+                .text = if (result) |r| r.model_text orelse r.text else "aborted",
                 .images = if (result) |r| r.images else &.{},
                 .is_error = if (result) |r| r.is_error else true,
                 .timestamp = time.nowMs(),
@@ -291,7 +292,7 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(message_mod.Message), int
             };
             listener.emit(.{ .tool_result = .{
                 .name = call.name,
-                .text = tool_message.tool_result.text,
+                .text = if (result) |r| r.text else "aborted",
                 .is_error = tool_message.tool_result.is_error,
                 .diffs = if (result) |r| r.diffs else &.{},
                 .body = if (result) |r| r.body else null,

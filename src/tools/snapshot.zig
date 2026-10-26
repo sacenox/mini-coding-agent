@@ -150,6 +150,22 @@ fn diffOne(a: std.mem.Allocator, path: []const u8, before: ?FileState, after: ?F
     return .{ .path = path, .note = noteFor(a, if (af.content == null) af.kind else bf.kind, "changed") };
 }
 
+pub fn diffText(a: std.mem.Allocator, diffs: []const tools.FileDiff) ![]const u8 {
+    var out: std.Io.Writer.Allocating = .init(a);
+    const w = &out.writer;
+    for (diffs) |d| {
+        if (d.patch) |patch| {
+            if (patch.len == 0) continue;
+            try w.print("--- {s}\n", .{d.path});
+            try w.writeAll(patch);
+            if (patch[patch.len - 1] != '\n') try w.writeByte('\n');
+        } else if (d.note) |note| {
+            try w.print("--- {s}: {s}\n", .{ d.path, note });
+        }
+    }
+    return out.written();
+}
+
 pub fn diffTrees(a: std.mem.Allocator, before: Tree, after: Tree) ![]tools.FileDiff {
     var paths: std.ArrayList([]const u8) = .empty;
     var it = before.iterator();

@@ -115,6 +115,7 @@ A full example:
   "herdr": false,
   "snapshotIgnoreDirs": [".git"],
   "snapshotUsesGitignore": true,
+  "snapshotDiffsInContext": false,
   "historySize": 100,
   "maxDiffLines": 2000,
   "customProviders": [
@@ -160,6 +161,7 @@ Keys:
 | `herdr` | `false` | report agent state to a Herdr pane; only active inside one (`HERDR_ENV=1` with `HERDR_BIN_PATH` and `HERDR_PANE_ID`) |
 | `snapshotIgnoreDirs` | `[]` | directory names skipped when the `bash` tool snapshots the cwd for diffs |
 | `snapshotUsesGitignore` | `true` | also skip paths matched by the `.gitignore` files under the cwd when snapshotting |
+| `snapshotDiffsInContext` | `false` | send the `bash` tool's snapshot diffs to the model inside the tool result |
 | `historySize` | `100` | past inputs kept in `<state dir>/mini-coding-agent/history` for `Shift+Up`/`Shift+Down` and `Ctrl+R` |
 | `maxDiffLines` | `2000` | diffs longer than this render as a "too large" notice instead of highlighting every line |
 

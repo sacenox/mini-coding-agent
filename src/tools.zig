@@ -33,6 +33,7 @@ pub const Context = struct {
     on_phase: ?PhaseFn = null,
     snapshot_ignore_dirs: []const []const u8 = &.{},
     snapshot_uses_gitignore: bool = true,
+    snapshot_diffs_in_context: bool = false,
 };
 
 pub const FileDiff = struct {
@@ -47,6 +48,8 @@ pub const Result = struct {
     images: []const message_mod.ImageContent = &.{},
     diffs: []const FileDiff = &.{},
     body: ?[]const u8 = null,
+    /// Text the model sees instead of `text`; the TUI still renders `text`.
+    model_text: ?[]const u8 = null,
 };
 
 pub fn fail(a: std.mem.Allocator, fallback: []const u8, comptime fmt: []const u8, args: anytype) Result {

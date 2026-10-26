@@ -48,6 +48,7 @@ pub const Config = struct {
     custom_providers: []const CustomProvider,
     snapshot_ignore_dirs: []const []const u8,
     snapshot_uses_gitignore: bool,
+    snapshot_diffs_in_context: bool,
     history_size: usize,
     max_diff_lines: usize,
 };
@@ -69,6 +70,7 @@ const File = struct {
     showImages: ?bool = null,
     snapshotIgnoreDirs: ?[]const []const u8 = null,
     snapshotUsesGitignore: ?bool = null,
+    snapshotDiffsInContext: ?bool = null,
 };
 
 /// An empty environment variable is treated as unset, per the XDG spec.
@@ -147,6 +149,7 @@ fn readInto(a: std.mem.Allocator, path: []const u8, required: bool, cfg: *Config
     if (file.showImages) |v| cfg.show_images = v;
     if (file.snapshotIgnoreDirs) |v| cfg.snapshot_ignore_dirs = v;
     if (file.snapshotUsesGitignore) |v| cfg.snapshot_uses_gitignore = v;
+    if (file.snapshotDiffsInContext) |v| cfg.snapshot_diffs_in_context = v;
     if (file.historySize) |v| cfg.history_size = v;
     if (file.maxDiffLines) |v| cfg.max_diff_lines = v;
 }
@@ -200,6 +203,7 @@ fn defaults(a: std.mem.Allocator) !Config {
         .custom_providers = &.{},
         .snapshot_ignore_dirs = &.{},
         .snapshot_uses_gitignore = true,
+        .snapshot_diffs_in_context = false,
         .history_size = 100,
         .max_diff_lines = 2000,
     };
