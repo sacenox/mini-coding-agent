@@ -37,15 +37,17 @@ pub fn diffLines(a: std.mem.Allocator, lines: []const []const u8, max_diff_lines
         if (std.mem.startsWith(u8, line, "diff ")) in_hunk = false;
         const kind = highlight.diffKind(line, in_hunk);
         if (kind == .hunk) in_hunk = true;
+        // File content is untrusted: its own escapes never reach the terminal.
+        const text = render.stripAnsi(a, line);
         switch (kind) {
-            .hunk => out.append(a, .{ .text = line, .style = diffHunk() }) catch {},
-            .note => out.append(a, .{ .text = line, .style = diffNote() }) catch {},
-            .ctx => out.append(a, .{ .text = line, .style = diffNote() }) catch {},
+            .hunk => out.append(a, .{ .text = text, .style = diffHunk() }) catch {},
+            .note => out.append(a, .{ .text = text, .style = diffNote() }) catch {},
+            .ctx => out.append(a, .{ .text = text, .style = diffNote() }) catch {},
             .add, .del => {
                 const is_add = kind == .add;
                 if (is_add) added += 1 else removed += 1;
                 const fg = if (is_add) styles.roles.diff_add else styles.roles.diff_delete;
-                out.append(a, .{ .text = line, .style = .{ .fg = fg } }) catch {};
+                out.append(a, .{ .text = text, .style = .{ .fg = fg } }) catch {};
             },
         }
     }

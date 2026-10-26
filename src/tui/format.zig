@@ -189,40 +189,42 @@ fn splitCells(a: std.mem.Allocator, line: []const u8) []const []const u8 {
     return cells.items;
 }
 
-/// Cell text with its inline markers removed: what the styling pass will actually paint.
-fn visible(a: std.mem.Allocator, cell: []const u8) []const u8 {
-    var out: std.ArrayList(u8) = .empty;
-    var i: usize = 0;
-    while (i < cell.len) {
-        const c = cell[i];
-        if (c == '\\' and i + 1 < cell.len) {
-            out.appendSlice(a, cell[i .. i + 2]) catch {};
-            i += 2;
-            continue;
-        }
-        if (c == '`' or c == '*' or c == '_') {
+/// Index of the `]` closing the `[` at `open`, skipping escaped bytes.
+pub fn closeBracket(text: []const u8, open: usize) ?usize {
+    var i = open + 1;
+    while (i < text.len) : (i += 1) {
+        if (text[i] == '\\') {
             i += 1;
             continue;
         }
-        if (c == '[') {
-            if (std.mem.indexOfScalarPos(u8, cell, i, ']')) |close| {
-                if (close + 1 < cell.len and cell[close + 1] == '(') {
-                    if (std.mem.indexOfScalarPos(u8, cell, close + 1, ')')) |end| {
-                        out.appendSlice(a, cell[i + 1 .. close]) catch {};
-                        i = end + 1;
-                        continue;
-                    }
-                }
-            }
-        }
-        out.append(a, c) catch {};
-        i += 1;
+        if (text[i] == ']') return i;
     }
-    return out.items;
+    return null;
 }
 
-fn cellWidth(a: std.mem.Allocator, cell: []const u8) usize {
-    return render.displayWidth(visible(a, cell));
+/// Index of the `)` closing the `(` at `open`, so destinations may hold parentheses.
+pub fn linkEnd(text: []const u8, open: usize) ?usize {
+    var depth: usize = 0;
+    var i = open;
+    while (i < text.len) : (i += 1) {
+        if (text[i] == '\\') {
+            i += 1;
+            continue;
+        }
+        if (text[i] != '(' and text[i] != ')') continue;
+        if (text[i] == ')') {
+            depth -= 1;
+            if (depth == 0) return i;
+        } else {
+            depth += 1;
+        }
+    }
+    return null;
+}
+
+/// The styling pass only adds color, so a cell's own bytes are what gets painted.
+fn cellWidth(cell: []const u8) usize {
+    return render.displayWidth(cell);
 }
 
 /// Delimiter row (`|---|:--:|`) as per-column alignments, or null when the line is not one.
@@ -257,7 +259,8 @@ fn rowCells(line: []const u8) bool {
     return trimmed_line.len > 0 and std.mem.indexOfScalar(u8, trimmed_line, '|') != null;
 }
 
-fn emitRow(a: std.mem.Allocator, block: *std.ArrayList(u8), cells: []const []const u8, named: usize, widths: []const usize, aligns: []const Align, delimiter: bool) void {
+fn emitRow(a: std.mem.Allocator, block: *std.ArrayList(u8), indent: []const u8, cells: []const []const u8, named: usize, widths: []const usize, aligns: []const Align, delimiter: bool) void {
+    block.appendSlice(a, indent) catch {};
     block.append(a, '|') catch {};
     for (0..named) |k| {
         const cell = if (k < cells.len) cells[k] else "";
@@ -268,7 +271,7 @@ fn emitRow(a: std.mem.Allocator, block: *std.ArrayList(u8), cells: []const []con
             block.appendNTimes(a, '-', widths[k] - 2) catch {};
             block.append(a, if (alignment == .right or alignment == .center) ':' else '-') catch {};
         } else {
-            const pad = widths[k] - cellWidth(a, cell);
+            const pad = widths[k] - cellWidth(cell);
             const before: usize = switch (alignment) {
                 .right => pad,
                 .center => pad / 2,
@@ -282,7 +285,15 @@ fn emitRow(a: std.mem.Allocator, block: *std.ArrayList(u8), cells: []const []con
     }
 }
 
+/// Leading whitespace, kept so a table nested in a list stays in its item.
+fn leadingText(line: []const u8) []const u8 {
+    var i: usize = 0;
+    while (i < line.len and (line[i] == ' ' or line[i] == '\t')) i += 1;
+    return line[0..i];
+}
+
 fn formatTable(a: std.mem.Allocator, header: []const u8, aligns: []const Align, body: []const []const u8, trailing: bool) ?[]const u8 {
+    const indent = leadingText(header);
     const named = aligns.len;
     const rows = a.alloc([]const []const u8, body.len + 1) catch return null;
     rows[0] = splitCells(a, header);
@@ -296,16 +307,16 @@ fn formatTable(a: std.mem.Allocator, header: []const u8, aligns: []const Align, 
     const widths = a.alloc(usize, named) catch return null;
     @memset(widths, 3);
     for (rows) |cells| {
-        for (cells, 0..) |cell, k| widths[k] = @max(widths[k], cellWidth(a, cell));
+        for (cells, 0..) |cell, k| widths[k] = @max(widths[k], cellWidth(cell));
     }
 
     var block: std.ArrayList(u8) = .empty;
     for (rows, 0..) |cells, r| {
         if (r > 0) block.append(a, '\n') catch {};
-        emitRow(a, &block, cells, named, widths, aligns, false);
+        emitRow(a, &block, indent, cells, named, widths, aligns, false);
         if (r == 0) {
             block.append(a, '\n') catch {};
-            emitRow(a, &block, &.{}, named, widths, aligns, true);
+            emitRow(a, &block, indent, &.{}, named, widths, aligns, true);
         }
     }
     if (trailing) block.append(a, '\n') catch {};

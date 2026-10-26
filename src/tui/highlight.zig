@@ -1,5 +1,6 @@
 const std = @import("std");
 const styles = @import("styles.zig");
+const format = @import("format.zig");
 
 const Span = struct {
     start: u32,
@@ -82,16 +83,47 @@ fn runLength(line: []const u8, at: usize, c: u8) usize {
     return n;
 }
 
-/// Closing run for `marker` repeated `count` times, ignoring empty or space-padded content.
+/// Just past the code span opened at `i`, or null when its backticks never close.
+fn codeSpanEnd(line: []const u8, at: usize, limit: usize) ?usize {
+    // Backslashes are literal inside a code span, so only the run length closes it.
+    const n = runLength(line, at, '`');
+    var i = at + n;
+    while (i < limit) : (i += 1) {
+        if (line[i] == '`' and runLength(line, i, '`') >= n) return i + n;
+    }
+    return null;
+}
+
+/// Closing run for `marker` repeated `count` times, ignoring empty or space-padded content
+/// and anything escaped or inside a code span.
 fn closeRun(line: []const u8, open_at: usize, marker: u8, count: usize, limit: usize) ?usize {
     var i = open_at + count;
     while (i + count <= limit) : (i += 1) {
+        if (line[i] == '\\') {
+            i += 1;
+            continue;
+        }
+        if (line[i] == '`') {
+            i = (codeSpanEnd(line, i, limit) orelse i + runLength(line, i, '`')) - 1;
+            continue;
+        }
         if (line[i] != marker) continue;
         if (line[i - 1] == ' ' or line[i - 1] == '\t') continue;
-        if (runLength(line, i, marker) < count) continue;
+        const run = runLength(line, i, marker);
+        if (run < count) continue;
+        // `_` only closes where a word ends, so `foo_bar_baz` stays literal.
+        if (marker == '_' and i + run < limit and isAlnum(line[i + run])) continue;
         return i;
     }
     return null;
+}
+
+fn emphasis(count: usize) styles.Style {
+    return switch (count) {
+        1 => .{ .italic = true },
+        2 => .{ .bold = true },
+        else => .{ .bold = true, .italic = true },
+    };
 }
 
 fn addSpan(a: std.mem.Allocator, spans: *std.ArrayList(Span), base: u32, start: usize, end: usize, style: styles.Style) void {
@@ -104,23 +136,23 @@ fn scanInline(a: std.mem.Allocator, line: []const u8, base: u32, start: usize, l
     var i = start;
     while (i < limit) {
         const c = line[i];
+        if (c == '\\' and i + 1 < limit) {
+            i += 2;
+            continue;
+        }
         if (c == '`') {
             const n = runLength(line, i, '`');
-            var j = i + n;
-            while (j + n <= limit) : (j += 1) {
-                if (line[j] != '`') continue;
-                if (runLength(line, j, '`') < n) continue;
-                addSpan(a, spans, base, i, j + n, styles.roles.inline_code);
-                i = j + n;
-                break;
-            } else {
+            const end = codeSpanEnd(line, i, limit) orelse {
                 i += n;
-            }
+                continue;
+            };
+            addSpan(a, spans, base, i, end, styles.roles.inline_code);
+            i = end;
             continue;
         }
         if (c == '*' or c == '_') {
             const n = runLength(line, i, c);
-            const count: usize = @min(n, 2);
+            const count: usize = @min(n, 3);
             const content = i + count;
             // An opener needs content and, for `_`, must not sit inside a word.
             if (content >= limit or line[content] == ' ' or line[content] == '\t' or
@@ -130,8 +162,8 @@ fn scanInline(a: std.mem.Allocator, line: []const u8, base: u32, start: usize, l
                 continue;
             }
             if (closeRun(line, i, c, count, limit)) |close| {
-                const style: styles.Style = if (count == 2) .{ .bold = true } else .{ .italic = true };
-                addSpan(a, spans, base, i, close + count, style);
+                addSpan(a, spans, base, i, close + count, emphasis(count));
+                scanInline(a, line, base, content, close, spans);
                 i = close + count;
             } else {
                 i += n;
@@ -139,9 +171,9 @@ fn scanInline(a: std.mem.Allocator, line: []const u8, base: u32, start: usize, l
             continue;
         }
         if (c == '[') {
-            if (std.mem.indexOfScalarPos(u8, line[0..limit], i, ']')) |close| {
+            if (format.closeBracket(line[0..limit], i)) |close| {
                 if (close + 1 < limit and line[close + 1] == '(') {
-                    if (std.mem.indexOfScalarPos(u8, line[0..limit], close + 1, ')')) |end| {
+                    if (format.linkEnd(line[0..limit], close + 1)) |end| {
                         addSpan(a, spans, base, i, close + 1, styles.roles.link);
                         addSpan(a, spans, base, close + 1, end + 1, styles.roles.uri);
                         i = end + 1;
@@ -202,7 +234,7 @@ fn blockMarker(line: []const u8) ?usize {
     if (at >= line.len) return null;
     const c = line[at];
     if (c == '>' or c == '-' or c == '*' or c == '+') {
-        if (at + 1 < line.len and (line[at + 1] == ' ' or line[at + 1] == '\t')) return at + 1;
+        if (at + 1 >= line.len or line[at + 1] == ' ' or line[at + 1] == '\t') return at + 1;
         return null;
     }
     var n = at;
@@ -218,15 +250,21 @@ fn markdownLine(a: std.mem.Allocator, line: []const u8, base: u32, spans: *std.A
         addSpan(a, spans, base, 0, limit, muted());
         return;
     }
-    if (headingLevel(line)) |level| {
+    var start: usize = 0;
+    while (blockMarker(line[start..])) |after| {
+        addSpan(a, spans, base, start, start + after, muted());
+        start += after;
+    }
+    // Headings and rules keep their style when quoted or listed.
+    const rest = line[start..];
+    if (headingLevel(rest)) |level| {
         const idx = @min(level, styles.roles.headings.len) - 1;
-        addSpan(a, spans, base, 0, limit, styles.roles.headings[idx]);
+        addSpan(a, spans, base, start, limit, styles.roles.headings[idx]);
         return;
     }
-    var start: usize = 0;
-    if (blockMarker(line)) |after| {
-        addSpan(a, spans, base, 0, after, muted());
-        start = after;
+    if (isFenceMarker(rest) or isRule(rest)) {
+        addSpan(a, spans, base, start, limit, muted());
+        return;
     }
     scanInline(a, line, base, start, limit, spans);
 }

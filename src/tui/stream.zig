@@ -120,9 +120,10 @@ pub const MarkdownStream = struct {
 
     pub fn flush(self: *MarkdownStream, out_a: std.mem.Allocator) []BodyLine {
         var out: std.ArrayList(BodyLine) = .empty;
-        if (self.fence != null) {
+        if (self.fence) |*f| {
+            // The unterminated last line still belongs to the fence body.
+            if (self.rest.items.len > 0) f.lines.append(self.a, self.rest.items) catch {};
             self.releaseFence(out_a, null, &out);
-            if (self.rest.items.len > 0) out.append(out_a, .{ .text = highlight.highlightMarkdown(out_a, self.rest.items) }) catch {};
         } else {
             self.releaseProse(out_a, self.norm.line(self.a, self.rest.items), &out);
         }

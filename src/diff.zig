@@ -122,10 +122,10 @@ fn myers(a: std.mem.Allocator, la: []const Line, lb: []const Line) ![]Op {
 }
 
 fn addRange(w: *std.Io.Writer, start: usize, count: usize) !void {
-    if (count == 0) {
-        try w.print("{d},0", .{start - 1});
-    } else {
-        try w.print("{d},{d}", .{ start, count });
+    switch (count) {
+        0 => try w.print("{d},0", .{start - 1}),
+        1 => try w.print("{d}", .{start}),
+        else => try w.print("{d},{d}", .{ start, count }),
     }
 }
 
