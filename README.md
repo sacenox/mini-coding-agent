@@ -15,9 +15,10 @@ builds for development. The binary lands at `zig-out/bin/mini`. `zig build run
 
 ## Run
 
-    mini                 # interactive TUI
-    mini -p '<prompt>'   # one turn, print the reply, exit
-    mini -c <file>       # overlay a config file for this run
+    mini                           # interactive TUI
+    mini -p '<prompt>'             # one turn, print the reply, exit
+    mini -c <file>                 # overlay a config file for this run
+    mini --resume <id>             # continue a past session
 
 Arguments:
 
@@ -25,9 +26,16 @@ Arguments:
 |---|---|
 | `-p <prompt>`, `--print <prompt>` | run one prompt non-interactively and print the assistant text |
 | `-c <file>`, `--config <file>` | read a config file after the global one; its keys win |
+| `--resume <id>`, `--resume=<id>` | continue the session with that id, or the single session it prefixes |
+| `--no-config` | ignore the config files and run on the built-in defaults |
+| `--no-session` | record nothing; nothing to resume afterwards |
 
-`-p=<prompt>`, `--print=<prompt>`, `-c=<file>`, and `--config=<file>` work too.
-Any other argument exits 1.
+`-p=<prompt>`, `--print=<prompt>`, `-c=<file>`, `--config=<file>`, and
+`--resume=<id>` work too. Any other argument exits 1.
+
+`--resume` replays the recorded conversation into the context and appends to the
+same log. The TUI prints a dim `resume with: mini --resume <id>` line when it
+exits, unless `--no-session` was given.
 
 `-p` requires a model in the config. Without one it exits 1 and prints where
 the config lives. Interactive mode requires a TTY. In `-p` mode tool calls and

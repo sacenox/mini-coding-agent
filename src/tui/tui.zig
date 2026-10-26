@@ -998,6 +998,10 @@ const Tui = struct {
         self.term.write(self.live.erase(self.a, width));
         self.term.write(self.scrollback.buf.items);
         self.term.stop();
+        if (self.opts.session.file != null) {
+            if (self.opts.session.id) |id|
+                platform.writeOut(styles.comment(self.a, std.fmt.allocPrint(self.a, "resume with: mini --resume {s}\n", .{id}) catch ""));
+        }
         self.opts.session.close();
         status.release();
     }
@@ -1095,7 +1099,7 @@ fn eventTrampoline(ctx: *anyopaque, event: agent.Event) void {
     self.event_mutex.unlock(platform.io);
 }
 
-pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const config.ToolName) !void {
+pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const config.ToolName, resumed: []const message_mod.Message) !void {
     const gpa = platform.gpa;
     const opts_ptr = try gpa.create(agent.Options);
     opts_ptr.* = opts;
@@ -1113,6 +1117,13 @@ pub fn run(opts: agent.Options, cfg: *const config.Config, tool_names: []const c
 
     status.report("idle", null, null);
     self.pushBanner();
+    if (resumed.len > 0) {
+        self.messages.appendSlice(gpa, resumed) catch {};
+        self.note(styles.comment(self.s, std.fmt.allocPrint(self.s, "resumed {s} · {d} messages", .{
+            opts_ptr.session.id orelse "",
+            resumed.len,
+        }) catch "resumed"));
+    }
     self.draw();
 
     const stdin_thread = std.Thread.spawn(.{}, inputThread, .{self}) catch return;

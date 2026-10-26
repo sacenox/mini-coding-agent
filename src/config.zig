@@ -147,10 +147,11 @@ fn sessionsDir(a: std.mem.Allocator) []const u8 {
     if (state.len == 0) return "sessions";
     return filesystem.join(a, &.{ state, "mini-coding-agent/sessions" }) catch "sessions";
 }
-pub fn load(a: std.mem.Allocator, override: ?[]const u8) !Config {
+pub fn load(a: std.mem.Allocator, override: ?[]const u8, no_config: bool) !Config {
     var cfg = try defaults(a);
-    try readInto(a, configPath(a), false, &cfg);
+    if (no_config) return cfg;
 
+    try readInto(a, configPath(a), false, &cfg);
     if (override) |path| {
         cfg.path = path;
         try readInto(a, path, true, &cfg);

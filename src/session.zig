@@ -163,14 +163,20 @@ pub const Session = struct {
     cwd: []const u8,
     id: ?[]const u8 = null,
     file: ?std.Io.File = null,
+    offset: u64 = 0,
+    disabled: bool = false,
     closed: bool = false,
 
+    /// `id` names the provider's session header until a log is opened; a recording
+    /// session then takes the name of its directory.
     pub fn init(a: std.mem.Allocator, sessions_dir: []const u8, cwd: []const u8) Session {
-        return .{ .a = a, .sessions_dir = sessions_dir, .cwd = cwd };
+        var id: [6]u8 = undefined;
+        shortId(&id);
+        return .{ .a = a, .sessions_dir = sessions_dir, .cwd = cwd, .id = a.dupe(u8, &id) catch null };
     }
 
     pub fn appendMessage(self: *Session, scratch: std.mem.Allocator, message: message_mod.Message) !void {
-        if (self.closed) return;
+        if (self.closed or self.disabled) return;
         try self.ensure(if (message == .user) text.slugify(self.a, message.user.content) else "session");
 
         var arena = std.heap.ArenaAllocator.init(scratch);
@@ -184,7 +190,7 @@ pub const Session = struct {
     }
 
     pub fn appendRequest(self: *Session, scratch: std.mem.Allocator, req: Request) !void {
-        if (self.closed) return;
+        if (self.closed or self.disabled) return;
         try self.ensure("session");
 
         var arena = std.heap.ArenaAllocator.init(scratch);
@@ -209,7 +215,8 @@ pub const Session = struct {
         const w = &out.writer;
         try w.writeAll(line);
         try w.writeByte('\n');
-        try f.writeStreamingAll(platform.io, out.written());
+        try f.writePositionalAll(platform.io, out.written(), self.offset);
+        self.offset += out.written().len;
         try f.sync(platform.io);
     }
 
@@ -219,6 +226,45 @@ pub const Session = struct {
             f.close(platform.io);
             self.file = null;
         }
+    }
+
+    /// Reopens the session matching `id` for appending and replays its messages into
+    /// `messages`. Strings land in `self.a`, so the caller may release its own arena.
+    pub fn reopen(self: *Session, id: []const u8, messages: *std.ArrayList(message_mod.Message)) !void {
+        var arena = std.heap.ArenaAllocator.init(self.a);
+        defer arena.deinit();
+        const scratch = arena.allocator();
+
+        const name = try self.matching(scratch, id);
+        const dir = try filesystem.join(scratch, &.{ self.sessions_dir, name });
+        const log_path = try filesystem.join(scratch, &.{ dir, "session.jsonl" });
+        const body = filesystem.readFileAlloc(scratch, log_path, 1 << 26) catch |e| switch (e) {
+            error.FileNotFound => return error.NoSuchSession,
+            else => return e,
+        };
+
+        var lines = std.mem.splitScalar(u8, body, '\n');
+        while (lines.next()) |line| {
+            if (parseMessage(self.a, scratch, line)) |message| try messages.append(self.a, message);
+        }
+
+        self.id = try self.a.dupe(u8, name);
+        const file = try std.Io.Dir.cwd().createFile(platform.io, log_path, .{ .truncate = false, .permissions = .fromMode(0o600) });
+        self.offset = try file.length(platform.io);
+        self.file = file;
+    }
+
+    /// An exact session name, or the single one it prefixes.
+    fn matching(self: *Session, scratch: std.mem.Allocator, id: []const u8) ![]const u8 {
+        const names = filesystem.listDir(scratch, self.sessions_dir) catch return error.NoSuchSession;
+        for (names) |name| if (std.mem.eql(u8, name, id)) return name;
+        var found: ?[]const u8 = null;
+        for (names) |name| {
+            if (!std.mem.startsWith(u8, name, id)) continue;
+            if (found != null) return error.AmbiguousSession;
+            found = name;
+        }
+        return found orelse error.NoSuchSession;
     }
 
     fn ensure(self: *Session, title: []const u8) !void {
@@ -316,4 +362,167 @@ fn messageRecord(a: std.mem.Allocator, message: message_mod.Message) !MessageRec
             } };
         },
     }
+}
+
+fn str(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
+    const value = obj.get(key) orelse return null;
+    return if (value == .string) value.string else null;
+}
+
+fn dupStr(a: std.mem.Allocator, obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
+    const s = str(obj, key) orelse return null;
+    return a.dupe(u8, s) catch null;
+}
+
+fn int(obj: std.json.ObjectMap, key: []const u8) i64 {
+    const value = obj.get(key) orelse return 0;
+    return if (value == .integer) value.integer else 0;
+}
+
+fn count(obj: std.json.ObjectMap, key: []const u8) u64 {
+    return @intCast(@max(0, int(obj, key)));
+}
+
+fn num(obj: std.json.ObjectMap, key: []const u8) f64 {
+    const value = obj.get(key) orelse return 0;
+    return switch (value) {
+        .float => |f| f,
+        .integer => |i| @floatFromInt(i),
+        else => 0,
+    };
+}
+
+fn boolean(obj: std.json.ObjectMap, key: []const u8) bool {
+    const value = obj.get(key) orelse return false;
+    return value == .bool and value.bool;
+}
+
+fn items(obj: std.json.ObjectMap, key: []const u8) []std.json.Value {
+    const value = obj.get(key) orelse return &.{};
+    return if (value == .array) value.array.items else &.{};
+}
+
+fn object(obj: std.json.ObjectMap, key: []const u8) ?std.json.ObjectMap {
+    const value = obj.get(key) orelse return null;
+    return if (value == .object) value.object else null;
+}
+
+fn stopReason(name: ?[]const u8) StopReason {
+    const wire = name orelse return .stop;
+    if (std.mem.eql(u8, wire, "pending")) return .pending;
+    if (std.mem.eql(u8, wire, "length")) return .length;
+    if (std.mem.eql(u8, wire, "toolUse")) return .tool_use;
+    if (std.mem.eql(u8, wire, "error")) return .err;
+    if (std.mem.eql(u8, wire, "aborted")) return .aborted;
+    return .stop;
+}
+
+fn usageOf(record: ?std.json.ObjectMap) message_mod.Usage {
+    const u = record orelse return .{};
+    const cost = object(u, "cost") orelse std.json.ObjectMap.empty;
+    return .{
+        .input = count(u, "input"),
+        .output = count(u, "output"),
+        .cache_read = count(u, "cacheRead"),
+        .cache_write = count(u, "cacheWrite"),
+        .reasoning = if (u.get("reasoning") != null) count(u, "reasoning") else null,
+        .total_tokens = count(u, "totalTokens"),
+        .cost_input = num(cost, "input"),
+        .cost_output = num(cost, "output"),
+        .cost_cache_read = num(cost, "cacheRead"),
+        .cost_total = num(cost, "total"),
+    };
+}
+
+fn parseParts(a: std.mem.Allocator, parts: []std.json.Value) struct { text: []const u8, images: []const message_mod.ImageContent } {
+    var body: []const u8 = "";
+    var images: std.ArrayList(message_mod.ImageContent) = .empty;
+    for (parts) |part| {
+        if (part != .object) continue;
+        const p = part.object;
+        const kind = str(p, "type") orelse continue;
+        if (std.mem.eql(u8, kind, "text")) {
+            body = dupStr(a, p, "text") orelse body;
+        } else if (std.mem.eql(u8, kind, "image")) {
+            const data = dupStr(a, p, "data") orelse continue;
+            images.append(a, .{ .data = data, .mime_type = dupStr(a, p, "mimeType") orelse "" }) catch {};
+        }
+    }
+    return .{ .text = body, .images = images.toOwnedSlice(a) catch &.{} };
+}
+
+fn parseAssistant(a: std.mem.Allocator, record: std.json.ObjectMap) ?*message_mod.AssistantMessage {
+    const message = a.create(message_mod.AssistantMessage) catch return null;
+    message.* = .{
+        .content = .empty,
+        .api = dupStr(a, record, "api") orelse "",
+        .provider = dupStr(a, record, "provider") orelse "",
+        .model = dupStr(a, record, "model") orelse "",
+        .response_id = dupStr(a, record, "responseId"),
+        .response_model = dupStr(a, record, "responseModel"),
+        .raw_stop_reason = dupStr(a, record, "rawStopReason"),
+        .usage = usageOf(object(record, "usage")),
+        .stop_reason = stopReason(str(record, "stopReason")),
+        .error_message = dupStr(a, record, "errorMessage"),
+        .timestamp = int(record, "timestamp"),
+    };
+    for (items(record, "content")) |entry| {
+        if (entry != .object) continue;
+        const block = entry.object;
+        const kind = str(block, "type") orelse continue;
+        if (std.mem.eql(u8, kind, "text")) {
+            message.content.append(a, .{ .text = dupStr(a, block, "text") orelse "" }) catch {};
+        } else if (std.mem.eql(u8, kind, "thinking")) {
+            message.content.append(a, .{ .thinking = .{
+                .text = dupStr(a, block, "thinking") orelse "",
+                .signature = dupStr(a, block, "thinkingSignature"),
+            } }) catch {};
+        } else if (std.mem.eql(u8, kind, "toolCall")) {
+            const arguments = if (block.get("arguments")) |v|
+                std.json.Stringify.valueAlloc(a, v, .{}) catch ""
+            else
+                "";
+            message.content.append(a, .{ .tool_call = .{
+                .id = dupStr(a, block, "id") orelse "",
+                .name = dupStr(a, block, "name") orelse "",
+                .arguments = arguments,
+                .thought_signature = dupStr(a, block, "thoughtSignature"),
+            } }) catch {};
+        }
+    }
+    return message;
+}
+
+/// One JSONL record, if it carries a conversation message. Everything else in the
+/// log (the header, requests) is history of the run, not context for the model.
+fn parseMessage(a: std.mem.Allocator, scratch: std.mem.Allocator, line: []const u8) ?message_mod.Message {
+    if (std.mem.trim(u8, line, " \t\r").len == 0) return null;
+    const root = std.json.parseFromSliceLeaky(std.json.Value, scratch, line, .{}) catch return null;
+    if (root != .object) return null;
+    const kind = str(root.object, "type") orelse return null;
+    if (!std.mem.eql(u8, kind, "message")) return null;
+    const record = object(root.object, "message") orelse return null;
+    const role = str(record, "role") orelse return null;
+
+    if (std.mem.eql(u8, role, "user")) {
+        return .{ .user = .{
+            .content = dupStr(a, record, "content") orelse "",
+            .timestamp = int(record, "timestamp"),
+        } };
+    }
+    if (std.mem.eql(u8, role, "toolResult")) {
+        const parsed = parseParts(a, items(record, "content"));
+        return .{ .tool_result = .{
+            .tool_call_id = dupStr(a, record, "toolCallId") orelse "",
+            .tool_name = dupStr(a, record, "toolName") orelse "",
+            .text = parsed.text,
+            .images = parsed.images,
+            .is_error = boolean(record, "isError"),
+            .timestamp = int(record, "timestamp"),
+        } };
+    }
+    if (std.mem.eql(u8, role, "assistant")) {
+        return .{ .assistant = parseAssistant(a, record) orelse return null };
+    }
+    return null;
 }

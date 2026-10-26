@@ -9,6 +9,7 @@ const tools = @import("tools.zig");
 const tui = @import("tui/tui.zig");
 const term = @import("tui/term.zig");
 const headless = @import("headless.zig");
+const message_mod = @import("message.zig");
 
 pub const panic = std.debug.FullPanic(panicRestore);
 
@@ -26,7 +27,13 @@ pub const debug = struct {
 
 var cancel = std.atomic.Value(bool).init(false);
 
-const ParsedArgs = struct { print: ?[]const u8 = null, config: ?[]const u8 = null };
+const ParsedArgs = struct {
+    print: ?[]const u8 = null,
+    config: ?[]const u8 = null,
+    resume_id: ?[]const u8 = null,
+    no_config: bool = false,
+    no_session: bool = false,
+};
 
 fn parseArgs(a: std.mem.Allocator) !ParsedArgs {
     var it = std.process.Args.Iterator.init(platform.args);
@@ -45,6 +52,15 @@ fn parseArgs(a: std.mem.Allocator) !ParsedArgs {
         } else if (std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--config")) {
             const value = it.next() orelse return error.MissingConfig;
             result.config = try a.dupe(u8, value);
+        } else if (std.mem.startsWith(u8, arg, "--resume=")) {
+            result.resume_id = try a.dupe(u8, arg["--resume=".len..]);
+        } else if (std.mem.eql(u8, arg, "--resume")) {
+            const value = it.next() orelse return error.MissingSession;
+            result.resume_id = try a.dupe(u8, value);
+        } else if (std.mem.eql(u8, arg, "--no-config")) {
+            result.no_config = true;
+        } else if (std.mem.eql(u8, arg, "--no-session")) {
+            result.no_session = true;
         } else {
             platform.printErr("unknown argument: {s}\n", .{arg});
             return error.UnknownArg;
@@ -69,12 +85,13 @@ fn run() !u8 {
         switch (e) {
             error.MissingPrompt => platform.printErr("a prompt is required\n", .{}),
             error.MissingConfig => platform.printErr("a config path is required\n", .{}),
+            error.MissingSession => platform.printErr("a session id is required\n", .{}),
             else => {},
         }
         return 1;
     };
 
-    const cfg = config.load(a, args.config) catch return 1;
+    const cfg = config.load(a, args.config, args.no_config) catch return 1;
 
     var resolve_err: ?[]const u8 = null;
     const model = models.resolve(a, &cfg, &resolve_err);
@@ -85,6 +102,19 @@ fn run() !u8 {
 
     const cwd = std.process.currentPathAlloc(platform.io, a) catch ".";
     var sess = session.Session.init(a, cfg.sessions_dir, cwd);
+    var resumed: std.ArrayList(message_mod.Message) = .empty;
+    if (args.resume_id) |id| {
+        sess.reopen(id, &resumed) catch |e| {
+            switch (e) {
+                error.NoSuchSession => platform.printErr("no session matching '{s}'\n", .{id}),
+                error.AmbiguousSession => platform.printErr("session id '{s}' is ambiguous\n", .{id}),
+                else => platform.printErr("{s}\n", .{@errorName(e)}),
+            }
+            return 1;
+        };
+    } else {
+        sess.disabled = args.no_session;
+    }
 
     const model_ptr: ?*const models.Model = if (model) |m| blk: {
         const ptr = try a.create(models.Model);
@@ -111,7 +141,7 @@ fn run() !u8 {
             platform.printErr("[error] no model configured; add \"provider\" and \"model\" to {s}\n", .{config.configPath(a)});
             return 1;
         }
-        return headless.run(a, print_text, opts);
+        return headless.run(a, print_text, opts, resumed.items);
     }
 
     const stdin_tty = std.Io.File.stdin().isTty(platform.io) catch false;
@@ -120,6 +150,6 @@ fn run() !u8 {
         platform.printErr("interactive mode requires a TTY; use -p for non-interactive mode\n", .{});
         return 1;
     }
-    try tui.run(opts, &cfg, cfg.tools);
+    try tui.run(opts, &cfg, cfg.tools, resumed.items);
     return 0;
 }

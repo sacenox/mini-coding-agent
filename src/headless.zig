@@ -37,8 +37,12 @@ fn printEvent(ctx: *anyopaque, event: agent.Event) void {
     }
 }
 
-pub fn run(a: std.mem.Allocator, prompt_text: []const u8, opts: agent.Options) u8 {
+pub fn run(a: std.mem.Allocator, prompt_text: []const u8, opts: agent.Options, resumed: []const message_mod.Message) u8 {
     var messages: std.ArrayList(message_mod.Message) = .empty;
+    messages.appendSlice(a, resumed) catch {
+        platform.printErr("[error] out of memory\n", .{});
+        return 1;
+    };
     const user = message_mod.Message{ .user = .{ .content = prompt_text, .timestamp = time.nowMs() } };
     messages.append(a, user) catch {
         platform.printErr("[error] out of memory\n", .{});
