@@ -1,4 +1,3 @@
-const std = @import("std");
 const tables = @import("width_tables.zig");
 const utf8 = @import("../text.zig");
 
