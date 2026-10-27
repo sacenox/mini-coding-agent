@@ -13,7 +13,7 @@ import urllib.request
 
 MODELS_DEV = "https://models.dev/api.json"
 
-PROVIDERS = ["opencode", "opencode-go"]
+PROVIDERS = ["opencode", "opencode-go", "openrouter"]
 
 
 def main():

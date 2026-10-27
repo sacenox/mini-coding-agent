@@ -15,7 +15,8 @@ const description_fmt =
     "The command runs with `bash -c` starting in {s}, your working directory. Use it for " ++
     "builds, tests, git, package managers, and other file work. The output ends " ++
     "with an `exit code:` line, or `killed: timed out after Ns` if it hits the time limit. " ++
-    "Pass `timeout` (seconds) to change the 120-second limit.";
+    "Pass `timeout` (seconds) to change the 120-second limit." ++
+    "Do not repeatedly `cd` into the working directory, it's wasteful.";
 
 const params = [_]tools.Param{
     .{ .name = "command", .kind = .string, .description = "Bash command line to execute." },

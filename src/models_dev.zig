@@ -26,6 +26,7 @@ const wires = [_][2][]const u8{
     .{ "@ai-sdk/openai", "openai-responses" },
     .{ "@ai-sdk/anthropic", "anthropic-messages" },
     .{ "@ai-sdk/google", "google-generative-ai" },
+    .{ "@openrouter/ai-sdk-provider", "openai-completions" },
 };
 
 fn wire(npm: []const u8) ?[]const u8 {

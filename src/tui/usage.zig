@@ -77,6 +77,20 @@ pub fn lastUsage(messages: []const message_mod.Message) message_mod.Usage {
     return out;
 }
 
+pub fn turnUsage(messages: []const message_mod.Message, from: usize) message_mod.Usage {
+    var out: message_mod.Usage = .{};
+    for (messages[@min(from, messages.len)..]) |m| {
+        if (m != .assistant) continue;
+        const am = m.assistant;
+        if (am.stop_reason == .aborted or am.stop_reason == .err) continue;
+        out.input += am.usage.input;
+        out.output += am.usage.output;
+        out.cache_read += am.usage.cache_read;
+        out.cache_write += am.usage.cache_write;
+    }
+    return out;
+}
+
 pub fn cacheLine(a: std.mem.Allocator, usage: message_mod.Usage) []const u8 {
     const prompt = usage.input + usage.cache_read + usage.cache_write;
     const pct: u64 = if (prompt == 0)

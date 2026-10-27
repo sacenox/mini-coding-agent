@@ -5,6 +5,20 @@ const build_options = @import("build_options");
 
 const user_agent = "mini-coding-agent/" ++ build_options.version;
 
+/// OpenRouter only creates an app page from a `HTTP-Referer`; the title and
+/// user agent alone leave usage unattributed.
+const openrouter_headers = [_]std.http.Header{
+    .{ .name = "HTTP-Referer", .value = "https://xonecas.io/mini-coding-agent/" },
+    .{ .name = "X-OpenRouter-Title", .value = "mini-coding-agent" },
+};
+
+fn isOpenRouter(uri: std.Uri) bool {
+    const host = switch (uri.host orelse return false) {
+        inline else => |h| h,
+    };
+    return std.mem.eql(u8, host, "openrouter.ai") or std.mem.endsWith(u8, host, ".openrouter.ai");
+}
+
 pub const Header = struct { name: []const u8, value: []const u8 };
 
 pub const SseHandler = struct {
@@ -99,6 +113,9 @@ const Exchange = struct {
         self.client = .{ .allocator = a, .io = platform.io };
         errdefer self.client.deinit();
         for (headers) |h| self.hdrs.append(a, .{ .name = h.name, .value = h.value }) catch return error.OutOfMemory;
+        if (isOpenRouter(uri)) {
+            for (openrouter_headers) |h| self.hdrs.append(a, h) catch return error.OutOfMemory;
+        }
         errdefer self.hdrs.deinit(a);
         self.req = self.client.request(method, uri, .{
             .redirect_behavior = .unhandled,

@@ -38,6 +38,16 @@ fn isoFromMs(buf: []u8, ms: i64) []const u8 {
     }) catch unreachable;
 }
 
+pub fn humanize(buf: []u8, ms: i64) []const u8 {
+    const total = @max(0, @divFloor(ms, 1000));
+    const s = @mod(total, 60);
+    const m = @mod(@divFloor(total, 60), 60);
+    const h = @divFloor(total, 3600);
+    if (h > 0) return std.fmt.bufPrint(buf, "{d}h {d}m {d}s", .{ h, m, s }) catch "";
+    if (m > 0) return std.fmt.bufPrint(buf, "{d}m {d}s", .{ m, s }) catch "";
+    return std.fmt.bufPrint(buf, "{d}s", .{s}) catch "";
+}
+
 pub fn isoAlloc(a: std.mem.Allocator) []const u8 {
     const buf = a.alloc(u8, 32) catch unreachable;
     return isoFromMs(buf, nowMs());

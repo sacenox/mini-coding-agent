@@ -106,6 +106,7 @@ const Tui = struct {
     pending_calls: std.ArrayList(PendingCall) = .empty,
     streamed: std.ArrayList(u8) = .empty,
     turn_start: i64 = 0,
+    turn_msgs: usize = 0,
     ctx_msgs: usize = std.math.maxInt(usize),
     ctx_used: u64 = 0,
     ctx_cache: message_mod.Usage = .{},
@@ -252,12 +253,13 @@ const Tui = struct {
             return std.fmt.allocPrint(self.s, "{s}{s}{s}", .{ styles.err(self.s, "failed - Enter to retry"), sep, info }) catch info;
         }
         if (!self.active or self.phase == .idle) return info;
-        const elapsed = @max(0, @divFloor(time.nowMs() - self.turn_start, 1000));
+        var elapsed_buf: [32]u8 = undefined;
+        const elapsed = time.humanize(&elapsed_buf, time.nowMs() - self.turn_start);
         return std.fmt.allocPrint(self.s, "{s} {s}{s}{s}{s}{s}", .{
             styles.accent(self.s, spinnerChar(self.frame)),
             self.stateLabel(),
             sep,
-            styles.comment(self.s, std.fmt.allocPrint(self.s, "{d}s", .{elapsed}) catch ""),
+            styles.comment(self.s, elapsed),
             sep,
             info,
         }) catch info;
@@ -468,10 +470,24 @@ const Tui = struct {
             .complete => {
                 status.report("done", null, null);
                 status.notify("mini: turn complete");
-                self.endTurn(styles.comment(self.s, std.fmt.allocPrint(self.s, "[complete · {d}s]", .{@max(0, @divFloor(time.nowMs() - self.turn_start, 1000))}) catch "[complete]"));
+                self.endTurn(styles.comment(self.s, self.doneLine()));
             },
         }
         self.dirty = true;
+    }
+
+    fn doneLine(self: *Tui) []const u8 {
+        var elapsed_buf: [32]u8 = undefined;
+        const secs = time.humanize(&elapsed_buf, time.nowMs() - self.turn_start);
+        self.messages_mutex.lockUncancelable(platform.io);
+        const u = usage_mod.turnUsage(self.messages.items, self.turn_msgs);
+        self.messages_mutex.unlock(platform.io);
+        const prompt = u.input + u.cache_read + u.cache_write;
+        return std.fmt.allocPrint(self.s, "done · {s} · {s} in · {s} out", .{
+            secs,
+            usage_mod.formatTokens(self.s, prompt),
+            usage_mod.formatTokens(self.s, u.output),
+        }) catch "done";
     }
 
     fn endTurn(self: *Tui, line: []const u8) void {
@@ -746,6 +762,9 @@ const Tui = struct {
         self.keepName(&self.detail, null);
         self.keepName(&self.retrying, null);
         self.turn_start = time.nowMs();
+        self.messages_mutex.lockUncancelable(platform.io);
+        self.turn_msgs = self.messages.items.len;
+        self.messages_mutex.unlock(platform.io);
         self.frame = 0;
         self.event_mutex.lockUncancelable(platform.io);
         self.events.clearRetainingCapacity();

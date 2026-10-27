@@ -35,6 +35,7 @@ const Builtin = struct {
 const builtins = [_]Builtin{
     .{ .id = "opencode", .session_header = "x-opencode-session" },
     .{ .id = "opencode-go", .session_header = "x-opencode-session" },
+    .{ .id = "openrouter" },
 };
 
 const ladder = [_][]const u8{ "off", "minimal", "low", "medium", "high", "xhigh", "max" };

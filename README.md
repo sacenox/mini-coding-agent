@@ -167,7 +167,7 @@ Keys:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `provider` | unset | provider id; built-ins are `opencode` and `opencode-go`, or a `customProviders` id |
+| `provider` | unset | provider id; built-ins are `opencode`, `opencode-go` and `openrouter`, or a `customProviders` id |
 | `model` | unset | model id |
 | `thinkingEffort` | unset | one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; unset sends no reasoning parameter; a level the model does not accept clamps up to the next accepted one, else down |
 | `showImages` | `false` | draw the images the `read` tool returns inline using the kitty graphics protocol; requires kitty 0.28+ |
@@ -226,7 +226,7 @@ so one provider may mix APIs and base URLs:
 The built-in providers are named, keyed and described by the embedded models.dev
 document. `opencode` and `opencode-go` read the first present variable in their
 `env` list (`OPENCODE_API_KEY`), and send the session id as
-`x-opencode-session`.
+`x-opencode-session`. `openrouter` reads `OPENROUTER_API_KEY`.
 
 Each wire carries its own key header:
 
