@@ -1,5 +1,6 @@
 const std = @import("std");
 const tables = @import("width_tables.zig");
+const utf8 = @import("../text.zig");
 
 pub const Cluster = struct { text: []const u8, width: u8 };
 
@@ -38,14 +39,6 @@ pub fn charWidth(cp: u21) u8 {
     if (isZero(cp)) return 0;
     if (inRanges(&tables.wide, cp)) return 2;
     return 1;
-}
-
-fn decodeAt(text: []const u8, i: usize) ?struct { cp: u21, len: usize } {
-    if (i >= text.len) return null;
-    const n = std.unicode.utf8ByteSequenceLength(text[i]) catch return .{ .cp = text[i], .len = 1 };
-    if (i + n > text.len) return .{ .cp = text[i], .len = 1 };
-    const cp = std.unicode.utf8Decode(text[i .. i + n]) catch return .{ .cp = text[i], .len = 1 };
-    return .{ .cp = cp, .len = n };
 }
 
 fn isExtPict(cp: u21) bool {
@@ -117,7 +110,7 @@ fn clusterWidth(text: []const u8) u8 {
     var i: usize = 0;
     var first = true;
     while (i < text.len) {
-        const d = decodeAt(text, i) orelse break;
+        const d = utf8.decodeAt(text, i) orelse break;
         if (d.cp == 0xfe0f) has_vs16 = true;
         if (first) {
             base = d.cp;
@@ -131,13 +124,13 @@ fn clusterWidth(text: []const u8) u8 {
 }
 
 pub fn nextCluster(text: []const u8, i: usize) ?Cluster {
-    const d = decodeAt(text, i) orelse return null;
+    const d = utf8.decodeAt(text, i) orelse return null;
     var state = State{};
     startsWith(&state, d.cp);
     var end = i + d.len;
     var prev = d.cp;
     while (end < text.len) {
-        const n = decodeAt(text, end) orelse break;
+        const n = utf8.decodeAt(text, end) orelse break;
         if (!noBreak(state, prev, n.cp)) break;
         extends(&state, n.cp);
         prev = n.cp;

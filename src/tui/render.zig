@@ -1,6 +1,7 @@
 const std = @import("std");
 const styles = @import("styles.zig");
 const wcwidth = @import("width.zig");
+const utf8 = @import("../text.zig");
 
 pub const nextCluster = wcwidth.nextCluster;
 
@@ -22,17 +23,6 @@ pub fn physicalRows(line: []const u8, width: usize) usize {
 
 const Piece = struct { text: []const u8, width: usize, sgr: bool };
 
-fn decodeLen(text: []const u8, i: usize) usize {
-    const n = std.unicode.utf8ByteSequenceLength(text[i]) catch return 1;
-    return if (i + n > text.len) 1 else n;
-}
-
-fn decodeCp(text: []const u8, i: usize) u21 {
-    const n = decodeLen(text, i);
-    if (text[i] < 0x80) return text[i];
-    return std.unicode.utf8Decode(text[i .. i + n]) catch text[i];
-}
-
 fn nextPiece(text: []const u8, i: *usize) ?Piece {
     if (i.* >= text.len) return null;
     if (isSgrAt(text, i.*)) |n| {
@@ -45,7 +35,7 @@ fn nextPiece(text: []const u8, i: *usize) ?Piece {
         i.* += cluster.text.len;
         return piece;
     }
-    const len = decodeLen(text, i.*);
+    const len = (utf8.decodeAt(text, i.*) orelse return null).len;
     const piece = Piece{ .text = text[i.* .. i.* + len], .width = 1, .sgr = false };
     i.* += len;
     return piece;
@@ -64,6 +54,26 @@ fn isSgrAt(text: []const u8, i: usize) ?usize {
     return null;
 }
 
+/// Bytes taken by the escape sequence at `i`. An unterminated sequence runs to the
+/// end of the text, so the caller always makes progress.
+fn escapeLen(text: []const u8, i: usize) usize {
+    if (i + 1 >= text.len) return 1;
+    if (text[i + 1] == '[') {
+        var j = i + 2;
+        while (j < text.len and (text[j] < 0x40 or text[j] > 0x7e)) j += 1;
+        return (if (j < text.len) j + 1 else text.len) - i;
+    }
+    if (text[i + 1] == ']') {
+        var j = i + 2;
+        while (j < text.len) : (j += 1) {
+            if (text[j] == 0x07) return j + 1 - i;
+            if (text[j] == 0x1b and j + 1 < text.len and text[j + 1] == '\\') return j + 2 - i;
+        }
+        return text.len - i;
+    }
+    return 2;
+}
+
 pub fn sanitize(a: std.mem.Allocator, text: []const u8) []const u8 {
     var clean = true;
     for (text) |c| {
@@ -79,20 +89,13 @@ pub fn sanitize(a: std.mem.Allocator, text: []const u8) []const u8 {
     while (i < text.len) {
         const c = text[i];
         if (c == 0x1b) {
+            // Colors survive; every other escape only ever corrupts the layout.
             if (isSgrAt(text, i)) |n| {
                 out.appendSlice(a, text[i .. i + n]) catch {};
                 i += n;
-                continue;
+            } else {
+                i += escapeLen(text, i);
             }
-            if (i + 1 < text.len) {
-                i += 2;
-                if (text[i - 1] == '[') {
-                    while (i < text.len and (text[i] < 0x40 or text[i] > 0x7e)) i += 1;
-                    if (i < text.len) i += 1;
-                }
-                continue;
-            }
-            i += 1;
             continue;
         }
         if (c < 0x80) {
@@ -104,14 +107,10 @@ pub fn sanitize(a: std.mem.Allocator, text: []const u8) []const u8 {
             i += 1;
             continue;
         }
-        const cp = decodeCp(text, i);
-        if (cp >= 0x80 and cp <= 0x9f) {
-            i += decodeLen(text, i);
-            continue;
-        }
-        const len = decodeLen(text, i);
-        out.appendSlice(a, text[i .. i + len]) catch {};
-        i += len;
+        const d = utf8.decodeAt(text, i) orelse break;
+        // C1 controls (0x80..0x9f) are as hazardous as the C0 ones.
+        if (d.cp > 0x9f) out.appendSlice(a, text[i .. i + d.len]) catch {};
+        i += d.len;
     }
     return out.items;
 }
@@ -121,34 +120,11 @@ pub fn stripAnsi(a: std.mem.Allocator, text: []const u8) []const u8 {
     var out: std.ArrayList(u8) = .empty;
     var i: usize = 0;
     while (i < text.len) {
-        if (text[i] != 0x1b) {
-            out.append(a, text[i]) catch {};
-            i += 1;
+        if (text[i] == 0x1b) {
+            i += escapeLen(text, i);
             continue;
         }
-        i += 1;
-        if (i >= text.len) break;
-        if (text[i] == '[') {
-            i += 1;
-            while (i < text.len and (text[i] < 0x40 or text[i] > 0x7e)) i += 1;
-            if (i < text.len) i += 1;
-            continue;
-        }
-        if (text[i] == ']') {
-            i += 1;
-            while (i < text.len) {
-                if (text[i] == 0x07) {
-                    i += 1;
-                    break;
-                }
-                if (text[i] == 0x1b and i + 1 < text.len and text[i + 1] == '\\') {
-                    i += 2;
-                    break;
-                }
-                i += 1;
-            }
-            continue;
-        }
+        out.append(a, text[i]) catch {};
         i += 1;
     }
     return out.items;

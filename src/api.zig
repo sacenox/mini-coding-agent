@@ -3,6 +3,7 @@ const message_mod = @import("message.zig");
 const models = @import("models.zig");
 const http = @import("http.zig");
 const time = @import("time.zig");
+const json = @import("json.zig");
 
 pub const Event = union(enum) {
     retry: struct { attempt: u32, total: u32, delay_ms: u64, reason: []const u8 },
@@ -343,14 +344,6 @@ pub fn finishUsage(msg: *message_mod.AssistantMessage, model: *const models.Mode
     msg.usage = u;
 }
 
-pub fn stringField(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
-    const v = obj.get(key) orelse return null;
-    return switch (v) {
-        .string => |s| if (s.len > 0) s else null,
-        else => null,
-    };
-}
-
 pub const ToolsForm = struct {
     open: []const u8,
     entry: []const u8,
@@ -394,9 +387,9 @@ pub fn writeTools(w: *std.Io.Writer, a: std.mem.Allocator, tools_json: []const u
 
 fn writeToolBody(w: *std.Io.Writer, obj: std.json.ObjectMap, params_key: []const u8) !void {
     try w.writeAll("\"name\":");
-    try std.json.Stringify.encodeJsonString(stringField(obj, "name") orelse "", .{}, w);
+    try std.json.Stringify.encodeJsonString(json.stringField(obj, "name") orelse "", .{}, w);
     try w.writeAll(",\"description\":");
-    try std.json.Stringify.encodeJsonString(stringField(obj, "description") orelse "", .{}, w);
+    try std.json.Stringify.encodeJsonString(json.stringField(obj, "description") orelse "", .{}, w);
     try w.writeAll(",\"");
     try w.writeAll(params_key);
     try w.writeAll("\":");

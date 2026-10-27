@@ -6,31 +6,6 @@ const text = @import("../text.zig");
 
 const BodyLine = render.BodyLine;
 
-fn isFenceOpen(line: []const u8) ?[]const u8 {
-    var i: usize = 0;
-    while (i < line.len and i < 3 and line[i] == ' ') i += 1;
-    if (i >= line.len) return null;
-    const ch = line[i];
-    if (ch != '`' and ch != '~') return null;
-    var j = i;
-    while (j < line.len and line[j] == ch) j += 1;
-    if (j - i < 3) return null;
-    return line[i..j];
-}
-
-fn isFenceClose(line: []const u8, marker: []const u8) bool {
-    var i: usize = 0;
-    while (i < line.len and i < 3 and line[i] == ' ') i += 1;
-    if (i >= line.len or line[i] != marker[0]) return false;
-    var j = i;
-    while (j < line.len and line[j] == marker[0]) j += 1;
-    if (j - i < marker.len) return false;
-    while (j < line.len) : (j += 1) {
-        if (line[j] != ' ' and line[j] != '\t') return false;
-    }
-    return true;
-}
-
 pub const MarkdownStream = struct {
     arena: std.heap.ArenaAllocator,
     a: std.mem.Allocator = undefined,
@@ -66,7 +41,7 @@ pub const MarkdownStream = struct {
 
     fn commit(self: *MarkdownStream, out_a: std.mem.Allocator, raw: []const u8, out: *std.ArrayList(BodyLine)) void {
         if (self.fence) |*f| {
-            if (isFenceClose(raw, f.marker)) {
+            if (format.fenceClose(raw, f.marker)) {
                 self.releaseFence(out_a, self.norm.line(self.a, raw), out);
             } else {
                 f.lines.append(self.a, raw) catch {};
@@ -74,7 +49,7 @@ pub const MarkdownStream = struct {
             return;
         }
         const line = self.norm.line(self.a, raw);
-        if (isFenceOpen(line)) |marker| {
+        if (format.fenceRun(line)) |marker| {
             self.releaseProse(out_a, "", out);
             var fl: std.ArrayList([]const u8) = .empty;
             fl.append(self.a, line) catch {};
@@ -108,14 +83,6 @@ pub const MarkdownStream = struct {
             while (it.next()) |l| out.append(out_a, .{ .text = l }) catch {};
         }
         if (closing) |c| out.append(out_a, .{ .text = highlight.highlightMarkdown(out_a, c) }) catch {};
-    }
-
-    pub fn pending(self: *MarkdownStream, out_a: std.mem.Allocator) []BodyLine {
-        var out: std.ArrayList(BodyLine) = .empty;
-        const held: []const []const u8 = if (self.fence) |f| f.lines.items else self.prose.items;
-        for (held) |l| out.append(out_a, .{ .text = l }) catch {};
-        if (self.rest.items.len > 0) out.append(out_a, .{ .text = self.rest.items }) catch {};
-        return out.items;
     }
 
     pub fn flush(self: *MarkdownStream, out_a: std.mem.Allocator) []BodyLine {

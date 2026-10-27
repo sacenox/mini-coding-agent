@@ -152,9 +152,11 @@ pub fn get(
     var attempt: usize = 0;
     while (true) : (attempt += 1) {
         var out = Attempt{};
-        if (getOnce(a, url, headers, cancel, &out)) |body| return body else |e| out.err = e;
-        const e = out.err orelse error.ReadFailed;
-        if (attempt + 1 >= retry.attempts + 1 or !retryable(e, out.status)) return e;
+        if (getOnce(a, url, headers, cancel, &out)) |body| {
+            return body;
+        } else |e| {
+            if (attempt >= retry.attempts or !retryable(e, out.status)) return e;
+        }
         try pause(cancel, backoff(retry.base_ms, attempt));
     }
 }
@@ -192,7 +194,7 @@ pub fn postSse(
         err_body.* = null;
         const out = postOnce(a, url, headers, body, handler, cancel, err_body, retry.idle_ms);
         const e = out.err orelse return;
-        if (out.sent or attempt + 1 >= retry.attempts + 1 or !retryable(e, out.status)) return e;
+        if (out.sent or attempt >= retry.attempts or !retryable(e, out.status)) return e;
         const delay_ms = backoff(retry.base_ms, attempt);
         if (notice) |n| {
             var buf: [16]u8 = undefined;

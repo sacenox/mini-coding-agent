@@ -19,7 +19,7 @@ pub const Normalizer = struct {
         const text = std.mem.trimEnd(u8, raw, " \t\r");
         const ind = indentOf(text);
         var rest = text[ind.end..];
-        if (fenceMarker(rest)) |fence_run| return self.fence(a, ind.cols, rest, fence_run);
+        if (fenceRun(rest)) |fence_run| return self.fence(a, ind.cols, rest, fence_run);
         if (isRule(rest)) {
             self.reset();
             return std.fmt.allocPrint(a, "{s}---", .{spaces(a, ind.cols)}) catch "---";
@@ -98,16 +98,31 @@ fn indentOf(text: []const u8) Indent {
     return .{ .end = end, .cols = cols & ~@as(usize, 1) };
 }
 
-fn fenceMarker(rest: []const u8) ?[]const u8 {
-    if (rest.len == 0) return null;
-    const c = rest[0];
+/// The fence marker run (``` or ~~~) that opens `line`, if any.
+pub fn fenceRun(line: []const u8) ?[]const u8 {
+    var i: usize = 0;
+    while (i < line.len and i < 3 and line[i] == ' ') i += 1;
+    if (i >= line.len) return null;
+    const c = line[i];
     if (c != '`' and c != '~') return null;
     var n: usize = 0;
-    while (n < rest.len and rest[n] == c) n += 1;
-    return if (n >= 3) rest[0..n] else null;
+    while (i + n < line.len and line[i + n] == c) n += 1;
+    return if (n >= 3) line[i .. i + n] else null;
 }
 
-fn isRule(rest: []const u8) bool {
+/// Whether `line` closes a fence opened with `opener`: the same byte, at least as
+/// long a run, and nothing but whitespace after it.
+pub fn fenceClose(line: []const u8, opener: []const u8) bool {
+    var i: usize = 0;
+    while (i < line.len and i < 3 and line[i] == ' ') i += 1;
+    if (i >= line.len or line[i] != opener[0]) return false;
+    var n: usize = 0;
+    while (i + n < line.len and line[i + n] == opener[0]) n += 1;
+    if (n < opener.len) return false;
+    return std.mem.trim(u8, line[i + n ..], " \t").len == 0;
+}
+
+pub fn isRule(rest: []const u8) bool {
     if (rest.len == 0) return false;
     const c = rest[0];
     if (c != '-' and c != '*' and c != '_') return false;
@@ -124,7 +139,7 @@ fn isRule(rest: []const u8) bool {
 
 const Heading = struct { level: usize, text: []const u8 };
 
-fn heading(rest: []const u8) ?Heading {
+pub fn heading(rest: []const u8) ?Heading {
     var n: usize = 0;
     while (n < rest.len and rest[n] == '#') n += 1;
     if (n == 0 or n > 6) return null;
@@ -222,11 +237,6 @@ pub fn linkEnd(text: []const u8, open: usize) ?usize {
     return null;
 }
 
-/// The styling pass only adds color, so a cell's own bytes are what gets painted.
-fn cellWidth(cell: []const u8) usize {
-    return render.displayWidth(cell);
-}
-
 /// Delimiter row (`|---|:--:|`) as per-column alignments, or null when the line is not one.
 fn delimiterRow(a: std.mem.Allocator, line: []const u8) ?[]const Align {
     if (std.mem.indexOfScalar(u8, line, '-') == null) return null;
@@ -271,7 +281,7 @@ fn emitRow(a: std.mem.Allocator, block: *std.ArrayList(u8), indent: []const u8, 
             block.appendNTimes(a, '-', widths[k] - 2) catch {};
             block.append(a, if (alignment == .right or alignment == .center) ':' else '-') catch {};
         } else {
-            const pad = widths[k] - cellWidth(cell);
+            const pad = widths[k] - render.displayWidth(cell);
             const before: usize = switch (alignment) {
                 .right => pad,
                 .center => pad / 2,
@@ -307,7 +317,7 @@ fn formatTable(a: std.mem.Allocator, header: []const u8, aligns: []const Align, 
     const widths = a.alloc(usize, named) catch return null;
     @memset(widths, 3);
     for (rows) |cells| {
-        for (cells, 0..) |cell, k| widths[k] = @max(widths[k], cellWidth(cell));
+        for (cells, 0..) |cell, k| widths[k] = @max(widths[k], render.displayWidth(cell));
     }
 
     var block: std.ArrayList(u8) = .empty;

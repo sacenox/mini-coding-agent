@@ -1,6 +1,7 @@
 const std = @import("std");
 const render = @import("render.zig");
 const input = @import("input.zig");
+const utf8 = @import("../text.zig");
 
 const TAB = 4;
 
@@ -8,25 +9,12 @@ fn isSpace(cp: u21) bool {
     return cp == ' ' or cp == '\t' or cp == '\n' or cp == '\r' or cp == 0x0b or cp == 0x0c or cp == 0xa0;
 }
 
-fn cpLen(line: []const u8) usize {
-    var i: usize = 0;
-    var count: usize = 0;
-    while (i < line.len) {
-        const n = std.unicode.utf8ByteSequenceLength(line[i]) catch 1;
-        i += @min(@as(usize, n), line.len - i);
-        count += 1;
-    }
-    return count;
-}
-
 fn cpAt(line: []const u8, col: usize) u21 {
     var i: usize = 0;
     var count: usize = 0;
-    while (i < line.len) {
-        const n = std.unicode.utf8ByteSequenceLength(line[i]) catch 1;
-        const len = @min(@as(usize, n), line.len - i);
-        if (count == col) return std.unicode.utf8Decode(line[i .. i + len]) catch line[i];
-        i += len;
+    while (utf8.decodeAt(line, i)) |d| {
+        if (count == col) return d.cp;
+        i += d.len;
         count += 1;
     }
     return 0;
@@ -35,10 +23,8 @@ fn cpAt(line: []const u8, col: usize) u21 {
 fn byteOf(line: []const u8, col: usize) usize {
     var i: usize = 0;
     var count: usize = 0;
-    while (i < line.len and count < col) {
-        const n = std.unicode.utf8ByteSequenceLength(line[i]) catch 1;
-        i += @min(@as(usize, n), line.len - i);
-        count += 1;
+    while (count < col) : (count += 1) {
+        i += (utf8.decodeAt(line, i) orelse break).len;
     }
     return i;
 }
@@ -57,7 +43,7 @@ fn wordStart(line: []const u8, col: usize) usize {
 }
 
 fn wordEnd(line: []const u8, col: usize) usize {
-    const n = cpLen(line);
+    const n = utf8.cpLen(line);
     var i = col;
     while (i < n and isSpace(cpAt(line, i))) i += 1;
     while (i < n and !isSpace(cpAt(line, i))) i += 1;
@@ -121,7 +107,7 @@ pub const Editor = struct {
         }
         if (self.lines.items.len == 0) self.lines.append(self.a, .empty) catch {};
         self.row = self.lines.items.len - 1;
-        self.col = cpLen(self.lines.items[self.row].items);
+        self.col = utf8.cpLen(self.lines.items[self.row].items);
     }
 
     pub fn handle(self: *Editor, key: input.Key) Action {
@@ -176,7 +162,7 @@ pub const Editor = struct {
                 return .changed;
             },
             .end => {
-                self.col = cpLen(self.lines.items[self.row].items);
+                self.col = utf8.cpLen(self.lines.items[self.row].items);
                 return .changed;
             },
             .doc_start => {
@@ -186,7 +172,7 @@ pub const Editor = struct {
             },
             .doc_end => {
                 self.row = self.lines.items.len - 1;
-                self.col = cpLen(self.lines.items[self.row].items);
+                self.col = utf8.cpLen(self.lines.items[self.row].items);
                 return .changed;
             },
             else => return .none,
@@ -201,15 +187,9 @@ pub const Editor = struct {
         while (render.nextCluster(line, i)) |cluster| {
             const tab = cluster.text.len == 1 and cluster.text[0] == '\t';
             const advance = if (tab) TAB - (col % TAB) else cluster.width;
-            var cps: usize = 0;
-            var j: usize = 0;
-            while (j < cluster.text.len) {
-                const n = std.unicode.utf8ByteSequenceLength(cluster.text[j]) catch 1;
-                j += @min(@as(usize, n), cluster.text.len - j);
-                cps += 1;
-            }
-            var m: usize = 0;
+            const cps = utf8.cpLen(cluster.text);
             col += advance;
+            var m: usize = 0;
             while (m < cps) : (m += 1) out.append(self.s, col) catch {};
             i += cluster.text.len;
         }
@@ -278,7 +258,7 @@ pub const Editor = struct {
         const at = byteOf(line.items, self.col);
         if (std.mem.indexOfScalar(u8, draft, '\n') == null) {
             line.insertSlice(self.a, at, draft) catch {};
-            self.col += cpLen(draft);
+            self.col += utf8.cpLen(draft);
             return;
         }
         const tail = self.a.dupe(u8, line.items[at..]) catch "";
@@ -292,7 +272,7 @@ pub const Editor = struct {
             fresh.append(self.a, l) catch {};
         }
         const lasti = fresh.items.len - 1;
-        const anchor = cpLen(fresh.items[lasti].items);
+        const anchor = utf8.cpLen(fresh.items[lasti].items);
         fresh.items[lasti].appendSlice(self.a, tail) catch {};
         var at_row = self.row + 1;
         for (fresh.items) |l| {
@@ -303,19 +283,23 @@ pub const Editor = struct {
         self.col = anchor;
     }
 
+    /// Replace the code points in `[from, to)` of `line` with `text`.
+    fn replaceCols(self: *Editor, line: *Line, from: usize, to: usize, text: []const u8) void {
+        const start = byteOf(line.items, from);
+        const end = byteOf(line.items, to);
+        line.replaceRange(self.a, start, end - start, text) catch {};
+    }
+
     fn backspace(self: *Editor) void {
         if (self.col > 0) {
-            const line = &self.lines.items[self.row];
-            const from = byteOf(line.items, self.col - 1);
-            const to = byteOf(line.items, self.col);
-            line.replaceRange(self.a, from, to - from, "") catch {};
+            self.replaceCols(&self.lines.items[self.row], self.col - 1, self.col, "");
             self.col -= 1;
             return;
         }
         if (self.row > 0) {
             const prev = &self.lines.items[self.row - 1];
             const cur = self.lines.items[self.row];
-            const previous = cpLen(prev.items);
+            const previous = utf8.cpLen(prev.items);
             prev.appendSlice(self.a, cur.items) catch {};
             _ = self.lines.orderedRemove(self.row);
             self.row -= 1;
@@ -325,11 +309,9 @@ pub const Editor = struct {
 
     fn deleteForward(self: *Editor) void {
         const line = &self.lines.items[self.row];
-        const n = cpLen(line.items);
+        const n = utf8.cpLen(line.items);
         if (self.col < n) {
-            const from = byteOf(line.items, self.col);
-            const to = byteOf(line.items, self.col + 1);
-            line.replaceRange(self.a, from, to - from, "") catch {};
+            self.replaceCols(line, self.col, self.col + 1, "");
             return;
         }
         if (self.row < self.lines.items.len - 1) {
@@ -345,12 +327,12 @@ pub const Editor = struct {
             self.col -= 1;
         } else if (self.row > 0) {
             self.row -= 1;
-            self.col = cpLen(self.lines.items[self.row].items);
+            self.col = utf8.cpLen(self.lines.items[self.row].items);
         }
     }
 
     fn right(self: *Editor) void {
-        if (self.col < cpLen(self.lines.items[self.row].items)) {
+        if (self.col < utf8.cpLen(self.lines.items[self.row].items)) {
             self.col += 1;
         } else if (self.row < self.lines.items.len - 1) {
             self.row += 1;
@@ -398,7 +380,7 @@ pub const Editor = struct {
         if (self.row == 0) return;
         self.row -= 1;
         const previous = self.lines.items[self.row].items;
-        self.col = wordStart(previous, cpLen(previous));
+        self.col = wordStart(previous, utf8.cpLen(previous));
     }
 
     fn wordRight(self: *Editor) void {
@@ -414,11 +396,8 @@ pub const Editor = struct {
     }
 
     fn wordBack(self: *Editor) void {
-        const line = &self.lines.items[self.row];
-        const start = wordStart(line.items, self.col);
-        const from = byteOf(line.items, start);
-        const to = byteOf(line.items, self.col);
-        line.replaceRange(self.a, from, to - from, "") catch {};
+        const start = wordStart(self.lines.items[self.row].items, self.col);
+        self.replaceCols(&self.lines.items[self.row], start, self.col, "");
         self.col = start;
     }
 
@@ -429,10 +408,8 @@ pub const Editor = struct {
         if (isSpace(cpAt(line.items, self.col - 1))) return false;
         const word = sub(self.s, line.items, start, self.col);
         const completed = step(word) orelse return false;
-        const from = byteOf(line.items, start);
-        const to = byteOf(line.items, self.col);
-        line.replaceRange(self.a, from, to - from, completed) catch {};
-        self.col = start + cpLen(completed);
+        self.replaceCols(line, start, self.col, completed);
+        self.col = start + utf8.cpLen(completed);
         return true;
     }
 };

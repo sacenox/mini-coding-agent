@@ -1,6 +1,5 @@
 const std = @import("std");
-const platform = @import("platform.zig");
-const filesystem = @import("filesystem.zig");
+const filesystem = @import("../filesystem.zig");
 
 pub const Store = struct {
     path: []const u8,

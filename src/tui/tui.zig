@@ -21,8 +21,8 @@ const tool_view = @import("tool_view.zig");
 const image_view = @import("image.zig");
 const picker_mod = @import("picker.zig");
 const screen = @import("screen.zig");
-const history = @import("../history.zig");
-const status = @import("../status.zig");
+const history = @import("history.zig");
+const status = @import("status.zig");
 
 const SPINNER = "⠀⠁⠂⠃⠄⠅⠆⠇⡀⡁⡂⡃⡄⡅⡆⡇⠈⠉⠊⠋⠌⠍⠎⠏⡈⡉⡊⡋⡌⡍⡎⡏⠐⠑⠒⠓⠔⠕⠖⠗⡐⡑⡒⡓⡔⡕⡖⡗⠘⠙⠚⠛⠜⠝⠞⠟⡘⡙⡚⡛⡜⡝⡞⡟⠠⠡⠢⠣⠤⠥⠦⠧⡠⡡⡢⡣⡤⡥⡦⡧⠨⠩⠪⠫⠬⠭⠮⠯⡨⡩⡪⡫⡬⡭⡮⡯⠰⠱⠲⠳⠴⠵⠶⠷⡰⡱⡲⡳⡴⡵⡶⡷⠸⠹⠺⠻⠼⠽⠾⠿⡸⡹⡺⡻⡼⡽⡾⡿⢀⢁⢂⢃⢄⢅⢆⢇⣀⣁⣂⣃⣄⣅⣆⣇⢈⢉⢊⢋⢌⢍⢎⢏⣈⣉⣊⣋⣌⣍⣎⣏⢐⢑⢒⢓⢔⢕⢖⢗⣐⣑⣒⣓⣔⣕⣖⣗⢘⢙⢚⢛⢜⢝⢞⢟⣘⣙⣚⣛⣜⣝⣞⣟⢠⢡⢢⢣⢤⢥⢦⢧⣠⣡⣢⣣⣤⣥⣦⣧⢨⢩⢪⢫⢬⢭⢮⢯⣨⣩⣪⣫⣬⣭⣮⣯⢰⢱⢲⢳⢴⢵⢶⢷⣰⣱⣲⣳⣴⣵⣶⣷⢸⢹⢺⢻⢼⢽⢾⢿⣸⣹⣺⣻⣼⣽⣾⣿";
 const SPINNER_MS = 120;
@@ -674,7 +674,7 @@ const Tui = struct {
             if (commands.completeCommand(self.editor.contents())) |text| {
                 self.editor.setText(text);
             } else {
-                _ = self.editor.completeWord(completePathStep);
+                _ = self.editor.completeWord(complete.completePath);
             }
             self.dirty = true;
             return;
@@ -1012,10 +1012,6 @@ const Tui = struct {
         status.release();
     }
 };
-
-fn completePathStep(word: []const u8) ?[]const u8 {
-    return complete.completePath(word);
-}
 
 fn inputThread(self: *Tui) void {
     var buf: [4096]u8 = undefined;

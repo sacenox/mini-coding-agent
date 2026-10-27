@@ -1,8 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const platform = @import("platform.zig");
-const time = @import("time.zig");
-const config = @import("config.zig");
+const platform = @import("../platform.zig");
+const time = @import("../time.zig");
+const config = @import("../config.zig");
 
 /// OSC 7501, the Program Status Protocol. The program reports what it is doing
 /// so any consumer of the pty can react; well-behaved terminals ignore the

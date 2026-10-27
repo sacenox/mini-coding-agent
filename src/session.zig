@@ -364,13 +364,8 @@ fn messageRecord(a: std.mem.Allocator, message: message_mod.Message) !MessageRec
     }
 }
 
-fn str(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
-    const value = obj.get(key) orelse return null;
-    return if (value == .string) value.string else null;
-}
-
 fn dupStr(a: std.mem.Allocator, obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
-    const s = str(obj, key) orelse return null;
+    const s = json.stringField(obj, key) orelse return null;
     return a.dupe(u8, s) catch null;
 }
 
@@ -440,7 +435,7 @@ fn parseParts(a: std.mem.Allocator, parts: []std.json.Value) struct { text: []co
     for (parts) |part| {
         if (part != .object) continue;
         const p = part.object;
-        const kind = str(p, "type") orelse continue;
+        const kind = json.stringField(p, "type") orelse continue;
         if (std.mem.eql(u8, kind, "text")) {
             body = dupStr(a, p, "text") orelse body;
         } else if (std.mem.eql(u8, kind, "image")) {
@@ -462,14 +457,14 @@ fn parseAssistant(a: std.mem.Allocator, record: std.json.ObjectMap) ?*message_mo
         .response_model = dupStr(a, record, "responseModel"),
         .raw_stop_reason = dupStr(a, record, "rawStopReason"),
         .usage = usageOf(object(record, "usage")),
-        .stop_reason = stopReason(str(record, "stopReason")),
+        .stop_reason = stopReason(json.stringField(record, "stopReason")),
         .error_message = dupStr(a, record, "errorMessage"),
         .timestamp = int(record, "timestamp"),
     };
     for (items(record, "content")) |entry| {
         if (entry != .object) continue;
         const block = entry.object;
-        const kind = str(block, "type") orelse continue;
+        const kind = json.stringField(block, "type") orelse continue;
         if (std.mem.eql(u8, kind, "text")) {
             message.content.append(a, .{ .text = dupStr(a, block, "text") orelse "" }) catch {};
         } else if (std.mem.eql(u8, kind, "thinking")) {
@@ -499,10 +494,10 @@ fn parseMessage(a: std.mem.Allocator, scratch: std.mem.Allocator, line: []const 
     if (std.mem.trim(u8, line, " \t\r").len == 0) return null;
     const root = std.json.parseFromSliceLeaky(std.json.Value, scratch, line, .{}) catch return null;
     if (root != .object) return null;
-    const kind = str(root.object, "type") orelse return null;
+    const kind = json.stringField(root.object, "type") orelse return null;
     if (!std.mem.eql(u8, kind, "message")) return null;
     const record = object(root.object, "message") orelse return null;
-    const role = str(record, "role") orelse return null;
+    const role = json.stringField(record, "role") orelse return null;
 
     if (std.mem.eql(u8, role, "user")) {
         return .{ .user = .{

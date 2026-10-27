@@ -194,39 +194,6 @@ fn leadingSpaces(line: []const u8) usize {
     return i;
 }
 
-fn headingLevel(line: []const u8) ?usize {
-    const at = leadingSpaces(line);
-    var n: usize = 0;
-    while (at + n < line.len and line[at + n] == '#') n += 1;
-    if (n == 0 or n > 6) return null;
-    if (at + n < line.len and line[at + n] != ' ' and line[at + n] != '\t') return null;
-    return n;
-}
-
-fn isFenceMarker(line: []const u8) bool {
-    const at = leadingSpaces(line);
-    if (at >= line.len) return false;
-    const c = line[at];
-    if (c != '`' and c != '~') return false;
-    return runLength(line, at, c) >= 3;
-}
-
-fn isRule(line: []const u8) bool {
-    const at = leadingSpaces(line);
-    if (at >= line.len) return false;
-    const c = line[at];
-    if (c != '-' and c != '*' and c != '_') return false;
-    var marks: usize = 0;
-    for (line[at..]) |ch| {
-        if (ch == c) {
-            marks += 1;
-        } else if (ch != ' ' and ch != '\t' and ch != '\r') {
-            return false;
-        }
-    }
-    return marks >= 3;
-}
-
 /// Byte offset just past a list or quote marker, or null when the line has none.
 fn blockMarker(line: []const u8) ?usize {
     var at: usize = 0;
@@ -246,7 +213,7 @@ fn blockMarker(line: []const u8) ?usize {
 
 fn markdownLine(a: std.mem.Allocator, line: []const u8, base: u32, spans: *std.ArrayList(Span)) void {
     const limit = line.len;
-    if (isFenceMarker(line) or isRule(line)) {
+    if (format.fenceRun(line) != null or format.isRule(line[leadingSpaces(line)..])) {
         addSpan(a, spans, base, 0, limit, muted());
         return;
     }
@@ -257,11 +224,11 @@ fn markdownLine(a: std.mem.Allocator, line: []const u8, base: u32, spans: *std.A
     }
     // Headings and rules keep their style when quoted or listed.
     const rest = line[start..];
-    if (headingLevel(rest)) |level| {
-        addSpan(a, spans, base, start, limit, styles.roles.heading(level));
+    if (format.heading(rest[leadingSpaces(rest)..])) |h| {
+        addSpan(a, spans, base, start, limit, styles.roles.heading(h.level));
         return;
     }
-    if (isFenceMarker(rest) or isRule(rest)) {
+    if (format.fenceRun(rest) != null or format.isRule(rest)) {
         addSpan(a, spans, base, start, limit, muted());
         return;
     }

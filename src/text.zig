@@ -43,6 +43,29 @@ fn utf8SeqLen(p: []const u8) ?usize {
     return null;
 }
 
+pub const Cp = struct { cp: u21, len: usize };
+
+/// The code point at `i` and its byte length. An invalid or truncated byte counts
+/// as a one-byte code point, so callers always make progress.
+pub fn decodeAt(bytes: []const u8, i: usize) ?Cp {
+    if (i >= bytes.len) return null;
+    const b = bytes[i];
+    const n = std.unicode.utf8ByteSequenceLength(b) catch return .{ .cp = b, .len = 1 };
+    if (i + n > bytes.len) return .{ .cp = b, .len = 1 };
+    return .{ .cp = std.unicode.utf8Decode(bytes[i .. i + n]) catch b, .len = n };
+}
+
+/// Code points in `bytes`, counting each invalid byte as one.
+pub fn cpLen(bytes: []const u8) usize {
+    var i: usize = 0;
+    var n: usize = 0;
+    while (decodeAt(bytes, i)) |d| {
+        i += d.len;
+        n += 1;
+    }
+    return n;
+}
+
 pub fn utf8Clean(a: std.mem.Allocator, text: []const u8) ![]const u8 {
     if (std.unicode.utf8ValidateSlice(text)) return text;
     var out: std.ArrayList(u8) = .empty;
