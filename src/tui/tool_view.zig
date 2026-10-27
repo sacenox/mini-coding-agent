@@ -11,9 +11,8 @@ fn callHead(a: std.mem.Allocator, name: []const u8) []const u8 {
     return styles.accent(a, std.fmt.allocPrint(a, "{s}", .{name}) catch "tool");
 }
 
-pub fn diffHead(a: std.mem.Allocator, name: []const u8, path: []const u8) []const u8 {
-    const head = callHead(a, std.fmt.allocPrint(a, "{s} diff", .{name}) catch name);
-    return std.fmt.allocPrint(a, "{s}  {s}", .{ head, path }) catch path;
+pub fn diffHead(a: std.mem.Allocator, path: []const u8) []const u8 {
+    return std.fmt.allocPrint(a, "{s}  {s}", .{ callHead(a, "diff"), path }) catch path;
 }
 
 pub fn relativize(cwd: []const u8, path: []const u8) []const u8 {
@@ -25,11 +24,19 @@ pub fn relativize(cwd: []const u8, path: []const u8) []const u8 {
     return rest[1..];
 }
 
+/// The first line of a command; more lines are dropped, not drawn.
+fn preview(a: std.mem.Allocator, command: []const u8) []const u8 {
+    const end = std.mem.indexOfScalar(u8, command, '\n') orelse return command;
+    if (std.mem.indexOfNone(u8, command[end..], " \t\r\n") == null) return command[0..end];
+    const first = std.mem.trimEnd(u8, command[0..end], " \t\r");
+    return std.fmt.allocPrint(a, "{s} …", .{first}) catch first;
+}
+
 pub fn callSummary(a: std.mem.Allocator, name: []const u8, args_json: []const u8) []const u8 {
     const parsed = std.json.parseFromSliceLeaky(std.json.Value, a, args_json, .{}) catch return args_json;
     if (parsed == .object) {
         if (std.mem.eql(u8, name, "bash")) {
-            if (parsed.object.get("command")) |c| if (c == .string) return c.string;
+            if (parsed.object.get("command")) |c| if (c == .string) return preview(a, c.string);
         }
         if (std.mem.eql(u8, name, "edit") or std.mem.eql(u8, name, "read")) {
             if (parsed.object.get("path")) |p| if (p == .string) return p.string;
@@ -38,21 +45,12 @@ pub fn callSummary(a: std.mem.Allocator, name: []const u8, args_json: []const u8
     return args_json;
 }
 
-pub fn callBody(a: std.mem.Allocator, name: []const u8, summary: []const u8, width: usize) []const []const u8 {
-    const head = callHead(a, name);
-    const body = summary;
-    var rows: std.ArrayList([]const u8) = .empty;
-    var it = std.mem.splitScalar(u8, body, '\n');
-    var i: usize = 0;
-    while (it.next()) |line| : (i += 1) {
-        const args = if (line.len == 0) line else styles.styledWith(a, .{ .bold = true }, line);
-        const text = if (i == 0)
-            std.fmt.allocPrint(a, "{s}  {s}", .{ head, args }) catch line
-        else
-            args;
-        rows.append(a, text) catch {};
-    }
-    return render.elide(a, rows.items, width);
+/// One line: the tool name and a clipped preview of its arguments.
+pub fn callLine(a: std.mem.Allocator, name: []const u8, summary: []const u8, width: usize) []const u8 {
+    const head = std.fmt.allocPrint(a, "{s}  ", .{callHead(a, name)}) catch return summary;
+    const room = width -| render.displayWidth(head);
+    const args = styles.styledWith(a, .{ .bold = true }, render.clip(a, render.expandTabs(a, summary, 4), room));
+    return std.fmt.allocPrint(a, "{s}{s}", .{ head, args }) catch summary;
 }
 
 pub const Result = struct {

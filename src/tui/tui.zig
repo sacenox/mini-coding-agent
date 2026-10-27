@@ -499,7 +499,7 @@ const Tui = struct {
     fn renderCall(self: *Tui, call: *PendingCall) void {
         if (call.rendered) return;
         self.scrollback.separator = true;
-        for (tool_view.callBody(self.s, call.name, call.summary, @max(self.term.width(), 1))) |row| self.push(row);
+        self.push(tool_view.callLine(self.s, call.name, call.summary, @max(self.term.width(), 1)));
         call.rendered = true;
     }
 
@@ -536,7 +536,8 @@ const Tui = struct {
             if (result.footer) |footer| self.push(footer);
         }
         for (diffs) |d| {
-            self.push(tool_view.diffHead(self.s, name, d.path));
+            self.scrollback.separator = true;
+            self.push(tool_view.diffHead(self.s, d.path));
             const r = diff_view.diffBody(self.s, d, self.cfg.max_diff_lines);
             for (render.plainRows(self.s, r.lines, styles.roles.output)) |row| {
                 self.push(std.fmt.allocPrint(self.s, "{s}{s}", .{ styles.comment(self.s, BODY_PREFIX), row }) catch row);

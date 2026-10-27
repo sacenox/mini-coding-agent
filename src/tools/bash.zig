@@ -75,6 +75,25 @@ fn killGroup(pid: i32) void {
     std.posix.kill(-pid, .KILL) catch {};
 }
 
+/// What the TUI shows instead of the output. The status words match the exit line the model sees.
+fn bodyLine(a: std.mem.Allocator, code: ?u8, timed_out: bool, timeout_s: u64, output: []const u8) ?[]const u8 {
+    const label = if (code) |c|
+        std.fmt.allocPrint(a, "exit {d}", .{c}) catch return null
+    else if (timed_out)
+        std.fmt.allocPrint(a, "timed out after {d}s", .{timeout_s}) catch return null
+    else
+        "aborted";
+    const lines = text.countLines(output);
+    if (lines == 0) return label;
+    const truncated = std.mem.indexOf(u8, output, truncated_marker) != null;
+    return std.fmt.allocPrint(a, "{s} · {d} line{s}{s}", .{
+        label,
+        lines,
+        if (lines == 1) "" else "s",
+        if (truncated) ", truncated" else "",
+    }) catch null;
+}
+
 fn fail(a: std.mem.Allocator, comptime fmt: []const u8, args: anytype) tools.Result {
     return tools.fail(a, "bash failed", fmt, args);
 }
@@ -199,6 +218,7 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
         .text = out.items,
         .is_error = if (code) |c| c != 0 else true,
         .diffs = diffs,
+        .body = bodyLine(a, code, timed_out, timeout_s, body),
         .model_text = model_text,
     };
 }

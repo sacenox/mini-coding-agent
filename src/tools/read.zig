@@ -86,11 +86,6 @@ fn lineSlice(content: []const u8, offset: usize, range: ?usize) ?[]const u8 {
     return content[start..];
 }
 
-fn countLines(content: []const u8) usize {
-    if (content.len == 0) return 0;
-    return std.mem.count(u8, content, "\n") + @intFromBool(content[content.len - 1] != '\n');
-}
-
 fn bodyLine(a: std.mem.Allocator, args: Args, lines: usize, truncated: bool) ?[]const u8 {
     var out: std.Io.Writer.Allocating = .init(a);
     const w = &out.writer;
@@ -163,7 +158,7 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
         if (clipped) {
             return warn(a, "{s}: only the first {d} bytes were read, and offset {d} is past them", .{ path, content.len, offset });
         }
-        return warn(a, "{s} has {d} lines; offset {d} is past the end", .{ path, countLines(content), offset });
+        return warn(a, "{s} has {d} lines; offset {d} is past the end", .{ path, text.countLines(content), offset });
     };
 
     var sent = slice;
@@ -181,5 +176,5 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
         std.fmt.allocPrint(a, "{s}\n\n{s}", .{ sent, note }) catch "read failed"
     else
         sent;
-    return .{ .text = result_text, .is_error = false, .body = bodyLine(a, args, countLines(sent), truncated) };
+    return .{ .text = result_text, .is_error = false, .body = bodyLine(a, args, text.countLines(sent), truncated) };
 }

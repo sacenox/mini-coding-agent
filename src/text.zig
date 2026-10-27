@@ -6,6 +6,11 @@ pub fn isBinary(bytes: []const u8) bool {
     return std.mem.indexOfScalar(u8, bytes[0..@min(bytes.len, binary_sniff)], 0) != null;
 }
 
+pub fn countLines(content: []const u8) usize {
+    if (content.len == 0) return 0;
+    return std.mem.count(u8, content, "\n") + @intFromBool(content[content.len - 1] != '\n');
+}
+
 pub fn join(a: std.mem.Allocator, parts: []const []const u8, sep: []const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     for (parts, 0..) |part, i| {

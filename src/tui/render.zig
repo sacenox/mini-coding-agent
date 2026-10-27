@@ -202,6 +202,26 @@ pub fn wrapLine(a: std.mem.Allocator, text: []const u8, width: usize) []const []
     return rows.items;
 }
 
+/// Cuts `text` to `width` display columns, marking the cut with an ellipsis.
+pub fn clip(a: std.mem.Allocator, text: []const u8, width: usize) []const u8 {
+    if (width == 0) return "";
+    if (displayWidth(text) <= width) return text;
+    var out: std.ArrayList(u8) = .empty;
+    var used: usize = 0;
+    var i: usize = 0;
+    while (nextPiece(text, &i)) |piece| {
+        if (piece.sgr) {
+            out.appendSlice(a, piece.text) catch {};
+            continue;
+        }
+        if (used + piece.width > width - 1) break;
+        out.appendSlice(a, piece.text) catch {};
+        used += piece.width;
+    }
+    out.appendSlice(a, "…") catch {};
+    return out.items;
+}
+
 pub const BodyLine = struct {
     text: []const u8,
     style: ?styles.Style = null,
