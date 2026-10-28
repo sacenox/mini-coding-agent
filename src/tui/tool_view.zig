@@ -5,7 +5,7 @@ const diff_view = @import("diff_view.zig");
 
 const BodyLine = render.BodyLine;
 
-pub const PendingCall = struct { name: []const u8, summary: []const u8, rendered: bool = false };
+pub const PendingCall = struct { name: []const u8, summary: []const u8 };
 
 fn callHead(a: std.mem.Allocator, name: []const u8) []const u8 {
     return styles.accent(a, std.fmt.allocPrint(a, "{s}", .{name}) catch "tool");
@@ -44,11 +44,19 @@ pub fn callSummary(a: std.mem.Allocator, name: []const u8, args_json: []const u8
     return args_json;
 }
 
-pub fn callLine(a: std.mem.Allocator, name: []const u8, summary: []const u8, width: usize) []const u8 {
+/// One line: the tool name, a clipped preview of its arguments, and the
+/// result summary when there is one.
+pub fn callLine(a: std.mem.Allocator, name: []const u8, summary: []const u8, meta: ?[]const u8, width: usize) []const u8 {
     const head = std.fmt.allocPrint(a, "{s}  ", .{callHead(a, name)}) catch return summary;
-    const room = width -| render.displayWidth(head);
+    var room = width -| render.displayWidth(head);
+    var tail: []const u8 = "";
+    if (meta) |m| {
+        const raw = std.fmt.allocPrint(a, "  {s}", .{m}) catch "";
+        tail = styles.comment(a, render.clip(a, raw, room));
+        room -|= render.displayWidth(tail);
+    }
     const args = styles.styledWith(a, .{ .bold = true }, render.clip(a, render.expandTabs(a, summary, 4), room));
-    return std.fmt.allocPrint(a, "{s}{s}", .{ head, args }) catch summary;
+    return std.fmt.allocPrint(a, "{s}{s}{s}", .{ head, args, tail }) catch summary;
 }
 
 pub const Result = struct {
@@ -92,11 +100,6 @@ pub fn resultLines(a: std.mem.Allocator, name: []const u8, text: []const u8, max
     var out: std.ArrayList(BodyLine) = .empty;
     for (lines.items) |l| out.append(a, .{ .text = l }) catch {};
     return .{ .lines = out.items };
-}
-
-pub fn metaLine(a: std.mem.Allocator, meta: []const u8) []const u8 {
-    const label = std.fmt.allocPrint(a, " └ {s}", .{meta}) catch return "";
-    return styles.comment(a, label);
 }
 
 pub fn exitLine(a: std.mem.Allocator, text: []const u8) ?[]const u8 {

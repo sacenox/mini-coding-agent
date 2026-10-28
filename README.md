@@ -100,11 +100,12 @@ error.
 Both `read` and `edit` expand a leading `~/`. Tool arguments are parsed once at
 the boundary and validated there; a bad shape fails the call with a message.
 
-The TUI renders one line per call: the tool name and a clipped preview of its
-arguments (the first line of a `bash` command, the path for `read`/`edit`).
-`read` and a successful `bash` follow it with a `└` metadata line instead of
-their output (`└ exit 0 · 12 lines`); a failed call still shows its output.
-Changed files render as diffs with `+added -removed` counts.
+The TUI renders one line per call: the tool name, a clipped preview of its
+arguments (the first line of a `bash` command, the path for `read`/`edit`), and
+the call's metadata (`exit 0 · 12 lines`). For `read` and a successful `bash`
+that metadata replaces the output; a failed call still shows its output. Calls
+are not separated by blank lines. Changed files render as diffs with
+`+added -removed` counts.
 
 ## Configure
 

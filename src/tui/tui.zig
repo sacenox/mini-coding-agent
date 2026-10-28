@@ -105,6 +105,7 @@ const Tui = struct {
 
     reply: stream.MarkdownStream,
     pending_calls: std.ArrayList(PendingCall) = .empty,
+    tool_block: bool = false,
     streamed: std.ArrayList(u8) = .empty,
     turn_start: i64 = 0,
     turn_msgs: usize = 0,
@@ -186,11 +187,15 @@ const Tui = struct {
     }
 
     fn commitLines(self: *Tui, lines: []const render.BodyLine) void {
+        if (lines.len == 0) return;
+        if (self.tool_block) self.scrollback.separator = true;
+        self.tool_block = false;
         self.scrollback.commitLines(lines);
         self.dirty = true;
     }
 
     fn note(self: *Tui, line: []const u8) void {
+        self.tool_block = false;
         self.scrollback.note(line);
         self.dirty = true;
     }
@@ -200,6 +205,7 @@ const Tui = struct {
     }
 
     fn commitUser(self: *Tui, text: []const u8) void {
+        self.tool_block = false;
         self.scrollback.commitUser(text);
         self.dirty = true;
     }
@@ -404,7 +410,6 @@ const Tui = struct {
                 self.phase = p.phase;
                 self.keepName(&self.detail, p.detail);
                 if (p.phase == .pausing) self.paused = true;
-                if (p.phase == .running_tool) self.renderPendingCall();
                 if (p.phase == .waiting_model) {
                     self.stream_kind = .none;
                     self.text_bytes = 0;
@@ -509,32 +514,28 @@ const Tui = struct {
         }
     }
 
-    fn renderCall(self: *Tui, call: *PendingCall) void {
-        if (call.rendered) return;
-        self.scrollback.separator = true;
-        self.push(tool_view.callLine(self.s, call.name, call.summary, @max(self.term.width(), 1)));
-        call.rendered = true;
+    fn beginToolBlock(self: *Tui) void {
+        if (!self.tool_block) self.scrollback.separator = true;
+        self.tool_block = true;
     }
 
-    fn renderPendingCall(self: *Tui) void {
-        if (self.pending_calls.items.len == 0) return;
-        self.renderCall(&self.pending_calls.items[0]);
+    fn renderCall(self: *Tui, call: *PendingCall, meta: ?[]const u8) void {
+        self.beginToolBlock();
+        self.push(tool_view.callLine(self.s, call.name, call.summary, meta, @max(self.term.width(), 1)));
     }
 
     fn commitToolResult(self: *Tui, name: []const u8, text: []const u8, is_error: bool, diffs: []const tools_index.FileDiff, body: ?[]const u8, images: []const message_mod.ImageContent) void {
         const shown = render.stripAnsi(self.s, text);
-        const meta: ?[]const u8 = if (!is_error) body else null;
-        var head_committed = false;
-        if (self.pending_calls.items.len > 0) {
+        const has_head = self.pending_calls.items.len > 0;
+        const meta: ?[]const u8 = if (!is_error and has_head) body else null;
+        if (has_head) {
             var call = self.pending_calls.orderedRemove(0);
-            head_committed = true;
-            self.renderCall(&call);
-        }
-        if (!head_committed) self.scrollback.separator = true;
-        if (self.cfg.show_images) self.commitImages(images);
-        if (meta) |m| {
-            self.push(tool_view.metaLine(self.s, m));
+            self.renderCall(&call, meta);
         } else {
+            self.beginToolBlock();
+        }
+        if (self.cfg.show_images) self.commitImages(images);
+        if (meta == null) {
             const width = @max(self.term.width() - BODY_PREFIX.len, 1);
             const is_bash = std.mem.eql(u8, name, "bash");
             const bash_exit: ?[]const u8 = if (is_bash) tool_view.exitLine(self.s, shown) else null;
@@ -549,7 +550,6 @@ const Tui = struct {
             if (result.footer) |footer| self.push(footer);
         }
         for (diffs) |d| {
-            self.scrollback.separator = true;
             self.push(tool_view.diffHead(self.s, d.path));
             const r = diff_view.diffBody(self.s, d, self.cfg.max_diff_lines);
             for (render.plainRows(self.s, r.lines, styles.roles.output)) |row| {
@@ -557,7 +557,6 @@ const Tui = struct {
             }
             if (tool_view.diffFooter(self.s, r)) |footer| self.push(footer);
         }
-        self.scrollback.separator = true;
     }
 
     fn commitImages(self: *Tui, images: []const message_mod.ImageContent) void {
@@ -576,7 +575,7 @@ const Tui = struct {
     }
 
     fn flushCalls(self: *Tui) void {
-        for (self.pending_calls.items) |*call| self.renderCall(call);
+        for (self.pending_calls.items) |*call| self.renderCall(call, null);
         self.pending_calls.clearRetainingCapacity();
         self.resetCalls();
     }
