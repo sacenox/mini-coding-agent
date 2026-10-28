@@ -1,4 +1,5 @@
 const std = @import("std");
+const filesystem = @import("../filesystem.zig");
 const platform = @import("../platform.zig");
 const text = @import("../text.zig");
 const tools = @import("../tools.zig");
@@ -15,11 +16,13 @@ const description_fmt =
     "The command runs with `bash -c` starting in {s}, your working directory. Use it for " ++
     "builds, tests, git, package managers, and other file work. The output ends " ++
     "with an `exit code:` line, or `killed: timed out after Ns` if it hits the time limit. " ++
-    "Pass `timeout` (seconds) to change the 120-second limit." ++
-    "Do not repeatedly `cd` into the working directory, it's wasteful.";
+    "Pass `timeout` (seconds) to change the 120-second limit. Pass `cwd` to run the " ++
+    "command in another directory; it is shorter than prefixing the command with " ++
+    "`cd <dir> &&`, and it tells us which directory to track for the diff.";
 
 const params = [_]tools.Param{
     .{ .name = "command", .kind = .string, .description = "Bash command line to execute." },
+    .{ .name = "cwd", .kind = .string, .required = false, .description = "Directory to run the command in, instead of `cd <dir> && ...`. Relative paths resolve against the working directory. Defaults to the working directory." },
     .{ .name = "timeout", .kind = .integer, .required = false, .description = "Seconds to allow before the command is killed. Defaults to 120." },
 };
 
@@ -34,7 +37,14 @@ pub const tool = tools.Descriptor{
     .run = run,
 };
 
-const Args = struct { command: []const u8, timeout: ?u64 = null };
+const Args = struct { command: []const u8, cwd: ?[]const u8 = null, timeout: ?u64 = null };
+
+fn trimRoot(path: []const u8) []const u8 {
+    var p = path;
+    while (std.mem.startsWith(u8, p, "./")) p = p[2..];
+    while (p.len > 1 and p[p.len - 1] == '/') p = p[0 .. p.len - 1];
+    return if (std.mem.eql(u8, p, ".")) "" else p;
+}
 
 const Acc = struct {
     a: std.mem.Allocator,
@@ -102,14 +112,20 @@ pub fn run(a: std.mem.Allocator, scratch: std.mem.Allocator, args_json: []const 
         return fail(a, "bash failed: command must be a string", .{});
     };
 
-    const ignore = snapshot.Ignore{ .dirs = ctx.snapshot_ignore_dirs, .uses_gitignore = ctx.snapshot_uses_gitignore };
+    const cwd = if (args.cwd) |raw| trimRoot(filesystem.expandTilde(scratch, raw)) else "";
+    if (cwd.len > 0) {
+        const st = std.Io.Dir.cwd().statFile(platform.io, cwd, .{}) catch |e| return tools.ioFail(a, "bash", cwd, e);
+        if (st.kind != .directory) return fail(a, "bash failed: {s} is not a directory", .{cwd});
+    }
+
+    const ignore = snapshot.Ignore{ .root = cwd, .dirs = ctx.snapshot_ignore_dirs, .uses_gitignore = ctx.snapshot_uses_gitignore };
     if (ctx.on_phase) |p| p.call(.snapshotting);
     const before = snapshot.capture(scratch, ignore) catch return fail(a, "bash failed: out of memory", .{});
     if (ctx.on_phase) |p| p.call(.running);
 
     var child = std.process.spawn(platform.io, .{
         .argv = &.{ "bash", "-c", args.command },
-        .cwd = .inherit,
+        .cwd = if (cwd.len == 0) .inherit else .{ .path = cwd },
         .stdin = .ignore,
         .stdout = .pipe,
         .stderr = .pipe,

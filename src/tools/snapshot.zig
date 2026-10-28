@@ -23,6 +23,7 @@ const FileState = struct {
 pub const Tree = std.StringHashMap(FileState);
 
 pub const Ignore = struct {
+    root: []const u8 = "",
     dirs: []const []const u8 = &.{},
     uses_gitignore: bool = true,
 };
@@ -43,7 +44,7 @@ pub fn capture(a: std.mem.Allocator, ignore: Ignore) !Tree {
     }
 
     var stack: std.ArrayList([]const u8) = .empty;
-    try stack.append(tmp, "");
+    try stack.append(tmp, ignore.root);
 
     var total: u64 = 0;
     while (stack.pop()) |dir_rel| {
