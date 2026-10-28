@@ -1,8 +1,5 @@
 const std = @import("std");
 
-/// The default `std.Io.Threaded` grows its worker pool to one less than the CPU
-/// count. That pool is only exercised by the net stack, which races DNS answers
-/// and connections through `Io.async`; a handful of workers covers the agent.
 const max_io_threads = 4;
 
 pub var io: std.Io = undefined;
@@ -37,8 +34,6 @@ pub fn home() ?[]const u8 {
     return std.mem.sliceTo(dir, 0);
 }
 
-/// Reset `sig` to its default disposition and re-raise it, so the process dies
-/// with the signal instead of masking it behind a normal exit code.
 pub fn reRaise(sig: std.posix.SIG) noreturn {
     const act = std.posix.Sigaction{
         .handler = .{ .handler = std.posix.SIG.DFL },

@@ -37,7 +37,6 @@ pub fn diffLines(a: std.mem.Allocator, lines: []const []const u8, max_diff_lines
         if (std.mem.startsWith(u8, line, "diff ")) in_hunk = false;
         const kind = highlight.diffKind(line, in_hunk);
         if (kind == .hunk) in_hunk = true;
-        // File content is untrusted: its own escapes never reach the terminal.
         const text = render.stripAnsi(a, line);
         switch (kind) {
             .hunk => out.append(a, .{ .text = text, .style = diffHunk() }) catch {},

@@ -24,9 +24,6 @@ pub const Model = struct {
     thinking: Thinking = .budget,
 };
 
-/// A built-in provider is one whose models.dev entry the agent knows how to
-/// request: name, environment keys, API root and models all come from the
-/// document.
 const Builtin = struct {
     id: []const u8,
     session_header: ?[]const u8 = null,
@@ -97,6 +94,15 @@ fn custom(cfg: *const config.Config, id: []const u8) ?*const config.CustomProvid
     return null;
 }
 
+fn customModel(cfg: *const config.Config, provider_id: []const u8, model_id: []const u8) ?*const config.CustomModel {
+    if (builtin(provider_id) != null) return null;
+    const p = custom(cfg, provider_id) orelse return null;
+    for (p.models) |*m| {
+        if (std.mem.eql(u8, m.id, model_id)) return m;
+    }
+    return null;
+}
+
 fn firstEnv(keys: []const []const u8) ?[]const u8 {
     for (keys) |key| {
         if (platform.getEnv(key)) |value| {
@@ -145,27 +151,26 @@ pub fn resolveNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id
     }
 
     if (custom(cfg, provider_id)) |p| {
-        for (p.models) |m| {
-            if (!std.mem.eql(u8, m.id, model_id)) continue;
-            return Model{
-                .id = m.id,
-                .api = @tagName(m.api),
-                .provider = provider_id,
-                .base_url = m.baseUrl,
-                .api_key = firstEnv(p.envKeys),
-                .effort = clampEffort(m.reasoning, m.effort, cfg.thinking_effort),
-                .supports_images = m.images,
-                .context_window = m.context,
-                .max_tokens = m.maxOutput,
-                .cost_input = m.cost[0],
-                .cost_output = m.cost[1],
-                .cost_cache_read = m.cost[2],
-                .session_header = null,
-                .headers = headerPairs(a, p.headers),
-            };
-        }
-        err.* = unknownModel(a, model_id, provider_id);
-        return null;
+        const m = customModel(cfg, provider_id, model_id) orelse {
+            err.* = unknownModel(a, model_id, provider_id);
+            return null;
+        };
+        return Model{
+            .id = m.id,
+            .api = @tagName(m.api),
+            .provider = provider_id,
+            .base_url = m.baseUrl,
+            .api_key = firstEnv(p.envKeys),
+            .effort = clampEffort(m.reasoning, m.effort, cfg.thinking_effort),
+            .supports_images = m.images,
+            .context_window = m.context,
+            .max_tokens = m.maxOutput,
+            .cost_input = m.cost[0],
+            .cost_output = m.cost[1],
+            .cost_cache_read = m.cost[2],
+            .session_header = null,
+            .headers = headerPairs(a, p.headers),
+        };
     }
 
     err.* = unknownProvider(a, provider_id);
@@ -182,7 +187,6 @@ fn headerPairs(a: std.mem.Allocator, headers: ?std.json.ArrayHashMap([]const u8)
 
 const ProviderEntry = struct { id: []const u8, name: []const u8, ready: bool };
 
-/// A built-in provider is usable when its first environment key is present.
 fn usable(p: modelsdev.Provider) bool {
     return firstEnv(p.env) != null;
 }
@@ -191,7 +195,6 @@ pub fn providers(a: std.mem.Allocator, cfg: *const config.Config) []ProviderEntr
     var out: std.ArrayList(ProviderEntry) = .empty;
     var db: ?modelsdev.Db = modelsdev.Db.open(a) catch null;
     for (builtins) |b| {
-        // Name, environment keys and every model fact come from the document.
         const p = (if (db) |*d| d.provider(b.id) else null) orelse continue;
         out.append(a, .{
             .id = b.id,
@@ -207,9 +210,6 @@ pub fn providers(a: std.mem.Allocator, cfg: *const config.Config) []ProviderEntr
 
 pub const Entry = struct { id: []const u8, name: []const u8 };
 
-/// The models a provider offers. Built-ins are asked over the wire
-/// (authenticated, so the provider decides what is enabled); a model with no
-/// models.dev metadata is skipped. Custom providers list what they declare.
 pub fn listing(
     a: std.mem.Allocator,
     cfg: *const config.Config,
@@ -239,7 +239,6 @@ pub fn listing(
     return items;
 }
 
-/// The model list shape of an OpenAI-compatible gateway: `data[].id`.
 const Listed = struct {
     data: ?[]const Item = null,
 
@@ -260,34 +259,20 @@ fn customListing(a: std.mem.Allocator, p: *const config.CustomProvider) ![]Entry
     return items;
 }
 
+fn levels(reasoning: bool, effort: []const []const u8) []const []const u8 {
+    if (!reasoning) return &.{"off"};
+    return if (effort.len == 0) &ladder else effort;
+}
+
 pub fn supportedLevels(a: std.mem.Allocator, cfg: *const config.Config, provider_id: []const u8, model_id: []const u8) []const []const u8 {
-    if (builtin(provider_id) == null) {
-        if (custom(cfg, provider_id)) |p| {
-            for (p.models) |m| {
-                if (!std.mem.eql(u8, m.id, model_id)) continue;
-                if (!m.reasoning) return &.{"off"};
-                if (m.effort.len == 0) return &ladder;
-                return m.effort;
-            }
-        }
-        return &ladder;
-    }
+    if (customModel(cfg, provider_id, model_id)) |m| return levels(m.reasoning, m.effort);
     var db = modelsdev.Db.open(a) catch return &ladder;
     const info = db.info(provider_id, model_id) orelse return &ladder;
-    if (!info.reasoning) return &.{"off"};
-    if (info.effort.len == 0) return &ladder;
-    return info.effort;
+    return levels(info.reasoning, info.effort);
 }
 
 pub fn clampNamed(a: std.mem.Allocator, cfg: *const config.Config, provider_id: []const u8, model_id: []const u8, desired: []const u8) []const u8 {
-    if (builtin(provider_id) == null) {
-        if (custom(cfg, provider_id)) |p| {
-            for (p.models) |m| {
-                if (std.mem.eql(u8, m.id, model_id)) return clampEffort(m.reasoning, m.effort, desired);
-            }
-        }
-        return desired;
-    }
+    if (customModel(cfg, provider_id, model_id)) |m| return clampEffort(m.reasoning, m.effort, desired);
     var db = modelsdev.Db.open(a) catch return desired;
     const info = db.info(provider_id, model_id) orelse return desired;
     return clampEffort(info.reasoning, info.effort, desired);

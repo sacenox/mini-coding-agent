@@ -24,7 +24,6 @@ pub fn relativize(cwd: []const u8, path: []const u8) []const u8 {
     return rest[1..];
 }
 
-/// The first line of a command; more lines are dropped, not drawn.
 fn preview(a: std.mem.Allocator, command: []const u8) []const u8 {
     const end = std.mem.indexOfScalar(u8, command, '\n') orelse return command;
     if (std.mem.indexOfNone(u8, command[end..], " \t\r\n") == null) return command[0..end];
@@ -45,7 +44,6 @@ pub fn callSummary(a: std.mem.Allocator, name: []const u8, args_json: []const u8
     return args_json;
 }
 
-/// One line: the tool name and a clipped preview of its arguments.
 pub fn callLine(a: std.mem.Allocator, name: []const u8, summary: []const u8, width: usize) []const u8 {
     const head = std.fmt.allocPrint(a, "{s}  ", .{callHead(a, name)}) catch return summary;
     const room = width -| render.displayWidth(head);

@@ -54,8 +54,6 @@ fn isSgrAt(text: []const u8, i: usize) ?usize {
     return null;
 }
 
-/// Bytes taken by the escape sequence at `i`. An unterminated sequence runs to the
-/// end of the text, so the caller always makes progress.
 fn escapeLen(text: []const u8, i: usize) usize {
     if (i + 1 >= text.len) return 1;
     if (text[i + 1] == '[') {
@@ -89,7 +87,6 @@ pub fn sanitize(a: std.mem.Allocator, text: []const u8) []const u8 {
     while (i < text.len) {
         const c = text[i];
         if (c == 0x1b) {
-            // Colors survive; every other escape only ever corrupts the layout.
             if (isSgrAt(text, i)) |n| {
                 out.appendSlice(a, text[i .. i + n]) catch {};
                 i += n;
@@ -108,7 +105,6 @@ pub fn sanitize(a: std.mem.Allocator, text: []const u8) []const u8 {
             continue;
         }
         const d = utf8.decodeAt(text, i) orelse break;
-        // C1 controls (0x80..0x9f) are as hazardous as the C0 ones.
         if (d.cp > 0x9f) out.appendSlice(a, text[i .. i + d.len]) catch {};
         i += d.len;
     }
@@ -178,7 +174,6 @@ pub fn wrapLine(a: std.mem.Allocator, text: []const u8, width: usize) []const []
     return rows.items;
 }
 
-/// Cuts `text` to `width` display columns, marking the cut with an ellipsis.
 pub fn clip(a: std.mem.Allocator, text: []const u8, width: usize) []const u8 {
     if (width == 0) return "";
     if (displayWidth(text) <= width) return text;

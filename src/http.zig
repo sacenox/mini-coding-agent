@@ -5,8 +5,6 @@ const build_options = @import("build_options");
 
 const user_agent = "mini-coding-agent/" ++ build_options.version;
 
-/// OpenRouter only creates an app page from a `HTTP-Referer`; the title and
-/// user agent alone leave usage unattributed.
 const openrouter_headers = [_]std.http.Header{
     .{ .name = "HTTP-Referer", .value = "https://xonecas.io/mini-coding-agent/" },
     .{ .name = "X-OpenRouter-Title", .value = "mini-coding-agent" },
@@ -38,9 +36,6 @@ const HttpError = error{
     Aborted,
 } || std.mem.Allocator.Error;
 
-/// How a request fails over: the retries after the first attempt, the first
-/// backoff step (each retry doubles it), and how long a stream may stay silent
-/// before the connection is treated as dead.
 pub const Retry = struct {
     attempts: usize = 3,
     base_ms: u64 = 1000,
@@ -49,8 +44,6 @@ pub const Retry = struct {
 
 const max_backoff_ms: u64 = 30_000;
 
-/// Told about every retry before it happens, so both front ends can say why the
-/// request is being repeated.
 pub const RetryNotice = struct {
     ctx: *anyopaque,
     on_retry: *const fn (ctx: *anyopaque, attempt: usize, total: usize, delay_ms: u64, reason: []const u8) void,
@@ -60,9 +53,6 @@ pub const RetryNotice = struct {
     }
 };
 
-/// Blocking socket reads cannot observe the cancel token or the idle window, so
-/// a watcher thread shuts the connection down when either is spent, unblocking
-/// the read that cannot see them.
 const Watch = struct {
     cancel: *const std.atomic.Value(bool),
     connection: *std.http.Client.Connection,
@@ -91,8 +81,6 @@ const Watch = struct {
     }
 };
 
-/// One request and its response, with the buffers the response reader borrows.
-/// The parts point at each other, so an exchange is always opened in place.
 const Exchange = struct {
     a: std.mem.Allocator,
     client: std.http.Client,
@@ -105,7 +93,6 @@ const Exchange = struct {
     decompress_buf: [std.compress.flate.max_window_len]u8 = undefined,
     reader: *std.Io.Reader = undefined,
 
-    /// Connects and sends, leaving the response to `receive`.
     fn open(self: *Exchange, a: std.mem.Allocator, method: std.http.Method, url: []const u8, headers: []const Header, body: ?[]const u8) HttpError!void {
         self.a = a;
         self.hdrs = .empty;
@@ -151,8 +138,6 @@ const Exchange = struct {
     }
 };
 
-/// What one attempt achieved: the status it saw, whether the sink already
-/// received events (a partial stream cannot be repeated), and how it ended.
 const Attempt = struct {
     status: u16 = 0,
     sent: bool = false,
@@ -268,10 +253,6 @@ fn postOnce(
     var have_data = false;
     var buf: [4096]u8 = undefined;
 
-    // Lines are assembled here instead of with `takeDelimiter`: some providers
-    // stream whole documents in one event, and a line that does not fit the
-    // reader's buffer sends the delimiter search down a failure path that
-    // desynchronizes chunked transfer decoding.
     while (true) {
         if (cancel.load(.acquire)) {
             out.err = error.Aborted;
@@ -307,8 +288,6 @@ fn postOnce(
             return out;
         };
     }
-    // The watcher shuts a dead stream down, which can end the read cleanly; the
-    // flag is what tells a finished stream from a silent one.
     if (watch.idle.load(.acquire)) {
         out.err = error.IdleTimeout;
         return out;
@@ -354,7 +333,6 @@ fn describe(e: HttpError, status: u16, buf: []u8) []const u8 {
     };
 }
 
-/// Waits out the backoff in small steps, so a cancel lands promptly.
 fn pause(cancel: *const std.atomic.Value(bool), delay_ms: u64) HttpError!void {
     var left = delay_ms;
     while (left > 0) {
@@ -366,8 +344,6 @@ fn pause(cancel: *const std.atomic.Value(bool), delay_ms: u64) HttpError!void {
     if (cancel.load(.acquire)) return error.Aborted;
 }
 
-/// Applies one SSE line to the pending event payload, returning whether the
-/// payload is complete and should be dispatched.
 fn feedLine(
     a: std.mem.Allocator,
     raw: []const u8,

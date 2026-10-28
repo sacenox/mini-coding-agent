@@ -1,9 +1,5 @@
-// models.dev metadata, embedded at build time. Refresh with
-// `python3 tools/gen_models_dev.py`.
-
 const std = @import("std");
 
-/// The raw models.dev document, filtered to the providers this agent talks to.
 pub const raw = @embedFile("models_dev.json");
 
 pub const Info = struct {
@@ -61,12 +57,8 @@ pub const Provider = struct {
 
 const File = std.json.ArrayHashMap(Provider);
 
-/// Wire directories a gateway inserts between its API root and the version
-/// when it fronts several wires (`/openai/v1`, `/anthropic/v1`).
 const wire_dirs = [_][]const u8{ "openai", "anthropic", "google" };
 
-/// A parsed models.dev document. The provider listing and each model's wire,
-/// base URL and metadata all come from here.
 pub const Db = struct {
     a: std.mem.Allocator,
     file: File,
@@ -75,15 +67,10 @@ pub const Db = struct {
         return .{ .a = a, .file = try std.json.parseFromSliceLeaky(File, a, raw, .{ .ignore_unknown_fields = true }) };
     }
 
-    /// The provider's record: its name, environment keys and metadata all live
-    /// in the document, never in the agent.
     pub fn provider(self: Db, provider_id: []const u8) ?Provider {
         return self.file.map.get(provider_id);
     }
 
-    /// The provider's API root, where its model list lives. A provider's `api`
-    /// is the base URL of its default wire; when it carries a wire directory
-    /// the list sits one level up (`.../openai/v1` -> `.../v1`).
     pub fn baseUrl(self: Db, provider_id: []const u8) ?[]const u8 {
         const p = self.file.map.get(provider_id) orelse return null;
         const api = std.mem.trimEnd(u8, p.api, "/");
@@ -122,8 +109,6 @@ fn isWireDir(seg: []const u8) bool {
     return false;
 }
 
-/// A model's wire package overrides its provider's; a model override that only
-/// names an `api` keeps the provider's wire.
 fn modelNpm(m: Model, p: Provider) []const u8 {
     if (m.provider) |pkg| {
         if (pkg.npm.len > 0) return pkg.npm;

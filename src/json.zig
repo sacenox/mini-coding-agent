@@ -10,7 +10,6 @@ pub const Raw = struct {
     }
 };
 
-/// A non-empty string field, or null when the key is missing or holds another type.
 pub fn stringField(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
     const value = obj.get(key) orelse return null;
     return if (value == .string and value.string.len > 0) value.string else null;

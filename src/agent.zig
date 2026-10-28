@@ -90,7 +90,6 @@ fn onToolPhase(ctx: *anyopaque, phase: tools.ToolPhase) void {
 fn onApiEvent(ctx: *anyopaque, event: api.Event) void {
     const stream_ctx: *StreamCtx = @ptrCast(@alignCast(ctx));
     const listener = stream_ctx.listener;
-    // A retry is not output: it leaves the turn where it was, waiting.
     if (std.meta.activeTag(event) == .retry) {
         const r = event.retry;
         listener.emit(.{ .retry = .{
@@ -224,9 +223,6 @@ pub fn runTurn(opts: Options, messages: *std.ArrayList(message_mod.Message), int
             return;
         };
 
-        // A failed request is a rolled-back transaction: the error never enters
-        // the context or the log, so resending the turn repeats the same
-        // request instead of appending an apology to it.
         if (assistant.stop_reason == .err) {
             listener.emit(.{ .err = assistant.error_message orelse "provider error" });
             return;

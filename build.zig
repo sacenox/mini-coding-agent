@@ -3,7 +3,6 @@ const zon = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    // A plain `zig build` ships the smallest binary; pass -Doptimize=debug to develop.
     const optimize = b.option(std.builtin.OptimizeMode, "optimize", "Optimization mode") orelse .small;
 
     const exe = b.addExecutable(.{
@@ -19,7 +18,6 @@ pub fn build(b: *std.Build) void {
     const options = b.addOptions();
     options.addOption([]const u8, "version", zon.version);
     exe.root_module.addOptions("build_options", options);
-    // `platform.zig` reads the passwd entry through `std.c`, which needs libc.
     exe.root_module.link_libc = true;
 
     const run_cmd = b.addRunArtifact(exe);

@@ -83,9 +83,7 @@ fn runLength(line: []const u8, at: usize, c: u8) usize {
     return n;
 }
 
-/// Just past the code span opened at `i`, or null when its backticks never close.
 fn codeSpanEnd(line: []const u8, at: usize, limit: usize) ?usize {
-    // Backslashes are literal inside a code span, so only the run length closes it.
     const n = runLength(line, at, '`');
     var i = at + n;
     while (i < limit) : (i += 1) {
@@ -94,8 +92,6 @@ fn codeSpanEnd(line: []const u8, at: usize, limit: usize) ?usize {
     return null;
 }
 
-/// Closing run for `marker` repeated `count` times, ignoring empty or space-padded content
-/// and anything escaped or inside a code span.
 fn closeRun(line: []const u8, open_at: usize, marker: u8, count: usize, limit: usize) ?usize {
     var i = open_at + count;
     while (i + count <= limit) : (i += 1) {
@@ -111,7 +107,6 @@ fn closeRun(line: []const u8, open_at: usize, marker: u8, count: usize, limit: u
         if (line[i - 1] == ' ' or line[i - 1] == '\t') continue;
         const run = runLength(line, i, marker);
         if (run < count) continue;
-        // `_` only closes where a word ends, so `foo_bar_baz` stays literal.
         if (marker == '_' and i + run < limit and isAlnum(line[i + run])) continue;
         return i;
     }
@@ -131,7 +126,6 @@ fn addSpan(a: std.mem.Allocator, spans: *std.ArrayList(Span), base: u32, start: 
     spans.append(a, .{ .start = base + @as(u32, @intCast(start)), .end = base + @as(u32, @intCast(end)), .style = style }) catch {};
 }
 
-/// Inline markup inside one prose line. `limit` is the byte index the scan stops at.
 fn scanInline(a: std.mem.Allocator, line: []const u8, base: u32, start: usize, limit: usize, spans: *std.ArrayList(Span)) void {
     var i = start;
     while (i < limit) {
@@ -154,7 +148,6 @@ fn scanInline(a: std.mem.Allocator, line: []const u8, base: u32, start: usize, l
             const n = runLength(line, i, c);
             const count: usize = @min(n, 3);
             const content = i + count;
-            // An opener needs content and, for `_`, must not sit inside a word.
             if (content >= limit or line[content] == ' ' or line[content] == '\t' or
                 (c == '_' and i > start and isAlnum(line[i - 1])))
             {
@@ -194,7 +187,6 @@ fn leadingSpaces(line: []const u8) usize {
     return i;
 }
 
-/// Byte offset just past a list or quote marker, or null when the line has none.
 fn blockMarker(line: []const u8) ?usize {
     var at: usize = 0;
     while (at < line.len and (line[at] == ' ' or line[at] == '\t')) at += 1;
@@ -222,7 +214,6 @@ fn markdownLine(a: std.mem.Allocator, line: []const u8, base: u32, spans: *std.A
         addSpan(a, spans, base, start, start + after, muted());
         start += after;
     }
-    // Headings and rules keep their style when quoted or listed.
     const rest = line[start..];
     if (format.heading(rest[leadingSpaces(rest)..])) |h| {
         addSpan(a, spans, base, start, limit, styles.roles.heading(h.level));
@@ -246,10 +237,7 @@ pub fn highlightMarkdown(a: std.mem.Allocator, text: []const u8) []const u8 {
     return paint(a, text, spans.items, .{});
 }
 
-/// Fenced code is styled as one muted block: token-level coloring needs a grammar, and a
-/// hand-written approximation costs more than it shows.
 pub fn highlightCode(a: std.mem.Allocator, text: []const u8) []const u8 {
-    // Stop before the block's trailing newline so the style does not leak a dangling SGR.
     const end = if (text.len > 0 and text[text.len - 1] == '\n') text.len - 1 else text.len;
     const spans = [_]Span{.{ .start = 0, .end = @intCast(end), .style = styles.roles.code }};
     return paint(a, text, &spans, .{});
@@ -261,8 +249,6 @@ fn isFileHeader(line: []const u8) bool {
     return std.mem.startsWith(u8, line, "--- ") or std.mem.startsWith(u8, line, "+++ ");
 }
 
-/// Classify one diff line by its first byte. `in_hunk` disambiguates `---`/`+++` file
-/// headers from removed/added content once a hunk header has been seen.
 pub fn diffKind(line: []const u8, in_hunk: bool) DiffKind {
     if (std.mem.startsWith(u8, line, "@@")) return .hunk;
     if (std.mem.startsWith(u8, line, "\\")) return .note;

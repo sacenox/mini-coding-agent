@@ -76,7 +76,6 @@ fn killGroup(pid: i32) void {
     std.posix.kill(-pid, .KILL) catch {};
 }
 
-/// What the TUI shows instead of the output. The status words match the exit line the model sees.
 fn bodyLine(a: std.mem.Allocator, code: ?u8, timed_out: bool, timeout_s: u64, output: []const u8) ?[]const u8 {
     const label = if (code) |c|
         std.fmt.allocPrint(a, "exit {d}", .{c}) catch return null
@@ -87,10 +86,9 @@ fn bodyLine(a: std.mem.Allocator, code: ?u8, timed_out: bool, timeout_s: u64, ou
     const lines = text.countLines(output);
     if (lines == 0) return label;
     const truncated = std.mem.indexOf(u8, output, truncated_marker) != null;
-    return std.fmt.allocPrint(a, "{s} · {d} line{s}{s}", .{
+    return std.fmt.allocPrint(a, "{s} · {s}{s}", .{
         label,
-        lines,
-        if (lines == 1) "" else "s",
+        text.plural(a, lines, "line", "lines"),
         if (truncated) ", truncated" else "",
     }) catch null;
 }

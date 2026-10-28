@@ -3,21 +3,23 @@ const message_mod = @import("../message.zig");
 const models = @import("../models.zig");
 const styles = @import("styles.zig");
 
-pub fn estimateContextTokens(messages: []const message_mod.Message, system_prompt: []const u8, tools_json: []const u8) u64 {
-    var last_idx: ?usize = null;
-    var usage: u64 = 0;
+fn lastAssistantIndex(messages: []const message_mod.Message) ?usize {
+    var found: ?usize = null;
     for (messages, 0..) |m, i| {
         if (m != .assistant) continue;
         const am = m.assistant;
         if (am.stop_reason == .aborted or am.stop_reason == .err) continue;
         if (am.usage.total_tokens == 0) continue;
-        usage = am.usage.total_tokens;
-        last_idx = i;
+        found = i;
     }
-    if (last_idx) |idx| {
+    return found;
+}
+
+pub fn estimateContextTokens(messages: []const message_mod.Message, system_prompt: []const u8, tools_json: []const u8) u64 {
+    if (lastAssistantIndex(messages)) |idx| {
         var trailing: u64 = 0;
         for (messages[idx + 1 ..]) |m| trailing += estimateMessageTokens(m);
-        return usage + trailing;
+        return messages[idx].assistant.usage.total_tokens + trailing;
     }
     var total: u64 = 0;
     for (messages) |m| total += estimateMessageTokens(m);
@@ -66,15 +68,8 @@ pub fn contextUsageLine(a: std.mem.Allocator, used: u64, model: *const models.Mo
 }
 
 pub fn lastUsage(messages: []const message_mod.Message) message_mod.Usage {
-    var out: message_mod.Usage = .{};
-    for (messages) |m| {
-        if (m != .assistant) continue;
-        const am = m.assistant;
-        if (am.stop_reason == .aborted or am.stop_reason == .err) continue;
-        if (am.usage.total_tokens == 0) continue;
-        out = am.usage;
-    }
-    return out;
+    const idx = lastAssistantIndex(messages) orelse return .{};
+    return messages[idx].assistant.usage;
 }
 
 pub fn turnUsage(messages: []const message_mod.Message, from: usize) message_mod.Usage {

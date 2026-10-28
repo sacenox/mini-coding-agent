@@ -1,8 +1,6 @@
 const std = @import("std");
 const render = @import("render.zig");
 
-/// The text-level half of the renderer: canonical markers, whitespace, and tables.
-/// Styling runs afterwards, in highlight.zig, over the bytes produced here.
 pub const Normalizer = struct {
     ordered_indent: ?usize = null,
     ordered_next: usize = 1,
@@ -12,9 +10,6 @@ pub const Normalizer = struct {
         self.ordered_next = 1;
     }
 
-    /// Canonical form of one markdown line: even indentation, one space after every
-    /// marker, `-` bullets, sequential ordered runs, `> ` quotes, `---` rules, no
-    /// trailing whitespace. Fence bodies never reach this.
     pub fn line(self: *Normalizer, a: std.mem.Allocator, raw: []const u8) []const u8 {
         const text = std.mem.trimEnd(u8, raw, " \t\r");
         const ind = indentOf(text);
@@ -88,8 +83,6 @@ fn trimmed(out: *std.ArrayList(u8)) []const u8 {
 
 const Indent = struct { end: usize, cols: usize };
 
-/// Leading whitespace, with tabs worth two columns and the depth rounded down to even
-/// so nested levels line up.
 fn indentOf(text: []const u8) Indent {
     var end: usize = 0;
     var cols: usize = 0;
@@ -98,7 +91,6 @@ fn indentOf(text: []const u8) Indent {
     return .{ .end = end, .cols = cols & ~@as(usize, 1) };
 }
 
-/// The fence marker run (``` or ~~~) that opens `line`, if any.
 pub fn fenceRun(line: []const u8) ?[]const u8 {
     var i: usize = 0;
     while (i < line.len and i < 3 and line[i] == ' ') i += 1;
@@ -110,8 +102,6 @@ pub fn fenceRun(line: []const u8) ?[]const u8 {
     return if (n >= 3) line[i .. i + n] else null;
 }
 
-/// Whether `line` closes a fence opened with `opener`: the same byte, at least as
-/// long a run, and nothing but whitespace after it.
 pub fn fenceClose(line: []const u8, opener: []const u8) bool {
     var i: usize = 0;
     while (i < line.len and i < 3 and line[i] == ' ') i += 1;
@@ -145,7 +135,6 @@ pub fn heading(rest: []const u8) ?Heading {
     if (n == 0 or n > 6) return null;
     if (n < rest.len and rest[n] != ' ' and rest[n] != '\t') return null;
     var text = std.mem.trimStart(u8, rest[n..], " \t");
-    // A closing run of `#`s is decoration; only one that follows a space counts.
     var end = text.len;
     while (end > 0 and text[end - 1] == '#') end -= 1;
     if (end < text.len and (end == 0 or text[end - 1] == ' ' or text[end - 1] == '\t'))
@@ -158,7 +147,6 @@ const Marker = union(enum) {
     ordered: struct { num: usize, at: usize },
 };
 
-/// Byte offset just past the list marker, or null when the line has none.
 fn marker(rest: []const u8) ?Marker {
     if (rest.len == 0) return null;
     const c = rest[0];
@@ -204,7 +192,6 @@ fn splitCells(a: std.mem.Allocator, line: []const u8) []const []const u8 {
     return cells.items;
 }
 
-/// Index of the `]` closing the `[` at `open`, skipping escaped bytes.
 pub fn closeBracket(text: []const u8, open: usize) ?usize {
     var i = open + 1;
     while (i < text.len) : (i += 1) {
@@ -217,7 +204,6 @@ pub fn closeBracket(text: []const u8, open: usize) ?usize {
     return null;
 }
 
-/// Index of the `)` closing the `(` at `open`, so destinations may hold parentheses.
 pub fn linkEnd(text: []const u8, open: usize) ?usize {
     var depth: usize = 0;
     var i = open;
@@ -237,7 +223,6 @@ pub fn linkEnd(text: []const u8, open: usize) ?usize {
     return null;
 }
 
-/// Delimiter row (`|---|:--:|`) as per-column alignments, or null when the line is not one.
 fn delimiterRow(a: std.mem.Allocator, line: []const u8) ?[]const Align {
     if (std.mem.indexOfScalar(u8, line, '-') == null) return null;
     const cells = splitCells(a, line);
@@ -259,7 +244,6 @@ fn delimiterRow(a: std.mem.Allocator, line: []const u8) ?[]const Align {
 fn tableCandidate(line: []const u8) bool {
     const trimmed_line = std.mem.trim(u8, line, " \t\r");
     if (trimmed_line.len == 0) return false;
-    // Tables nested in quotes or lists keep their marker; reflowing them would drop it.
     if (trimmed_line[0] == '>' or trimmed_line[0] == '-' or trimmed_line[0] == '*' or trimmed_line[0] == '+') return false;
     return std.mem.indexOfScalar(u8, trimmed_line, '|') != null;
 }
@@ -295,7 +279,6 @@ fn emitRow(a: std.mem.Allocator, block: *std.ArrayList(u8), indent: []const u8, 
     }
 }
 
-/// Leading whitespace, kept so a table nested in a list stays in its item.
 fn leadingText(line: []const u8) []const u8 {
     var i: usize = 0;
     while (i < line.len and (line[i] == ' ' or line[i] == '\t')) i += 1;
@@ -358,7 +341,6 @@ pub fn formatTables(a: std.mem.Allocator, text: []const u8) []const u8 {
         out.append(a, '\n') catch {};
         i += 1;
     }
-    // A single trailing split always leaves one empty entry; drop its newline.
     if (out.items.len > 0 and text.len > 0 and text[text.len - 1] != '\n' and out.items[out.items.len - 1] == '\n')
         out.items.len -= 1;
     return out.items;

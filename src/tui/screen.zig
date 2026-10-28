@@ -51,8 +51,6 @@ pub const LiveRegion = struct {
         var out: std.ArrayList(u8) = .empty;
         out.appendSlice(a, self.erase(a, width)) catch {};
         out.appendSlice(a, above) catch {};
-        // Each live row carries its own colors: scrollback above can leave any
-        // style active, and the editor must never render in the host's.
         for (lines, 0..) |line, i| {
             if (i > 0) out.appendSlice(a, "\r\n") catch {};
             out.appendSlice(a, render.paintRow(a, line)) catch {};
@@ -85,7 +83,6 @@ pub const Scrollback = struct {
         self.buf.appendSlice(self.a, bytes) catch {};
     }
 
-    /// Append a committed row: bytes plus a line break, marking progress.
     fn appendRow(self: *Scrollback, bytes: []const u8) void {
         self.appendBytes(bytes);
         self.appendBytes("\r\n");
@@ -105,8 +102,6 @@ pub const Scrollback = struct {
         if (clean.len != 0) self.appendRow(render.paintRow(self.scratch, clean));
     }
 
-    /// Append pre-built bytes verbatim, bypassing sanitizing and wrapping. Used
-    /// for terminal escape sequences such as image graphics.
     pub fn pushRaw(self: *Scrollback, bytes: []const u8) void {
         if (bytes.len == 0) return;
         self.separator = false;

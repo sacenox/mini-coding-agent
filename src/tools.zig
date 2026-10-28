@@ -48,7 +48,6 @@ pub const Result = struct {
     images: []const message_mod.ImageContent = &.{},
     diffs: []const FileDiff = &.{},
     body: ?[]const u8 = null,
-    /// Text the model sees instead of `text`; the TUI still renders `text`.
     model_text: ?[]const u8 = null,
 };
 
@@ -59,8 +58,6 @@ pub fn fail(a: std.mem.Allocator, fallback: []const u8, comptime fmt: []const u8
     };
 }
 
-/// Failure to touch `path`; the common filesystem errors get a plain sentence
-/// instead of a bare error name.
 pub fn ioFail(a: std.mem.Allocator, what: []const u8, path: []const u8, e: anyerror) Result {
     const message = switch (e) {
         error.FileNotFound => std.fmt.allocPrint(a, "{s} failed: {s} does not exist", .{ what, path }),

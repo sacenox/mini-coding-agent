@@ -15,8 +15,6 @@ pub fn readFileAlloc(a: std.mem.Allocator, path: []const u8, max: usize) ![]u8 {
     return std.Io.Dir.cwd().readFileAlloc(platform.io, path, a, .limited(max));
 }
 
-/// Reads at most `max` bytes from the start of `path`; a larger file is
-/// clipped instead of failing.
 pub fn readFilePrefix(a: std.mem.Allocator, path: []const u8, max: usize) ![]u8 {
     const file = try std.Io.Dir.cwd().openFile(platform.io, path, .{});
     defer file.close(platform.io);

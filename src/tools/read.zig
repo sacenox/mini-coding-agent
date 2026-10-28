@@ -56,7 +56,6 @@ fn fail(a: std.mem.Allocator, comptime fmt: []const u8, args: anytype) tools.Res
     return tools.fail(a, "read failed", fmt, args);
 }
 
-/// A non-error result the model reads as information, not as a failure.
 fn warn(a: std.mem.Allocator, comptime fmt: []const u8, args: anytype) tools.Result {
     return .{ .text = std.fmt.allocPrint(a, fmt, args) catch "read", .is_error = false };
 }
@@ -100,7 +99,7 @@ fn bodyLine(a: std.mem.Allocator, args: Args, lines: usize, truncated: bool) ?[]
         window = true;
     }
     if (window) w.writeAll(" · ") catch return null;
-    if (lines == 1) w.writeAll("1 line") catch return null else w.print("{d} lines", .{lines}) catch return null;
+    w.writeAll(text.plural(a, lines, "line", "lines")) catch return null;
     if (truncated) w.writeAll(", truncated") catch return null;
     return out.written();
 }

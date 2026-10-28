@@ -8,7 +8,6 @@ const header_bytes = 24;
 const max_placeholder_rows = 255;
 const placeholder_id_mask = 0xFF_FFFF;
 
-/// Kitty row/column diacritics, indexed by value (rowcolumn-diacritics.txt).
 const diacritics = [_]u21{
     0x0305, 0x030D, 0x030E, 0x0310, 0x0312, 0x033D, 0x033E, 0x033F,
     0x0346, 0x034A, 0x034B, 0x034C, 0x0350, 0x0351, 0x0352, 0x0357,
@@ -48,7 +47,6 @@ fn be32(b: []const u8) u32 {
     return (@as(u32, b[0]) << 24) | (@as(u32, b[1]) << 16) | (@as(u32, b[2]) << 8) | b[3];
 }
 
-/// Width and height from the PNG IHDR chunk, decoding only the header.
 fn pngSize(data: []const u8) ?struct { w: u32, h: u32 } {
     if (data.len < header_b64_bytes) return null;
     var head: [header_bytes]u8 = undefined;
@@ -61,8 +59,6 @@ fn pngSize(data: []const u8) ?struct { w: u32, h: u32 } {
     return .{ .w = w, .h = h };
 }
 
-/// A stable, unique-enough image id whose low 24 bits address the placeholder
-/// foreground color. `salt` varies per commit, `seq` per image.
 pub fn imageId(salt: u8, seq: u32) u32 {
     return (@as(u32, salt) << 16) | (seq & 0xFFFF);
 }
@@ -73,8 +69,6 @@ fn writeCp(w: *std.Io.Writer, cp: u21) !void {
     try w.writeAll(buf[0..n]);
 }
 
-/// Transmit the base64 PNG payload to the terminal in `chunk_size` byte chunks.
-/// `chunk_size` is a multiple of 4 so every chunk is valid base64.
 fn transmit(w: *std.Io.Writer, id: u32, data: []const u8) !void {
     var off: usize = 0;
     var first = true;
@@ -97,8 +91,6 @@ fn transmit(w: *std.Io.Writer, id: u32, data: []const u8) !void {
     }
 }
 
-/// Transmit the PNG, place it virtually, and lay out the Unicode placeholder
-/// grid that displays it: `cols` x `rows` cells, each row tagged with its index.
 fn emit(w: *std.Io.Writer, id: u32, cols: usize, rows: usize, data: []const u8) !void {
     try transmit(w, id, data);
     try w.print("\x1b_Ga=p,U=1,i={d},c={d},r={d},q=2\x1b\\", .{ id, cols, rows });
@@ -111,17 +103,12 @@ fn emit(w: *std.Io.Writer, id: u32, cols: usize, rows: usize, data: []const u8) 
         var col: usize = 0;
         while (col < cols) : (col += 1) {
             try writeCp(w, placeholder_cp);
-            // The first cell of each row carries the row; the rest inherit.
             if (col == 0) try writeCp(w, diacritics[row]);
         }
         try w.writeAll("\x1b[39m\r\n");
     }
 }
 
-/// Build the kitty graphics sequence that transmits a PNG, creates a virtual
-/// placement for it, and lays out the Unicode placeholder grid that displays it.
-/// Sized to fit `avail_cols` columns and at most `max_rows` rows. Returns null
-/// when the image is not a PNG whose size can be read.
 pub fn block(a: std.mem.Allocator, id: u32, image: message_mod.ImageContent, avail_cols: usize, max_rows: usize, cell_w: usize, cell_h: usize) ?[]const u8 {
     if (!std.mem.eql(u8, image.mime_type, "image/png")) return null;
     const size = pngSize(image.data) orelse return null;

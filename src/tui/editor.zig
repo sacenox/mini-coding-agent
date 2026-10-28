@@ -283,7 +283,6 @@ pub const Editor = struct {
         self.col = anchor;
     }
 
-    /// Replace the code points in `[from, to)` of `line` with `text`.
     fn replaceCols(self: *Editor, line: *Line, from: usize, to: usize, text: []const u8) void {
         const start = byteOf(line.items, from);
         const end = byteOf(line.items, to);

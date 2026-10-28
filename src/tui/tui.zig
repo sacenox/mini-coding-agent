@@ -23,6 +23,7 @@ const picker_mod = @import("picker.zig");
 const screen = @import("screen.zig");
 const history = @import("history.zig");
 const status = @import("status.zig");
+const strings = @import("../text.zig");
 
 const SPINNER = "⠀⠁⠂⠃⠄⠅⠆⠇⡀⡁⡂⡃⡄⡅⡆⡇⠈⠉⠊⠋⠌⠍⠎⠏⡈⡉⡊⡋⡌⡍⡎⡏⠐⠑⠒⠓⠔⠕⠖⠗⡐⡑⡒⡓⡔⡕⡖⡗⠘⠙⠚⠛⠜⠝⠞⠟⡘⡙⡚⡛⡜⡝⡞⡟⠠⠡⠢⠣⠤⠥⠦⠧⡠⡡⡢⡣⡤⡥⡦⡧⠨⠩⠪⠫⠬⠭⠮⠯⡨⡩⡪⡫⡬⡭⡮⡯⠰⠱⠲⠳⠴⠵⠶⠷⡰⡱⡲⡳⡴⡵⡶⡷⠸⠹⠺⠻⠼⠽⠾⠿⡸⡹⡺⡻⡼⡽⡾⡿⢀⢁⢂⢃⢄⢅⢆⢇⣀⣁⣂⣃⣄⣅⣆⣇⢈⢉⢊⢋⢌⢍⢎⢏⣈⣉⣊⣋⣌⣍⣎⣏⢐⢑⢒⢓⢔⢕⢖⢗⣐⣑⣒⣓⣔⣕⣖⣗⢘⢙⢚⢛⢜⢝⢞⢟⣘⣙⣚⣛⣜⣝⣞⣟⢠⢡⢢⢣⢤⢥⢦⢧⣠⣡⣢⣣⣤⣥⣦⣧⢨⢩⢪⢫⢬⢭⢮⢯⣨⣩⣪⣫⣬⣭⣮⣯⢰⢱⢲⢳⢴⢵⢶⢷⣰⣱⣲⣳⣴⣵⣶⣷⢸⢹⢺⢻⢼⢽⢾⢿⣸⣹⣺⣻⣼⣽⣾⣿";
 const SPINNER_MS = 120;
@@ -218,9 +219,9 @@ const Tui = struct {
         const loaded = self.opts.loaded;
         var resources: std.ArrayList([]const u8) = .empty;
         if (loaded.agent_files > 0)
-            resources.append(a, styles.comment(a, plural(a, loaded.agent_files, "agent file", "agent files"))) catch {};
+            resources.append(a, styles.comment(a, strings.plural(a, loaded.agent_files, "agent file", "agent files"))) catch {};
         if (loaded.skills > 0)
-            resources.append(a, styles.comment(a, plural(a, loaded.skills, "skill", "skills"))) catch {};
+            resources.append(a, styles.comment(a, strings.plural(a, loaded.skills, "skill", "skills"))) catch {};
         if (resources.items.len > 0) self.push(styles.join(a, resources.items));
         self.scrollback.separator = true;
     }
@@ -315,10 +316,6 @@ const Tui = struct {
             out.appendSlice(a, styles.comment(a, std.fmt.allocPrint(a, "{d} queued", .{queued}) catch "")) catch {};
         }
         return out.items;
-    }
-
-    fn plural(a: std.mem.Allocator, n: usize, one: []const u8, many: []const u8) []const u8 {
-        return std.fmt.allocPrint(a, "{d} {s}", .{ n, if (n == 1) one else many }) catch many;
     }
 
     fn spinnerChar(frame: usize) []const u8 {

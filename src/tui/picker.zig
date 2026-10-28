@@ -3,11 +3,8 @@ const input = @import("input.zig");
 
 pub const Kind = enum { provider, model, thinking, history };
 
-/// What one key did.
 pub const Action = enum { ignore, update, accept, cancel };
 
-/// A filtered choice list. It owns its query and match index only; the choices
-/// themselves belong to whoever opened it.
 pub const Picker = struct {
     kind: Kind,
     title: []const u8,
@@ -61,7 +58,6 @@ pub const Picker = struct {
         return .update;
     }
 
-    /// The id under the cursor, or null when nothing matches.
     pub fn current(self: *const Picker) ?[]const u8 {
         if (self.matches.items.len == 0) return null;
         return self.ids[self.matches.items[self.sel]];

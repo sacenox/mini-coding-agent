@@ -265,29 +265,27 @@ pub fn appendCalls(msg: *message_mod.AssistantMessage, sink: Sink, a: std.mem.Al
     for (calls) |call| {
         if (call.name.len == 0) continue;
         any = true;
+        const arguments = argumentsOrObject(call.args.items);
         try msg.content.append(a, .{ .tool_call = .{
             .id = call.id,
             .name = call.name,
-            .arguments = argumentsOrObject(call.args.items),
+            .arguments = arguments,
             .thought_signature = call.thought_signature,
         } });
         sink.emit(.{ .tool_call = .{
             .id = call.id,
             .name = call.name,
-            .arguments = argumentsOrObject(call.args.items),
+            .arguments = arguments,
         } });
     }
     return any;
 }
 
-/// The reasoning effort to send, or null when reasoning is off for this turn.
 pub fn effortOn(req: Request) ?[]const u8 {
     if (req.effort.len == 0 or std.mem.eql(u8, req.effort, "off")) return null;
     return req.effort;
 }
 
-/// The wire stop reasons that carry a meaning of their own; anything else is a
-/// plain stop, which the caller falls back to.
 const stop_reasons = [_]struct { wire: []const u8, reason: message_mod.StopReason, message: ?[]const u8 = null }{
     .{ .wire = "length", .reason = .length },
     .{ .wire = "max_tokens", .reason = .length },
@@ -300,8 +298,6 @@ const stop_reasons = [_]struct { wire: []const u8, reason: message_mod.StopReaso
     .{ .wire = "sensitive", .reason = .err, .message = "Provider stop_reason: sensitive" },
 };
 
-/// Applies a provider's own stop reason. Returns false when the table has no
-/// entry for it, so the caller can fall back to its own default.
 pub fn stopReason(msg: *message_mod.AssistantMessage, raw: ?[]const u8) bool {
     const wire = raw orelse return false;
     for (stop_reasons) |entry| {
@@ -329,17 +325,16 @@ pub fn appendParts(msg: *message_mod.AssistantMessage, a: std.mem.Allocator, thi
     if (text.len > 0) try msg.content.append(a, .{ .text = text });
 }
 
+fn cost(tokens: u64, rate: f64) f64 {
+    return @as(f64, @floatFromInt(tokens)) * rate / 1_000_000.0;
+}
+
 pub fn finishUsage(msg: *message_mod.AssistantMessage, model: *const models.Model, usage: message_mod.Usage) void {
     var u = usage;
     if (u.total_tokens == 0) u.total_tokens = u.input + u.output + u.cache_read + u.cache_write;
-    const per = struct {
-        fn cost(tokens: u64, rate: f64) f64 {
-            return @as(f64, @floatFromInt(tokens)) * rate / 1_000_000.0;
-        }
-    };
-    u.cost_input = per.cost(u.input, model.cost_input);
-    u.cost_output = per.cost(u.output, model.cost_output);
-    u.cost_cache_read = per.cost(u.cache_read, model.cost_cache_read);
+    u.cost_input = cost(u.input, model.cost_input);
+    u.cost_output = cost(u.output, model.cost_output);
+    u.cost_cache_read = cost(u.cache_read, model.cost_cache_read);
     u.cost_total = u.cost_input + u.cost_output + u.cost_cache_read;
     msg.usage = u;
 }

@@ -39,7 +39,6 @@ pub const Store = struct {
         self.flush();
     }
 
-    /// Escape backslash and newline so each entry stays one line in the file.
     fn escape(self: *Store, e: []const u8) []const u8 {
         var out: std.ArrayList(u8) = .empty;
         for (e) |c| {

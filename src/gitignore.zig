@@ -1,24 +1,17 @@
 const std = @import("std");
 
-/// A single compiled gitignore pattern.
 const Pattern = struct {
-    /// Pattern text with leading `!`, leading `/` and trailing `/` stripped.
     text: []const u8,
-    /// Re-include rather than ignore.
     negated: bool,
-    /// Match directories only (trailing `/`).
     dir_only: bool,
-    /// Match the full path relative to the source dir, not the basename.
     anchored: bool,
 };
 
-/// One `.gitignore` file's rules and the directory they were read from.
 const Source = struct {
     base: []const u8,
     patterns: []const Pattern,
 };
 
-/// Compile a single line. Returns null for blanks and comments.
 fn compilePattern(a: std.mem.Allocator, raw: []const u8) ?Pattern {
     var line = raw;
     if (line.len > 0 and line[line.len - 1] == '\r') line = line[0 .. line.len - 1];
@@ -104,7 +97,6 @@ fn matchChar(pat: []const u8, p: *usize, c: u8) bool {
     }
 }
 
-/// Glob match within one path segment (`*` and `?` never cross `/`).
 fn segmentMatch(pat: []const u8, s: []const u8) bool {
     var p: usize = 0;
     var i: usize = 0;
@@ -127,7 +119,6 @@ fn segmentMatch(pat: []const u8, s: []const u8) bool {
     return p == pat.len;
 }
 
-/// End index (exclusive) of the pattern segment starting at `start`.
 fn segmentEnd(pat: []const u8, start: usize) usize {
     var i = start;
     while (i < pat.len) : (i += 1) {
@@ -140,7 +131,6 @@ fn segmentEnd(pat: []const u8, start: usize) usize {
     return pat.len;
 }
 
-/// Match a full relative path against a pattern; `**` spans path separators.
 fn pathMatchFrom(pat: []const u8, pi: usize, path: []const u8) bool {
     if (pi >= pat.len) return path.len == 0;
     const pend = segmentEnd(pat, pi);
@@ -168,7 +158,6 @@ fn patternMatches(pat: Pattern, rel: []const u8, is_dir: bool) bool {
     return segmentMatch(pat.text, std.fs.path.basename(rel));
 }
 
-/// Strip an ancestor `base` prefix from `rel`; null when not under `base`.
 fn stripBase(rel: []const u8, base: []const u8) ?[]const u8 {
     if (base.len == 0) return rel;
     if (rel.len > base.len and rel[base.len] == '/' and std.mem.startsWith(u8, rel, base))
@@ -176,7 +165,6 @@ fn stripBase(rel: []const u8, base: []const u8) ?[]const u8 {
     return null;
 }
 
-/// Ordered set of gitignore rules, shallow sources first.
 pub const Matcher = struct {
     a: std.mem.Allocator,
     sources: std.ArrayList(Source) = .empty,
@@ -194,7 +182,6 @@ pub const Matcher = struct {
         try self.sources.append(self.a, .{ .base = base, .patterns = pats });
     }
 
-    /// Add the rules from one `.gitignore` file located in `base`.
     pub fn pushFile(self: *Matcher, base: []const u8, content: []const u8) !void {
         var pats: std.ArrayList(Pattern) = .empty;
         var it = std.mem.tokenizeScalar(u8, content, '\n');
@@ -204,7 +191,6 @@ pub const Matcher = struct {
         try self.appendSource(base, try pats.toOwnedSlice(self.a));
     }
 
-    /// Add caller-supplied patterns (e.g. config dirs) as a source at `base`.
     pub fn pushPatterns(self: *Matcher, base: []const u8, lines: []const []const u8) !void {
         var pats: std.ArrayList(Pattern) = .empty;
         for (lines) |line| {
@@ -213,8 +199,6 @@ pub const Matcher = struct {
         try self.appendSource(base, try pats.toOwnedSlice(self.a));
     }
 
-    /// Decide whether `rel` (relative to the search root) is ignored.
-    /// null means no rule matched.
     pub fn check(self: *const Matcher, rel: []const u8, is_dir: bool) ?bool {
         var decision: ?bool = null;
         for (self.sources.items) |src| {

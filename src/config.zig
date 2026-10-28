@@ -4,7 +4,6 @@ const filesystem = @import("filesystem.zig");
 
 pub const ToolName = enum { edit, read, bash };
 
-/// How mini draws the user's attention when a turn needs them.
 pub const Notifications = enum { off, osc9, bell, both };
 
 pub const Api = enum {
@@ -56,7 +55,6 @@ pub const Colorscheme = struct {
     heading6: ?[]const u8 = null,
 };
 
-/// A `#rrggbb` override. The TUI only ever sees the parsed value.
 pub fn parseHex(text: []const u8) ?u24 {
     const body = if (text.len > 0 and text[0] == '#') text[1..] else text;
     if (body.len != 6) return null;
@@ -114,7 +112,6 @@ const File = struct {
     colorscheme: ?Colorscheme = null,
 };
 
-/// An empty environment variable is treated as unset, per the XDG spec.
 fn xdg(key: []const u8) ?[]const u8 {
     const value = platform.getEnv(key) orelse return null;
     return if (value.len == 0) null else value;
@@ -137,16 +134,18 @@ fn stateDir(a: std.mem.Allocator) []const u8 {
     };
 }
 
-pub fn historyPath(a: std.mem.Allocator) []const u8 {
+fn stateFile(a: std.mem.Allocator, name: []const u8) []const u8 {
     const state = stateDir(a);
-    if (state.len == 0) return "history";
-    return filesystem.join(a, &.{ state, "mini-coding-agent/history" }) catch "history";
+    if (state.len == 0) return name;
+    return filesystem.join(a, &.{ state, "mini-coding-agent", name }) catch name;
+}
+
+pub fn historyPath(a: std.mem.Allocator) []const u8 {
+    return stateFile(a, "history");
 }
 
 fn sessionsDir(a: std.mem.Allocator) []const u8 {
-    const state = stateDir(a);
-    if (state.len == 0) return "sessions";
-    return filesystem.join(a, &.{ state, "mini-coding-agent/sessions" }) catch "sessions";
+    return stateFile(a, "sessions");
 }
 pub fn load(a: std.mem.Allocator, override: ?[]const u8, no_config: bool) !Config {
     var cfg = try defaults(a);

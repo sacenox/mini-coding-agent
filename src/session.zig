@@ -30,9 +30,7 @@ const Block = union(enum) {
 
     pub fn jsonStringify(self: Block, jws: anytype) !void {
         switch (self) {
-            .text => |v| try jws.write(v),
-            .thinking => |v| try jws.write(v),
-            .tool_call => |v| try jws.write(v),
+            inline else => |v| try jws.write(v),
         }
     }
 };
@@ -51,8 +49,7 @@ const Part = union(enum) {
 
     pub fn jsonStringify(self: Part, jws: anytype) !void {
         switch (self) {
-            .text => |v| try jws.write(v),
-            .image => |v| try jws.write(v),
+            inline else => |v| try jws.write(v),
         }
     }
 };
@@ -111,9 +108,7 @@ const MessageRecord = union(enum) {
 
     pub fn jsonStringify(self: MessageRecord, jws: anytype) !void {
         switch (self) {
-            .user => |v| try jws.write(v),
-            .tool_result => |v| try jws.write(v),
-            .assistant => |v| try jws.write(v),
+            inline else => |v| try jws.write(v),
         }
     }
 };
@@ -167,8 +162,6 @@ pub const Session = struct {
     disabled: bool = false,
     closed: bool = false,
 
-    /// `id` names the provider's session header until a log is opened; a recording
-    /// session then takes the name of its directory.
     pub fn init(a: std.mem.Allocator, sessions_dir: []const u8, cwd: []const u8) Session {
         var id: [6]u8 = undefined;
         shortId(&id);
@@ -176,35 +169,38 @@ pub const Session = struct {
     }
 
     pub fn appendMessage(self: *Session, scratch: std.mem.Allocator, message: message_mod.Message) !void {
-        if (self.closed or self.disabled) return;
-        try self.ensure(if (message == .user) text.slugify(self.a, message.user.content) else "session");
-
-        var arena = std.heap.ArenaAllocator.init(scratch);
-        defer arena.deinit();
-        const a = arena.allocator();
-        const line = try stringify(a, MessageLine{
-            .at = time.isoAlloc(a),
-            .message = try messageRecord(a, message),
-        });
-        try self.commitLine(scratch, line);
+        try self.append(scratch, .{ .message = message });
     }
 
     pub fn appendRequest(self: *Session, scratch: std.mem.Allocator, req: Request) !void {
-        if (self.closed or self.disabled) return;
-        try self.ensure("session");
+        try self.append(scratch, .{ .request = req });
+    }
 
+    const Record = union(enum) { message: message_mod.Message, request: Request };
+
+    fn append(self: *Session, scratch: std.mem.Allocator, record: Record) !void {
+        if (self.closed or self.disabled) return;
+        const title = switch (record) {
+            .message => |m| if (m == .user) text.slugify(self.a, m.user.content) else "session",
+            .request => "session",
+        };
+        try self.ensure(title);
         var arena = std.heap.ArenaAllocator.init(scratch);
         defer arena.deinit();
         const a = arena.allocator();
-        const line = try stringify(a, RequestLine{
-            .at = time.isoAlloc(a),
-            .provider = req.provider,
-            .model = req.model,
-            .api = req.api,
-            .thinkingEffort = req.thinking_effort,
-            .systemPrompt = req.system_prompt,
-            .tools = .{ .bytes = if (req.tools_json.len > 0) req.tools_json else "[]" },
-        });
+        const at = time.isoAlloc(a);
+        const line = switch (record) {
+            .message => |m| try stringify(a, MessageLine{ .at = at, .message = try messageRecord(a, m) }),
+            .request => |r| try stringify(a, RequestLine{
+                .at = at,
+                .provider = r.provider,
+                .model = r.model,
+                .api = r.api,
+                .thinkingEffort = r.thinking_effort,
+                .systemPrompt = r.system_prompt,
+                .tools = .{ .bytes = if (r.tools_json.len > 0) r.tools_json else "[]" },
+            }),
+        };
         try self.commitLine(scratch, line);
     }
 
@@ -228,8 +224,6 @@ pub const Session = struct {
         }
     }
 
-    /// Reopens the session matching `id` for appending and replays its messages into
-    /// `messages`. Strings land in `self.a`, so the caller may release its own arena.
     pub fn reopen(self: *Session, id: []const u8, messages: *std.ArrayList(message_mod.Message)) !void {
         var arena = std.heap.ArenaAllocator.init(self.a);
         defer arena.deinit();
@@ -254,7 +248,6 @@ pub const Session = struct {
         self.file = file;
     }
 
-    /// An exact session name, or the single one it prefixes.
     fn matching(self: *Session, scratch: std.mem.Allocator, id: []const u8) ![]const u8 {
         const names = filesystem.listDir(scratch, self.sessions_dir) catch return error.NoSuchSession;
         for (names) |name| if (std.mem.eql(u8, name, id)) return name;
@@ -404,11 +397,9 @@ fn object(obj: std.json.ObjectMap, key: []const u8) ?std.json.ObjectMap {
 
 fn stopReason(name: ?[]const u8) StopReason {
     const wire = name orelse return .stop;
-    if (std.mem.eql(u8, wire, "pending")) return .pending;
-    if (std.mem.eql(u8, wire, "length")) return .length;
-    if (std.mem.eql(u8, wire, "toolUse")) return .tool_use;
-    if (std.mem.eql(u8, wire, "error")) return .err;
-    if (std.mem.eql(u8, wire, "aborted")) return .aborted;
+    for (std.meta.tags(StopReason)) |reason| {
+        if (std.mem.eql(u8, reason.wire(), wire)) return reason;
+    }
     return .stop;
 }
 
@@ -488,8 +479,6 @@ fn parseAssistant(a: std.mem.Allocator, record: std.json.ObjectMap) ?*message_mo
     return message;
 }
 
-/// One JSONL record, if it carries a conversation message. Everything else in the
-/// log (the header, requests) is history of the run, not context for the model.
 fn parseMessage(a: std.mem.Allocator, scratch: std.mem.Allocator, line: []const u8) ?message_mod.Message {
     if (std.mem.trim(u8, line, " \t\r").len == 0) return null;
     const root = std.json.parseFromSliceLeaky(std.json.Value, scratch, line, .{}) catch return null;

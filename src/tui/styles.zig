@@ -1,8 +1,6 @@
 const std = @import("std");
 const config = @import("../config.zig");
 
-/// The terminal's own palette. Indices 0-7 are its normal colors and 8-15 the bright
-/// ones, so the interface inherits whatever scheme the host terminal is set up with.
 pub const Palette = enum(u8) {
     black = 0,
     red,
@@ -22,7 +20,6 @@ pub const Palette = enum(u8) {
     bright_white,
 };
 
-/// A palette entry unless the config overrides the role with a `#rrggbb`.
 pub const Color = union(enum) {
     palette: Palette,
     rgb: u24,
@@ -36,7 +33,6 @@ pub const Style = struct {
     dim: bool = false,
 };
 
-/// Every role resolves to the terminal's default foreground unless it asks otherwise.
 pub const Roles = struct {
     comment: Style = .{ .fg = .{ .palette = .bright_black } },
     prompt: Style = .{ .fg = .{ .palette = .blue } },
@@ -71,7 +67,6 @@ pub const Roles = struct {
 
 pub var roles: Roles = .{};
 
-/// Each role the config names takes its `#rrggbb` as foreground. Field names line up.
 pub fn applyScheme(scheme: config.Colorscheme) void {
     inline for (@typeInfo(config.Colorscheme).@"struct".field_names) |name| {
         if (@field(scheme, name)) |hex| @field(roles, name).fg = .{ .rgb = config.parseHex(hex).? };
@@ -91,7 +86,6 @@ fn appendFg(a: std.mem.Allocator, out: *std.ArrayList(u8), color: Color) void {
     out.appendSlice(a, text) catch {};
 }
 
-/// Renders `style` on top of `base`, so a span keeps the attributes of the line it sits in.
 pub fn over(style: Style, base: Style) Style {
     return .{
         .fg = style.fg orelse base.fg,
@@ -126,13 +120,10 @@ pub fn anySet(style: Style) bool {
     return style.fg != null or style.bold or style.italic or style.underline or style.dim;
 }
 
-/// The `·` between sections. Every separator in the interface uses this one
-/// role, so a line never mixes separator colors.
 pub fn sep(a: std.mem.Allocator) []const u8 {
     return styledWith(a, roles.comment, " · ");
 }
 
-/// Joins already-styled parts with separators.
 pub fn join(a: std.mem.Allocator, parts: []const []const u8) []const u8 {
     return std.mem.join(a, sep(a), parts) catch "";
 }

@@ -11,6 +11,10 @@ pub fn countLines(content: []const u8) usize {
     return std.mem.count(u8, content, "\n") + @intFromBool(content[content.len - 1] != '\n');
 }
 
+pub fn plural(a: std.mem.Allocator, n: usize, one: []const u8, many: []const u8) []const u8 {
+    return std.fmt.allocPrint(a, "{d} {s}", .{ n, if (n == 1) one else many }) catch many;
+}
+
 pub fn join(a: std.mem.Allocator, parts: []const []const u8, sep: []const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     for (parts, 0..) |part, i| {
@@ -45,8 +49,6 @@ fn utf8SeqLen(p: []const u8) ?usize {
 
 pub const Cp = struct { cp: u21, len: usize };
 
-/// The code point at `i` and its byte length. An invalid or truncated byte counts
-/// as a one-byte code point, so callers always make progress.
 pub fn decodeAt(bytes: []const u8, i: usize) ?Cp {
     if (i >= bytes.len) return null;
     const b = bytes[i];
@@ -55,7 +57,6 @@ pub fn decodeAt(bytes: []const u8, i: usize) ?Cp {
     return .{ .cp = std.unicode.utf8Decode(bytes[i .. i + n]) catch b, .len = n };
 }
 
-/// Code points in `bytes`, counting each invalid byte as one.
 pub fn cpLen(bytes: []const u8) usize {
     var i: usize = 0;
     var n: usize = 0;

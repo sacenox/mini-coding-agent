@@ -4,14 +4,9 @@ const platform = @import("../platform.zig");
 const time = @import("../time.zig");
 const config = @import("../config.zig");
 
-/// OSC 7501, the Program Status Protocol. The program reports what it is doing
-/// so any consumer of the pty can react; well-behaved terminals ignore the
-/// unknown sequence. See https://mitchellh.com/writing/program-status-osc7501
 const app = "mini-coding-agent";
 const max_msg = 256;
 
-/// Herdr's own integration prefix is reserved for Herdr; a source of our own
-/// keeps its state and ours apart. See https://herdr.dev/docs/add-herdr-support/
 const herdr_source = "mini";
 const herdr_agent = "mini";
 const herdr_report_timeout_ms = 2000;
@@ -23,8 +18,6 @@ var herdr_on = false;
 var herdr_bin: []const u8 = "";
 var herdr_pane: []const u8 = "";
 
-/// Reports leave through a single worker that always sends the newest state and
-/// drops the ones it queued over, so a slow Herdr never slows the agent down.
 var lock: std.Io.Mutex = .init;
 var pending: ?Job = null;
 var pending_msg: [max_msg]u8 = undefined;
@@ -36,8 +29,6 @@ const Job = struct {
     seq: u64,
 };
 
-/// Enables the status consumers this run reports to. Herdr is only a consumer
-/// inside a Herdr pane; anywhere else it stays off.
 pub fn init(cfg: *const config.Config) void {
     program_status = cfg.program_status;
     notify_mode = cfg.notifications;
@@ -47,8 +38,6 @@ pub fn init(cfg: *const config.Config) void {
     herdr_pane = platform.getEnv("HERDR_PANE_ID") orelse return;
     if (herdr_bin.len == 0 or herdr_pane.len == 0) return;
 
-    // Herdr drops reports whose --seq is not higher than the last one it took,
-    // even across our own restarts, so the sequence starts at the wall clock.
     seq = @intCast(@max(0, time.nowMs()));
     herdr_on = true;
 
@@ -76,9 +65,6 @@ pub fn report(state: []const u8, kind: ?[]const u8, msg: ?[]const u8) void {
     pending = .{ .state = mapped, .msg_len = text.len, .seq = seq };
 }
 
-/// Asks for the user's attention when a turn stops needing none of it. OSC 9 is
-/// the desktop notification most terminals forward; the bell is the fallback
-/// every terminal has.
 pub fn notify(message: []const u8) void {
     if (notify_mode == .osc9 or notify_mode == .both) {
         var buf: [max_msg + 8]u8 = undefined;
@@ -88,8 +74,6 @@ pub fn notify(message: []const u8) void {
     if (notify_mode == .bell or notify_mode == .both) platform.writeOut("\x07");
 }
 
-/// Clears our name, state, and resume command from the pane. Only for an exit,
-/// and the report must land before the process goes away.
 pub fn release() void {
     if (!herdr_on) return;
     herdr_on = false;
@@ -99,7 +83,6 @@ pub fn release() void {
     runQuiet(&.{ herdr_bin, "pane", "release-agent", herdr_pane, "--source", herdr_source, "--agent", herdr_agent, "--seq", n }, herdr_release_timeout_ms);
 }
 
-/// Herdr knows three states; everything else it sees is "ready for input".
 fn herdrState(state: []const u8) []const u8 {
     if (std.mem.eql(u8, state, "working")) return "working";
     if (std.mem.eql(u8, state, "blocked")) return "blocked";
@@ -149,8 +132,6 @@ fn send(job: Job, msg: []const u8) void {
     runQuiet(argv[0..len], herdr_report_timeout_ms);
 }
 
-/// Fire and forget: our stdio stays ours, failures are invisible, and a Herdr
-/// that wedges is killed instead of holding the worker forever.
 fn runQuiet(argv: []const []const u8, timeout_ms: i64) void {
     var child = std.process.spawn(platform.io, .{
         .argv = argv,
